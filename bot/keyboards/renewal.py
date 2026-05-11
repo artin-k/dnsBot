@@ -22,6 +22,12 @@ class RenewalPlanCallback(CallbackData, prefix="renew_plan"):
 class RenewalConfirmCallback(CallbackData, prefix="renew_ok"):
     service_id: int
     plan_id: int
+    discount_roll_id: int = 0
+
+
+class RenewalDiscountCallback(CallbackData, prefix="renew_disc"):
+    service_id: int
+    plan_id: int
 
 
 def renewal_services_keyboard(services: list[VPNService]) -> InlineKeyboardMarkup:
@@ -49,9 +55,20 @@ def renewal_plans_keyboard(service_id: int, plans: list[Plan]) -> InlineKeyboard
     return builder.as_markup()
 
 
-def renewal_invoice_keyboard(service_id: int, plan_id: int) -> InlineKeyboardMarkup:
+def renewal_invoice_keyboard(service_id: int, plan_id: int, discount_roll_id: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ تایید و پرداخت", callback_data=RenewalConfirmCallback(service_id=service_id, plan_id=plan_id))
+    builder.button(
+        text="✅ تایید و پرداخت",
+        callback_data=RenewalConfirmCallback(
+            service_id=service_id,
+            plan_id=plan_id,
+            discount_roll_id=discount_roll_id,
+        ),
+    )
+    builder.button(
+        text="🎟 استفاده از کد تخفیف",
+        callback_data=RenewalDiscountCallback(service_id=service_id, plan_id=plan_id),
+    )
     builder.button(text=texts.BTN_BACK, callback_data=RenewalServiceCallback(service_id=service_id))
     builder.adjust(1)
     return builder.as_markup()

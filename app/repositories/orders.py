@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -38,6 +38,22 @@ class OrdersRepository:
             .where(Order.tracking_code == tracking_code, Order.user_id == user_id)
         )
 
+    async def list_by_user(self, user_id: int) -> list[Order]:
+        result = await self.session.scalars(
+            select(Order)
+            .options(
+                joinedload(Order.plan),
+                joinedload(Order.payment),
+                joinedload(Order.renewal_service),
+            )
+            .where(Order.user_id == user_id)
+            .order_by(Order.created_at.desc())
+        )
+        return list(result.unique().all())
+
+    async def count_by_user(self, user_id: int) -> int:
+        return int(await self.session.scalar(select(func.count()).select_from(Order).where(Order.user_id == user_id)) or 0)
+
     async def create(
         self,
         *,
@@ -48,6 +64,9 @@ class OrdersRepository:
         service_id: int | None = None,
         tracking_code: str,
         amount: int,
+        discount_code: str | None = None,
+        discount_percent: int = 0,
+        discount_amount: int = 0,
         status: str,
         expires_at,
     ) -> Order:
@@ -59,6 +78,9 @@ class OrdersRepository:
             service_id=service_id,
             tracking_code=tracking_code,
             amount=amount,
+            discount_code=discount_code,
+            discount_percent=discount_percent,
+            discount_amount=discount_amount,
             status=status,
             expires_at=expires_at,
         )

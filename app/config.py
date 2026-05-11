@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     )
     order_expire_minutes: int = Field(default=15, alias="ORDER_EXPIRE_MINUTES")
     referral_reward_amount: int = Field(default=0, alias="REFERRAL_REWARD_AMOUNT")
+    wallet_min_topup_amount: int = Field(default=50000, alias="WALLET_MIN_TOPUP_AMOUNT")
+    wallet_max_topup_amount: int = Field(default=0, alias="WALLET_MAX_TOPUP_AMOUNT")
+    dice_win_discount_percent: int = Field(default=10, alias="DICE_WIN_DISCOUNT_PERCENT")
+    dice_cooldown_hours: int = Field(default=24, alias="DICE_COOLDOWN_HOURS")
+    dice_discount_expire_hours: int = Field(default=72, alias="DICE_DISCOUNT_EXPIRE_HOURS")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -63,9 +68,26 @@ class Settings(BaseSettings):
 
     @property
     def admin_ids(self) -> list[int]:
-        if not self.admin_ids_raw.strip():
-            return []
-        return [int(item.strip()) for item in self.admin_ids_raw.split(",") if item.strip()]
+        parsed, _invalid = self._parse_admin_ids()
+        return parsed
+
+    @property
+    def invalid_admin_ids(self) -> list[str]:
+        _parsed, invalid = self._parse_admin_ids()
+        return invalid
+
+    def _parse_admin_ids(self) -> tuple[list[int], list[str]]:
+        parsed: list[int] = []
+        invalid: list[str] = []
+        for item in self.admin_ids_raw.split(","):
+            value = item.strip()
+            if not value:
+                continue
+            try:
+                parsed.append(int(value))
+            except ValueError:
+                invalid.append(value)
+        return parsed, invalid
 
 
 @lru_cache

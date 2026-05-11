@@ -35,6 +35,7 @@ class PaymentsRepository:
                 joinedload(Payment.order).joinedload(Order.renewal_service),
             )
             .where(
+                Payment.order_id.is_not(None),
                 Payment.status == PaymentStatus.PENDING.value,
                 Payment.receipt_file_id.is_not(None),
             )
@@ -42,10 +43,25 @@ class PaymentsRepository:
         )
         return list(result.unique().all())
 
+    async def list_user_pending_without_receipt(self, user_id: int) -> list[Payment]:
+        result = await self.session.scalars(
+            select(Payment)
+            .options(
+                joinedload(Payment.order).joinedload(Order.plan),
+            )
+            .where(
+                Payment.user_id == user_id,
+                Payment.status == PaymentStatus.PENDING.value,
+                Payment.receipt_file_id.is_(None),
+            )
+            .order_by(Payment.created_at.desc())
+        )
+        return list(result.unique().all())
+
     async def create(
         self,
         *,
-        order_id: int,
+        order_id: int | None,
         user_id: int,
         amount: int,
         method: str = "manual",

@@ -24,9 +24,13 @@ class OrderService:
         custom_username: str | None,
         order_kind: str = OrderKind.PURCHASE.value,
         service_id: int | None = None,
+        discount_code: str | None = None,
+        discount_percent: int = 0,
+        discount_amount: int = 0,
     ) -> tuple[Order, object]:
         tracking_code = await self._generate_unique_tracking_code()
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.settings.order_expire_minutes)
+        final_amount = max(plan.price - discount_amount, 0)
 
         order = await self.orders.create(
             user_id=user.id,
@@ -35,14 +39,17 @@ class OrderService:
             order_kind=order_kind,
             service_id=service_id,
             tracking_code=tracking_code,
-            amount=plan.price,
+            amount=final_amount,
+            discount_code=discount_code,
+            discount_percent=discount_percent,
+            discount_amount=discount_amount,
             status=OrderStatus.PENDING_PAYMENT.value,
             expires_at=expires_at,
         )
         payment = await self.payments.create(
             order_id=order.id,
             user_id=user.id,
-            amount=plan.price,
+            amount=final_amount,
         )
         await self.session.commit()
         return order, payment
@@ -51,6 +58,8 @@ class OrderService:
         if not self.is_order_expired(order):
             return False
         if order.status != OrderStatus.PENDING_PAYMENT.value:
+            return False
+        if order.payment and order.payment.receipt_file_id:
             return False
         order.status = OrderStatus.EXPIRED.value
         if order.payment and order.payment.status == PaymentStatus.PENDING.value and not order.payment.receipt_file_id:

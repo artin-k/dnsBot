@@ -26,7 +26,10 @@ async def main() -> None:
         database_port=database_url.port,
         fsm_storage=settings.fsm_storage,
         redis_enabled=settings.fsm_storage == "redis" and bool(settings.redis_url),
+        admin_ids_count=len(settings.admin_ids),
     )
+    if settings.invalid_admin_ids:
+        logger.warning("invalid_admin_ids_ignored", values=settings.invalid_admin_ids)
     try:
         await dp.start_polling(bot)
     finally:

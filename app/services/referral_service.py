@@ -1,7 +1,8 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Order, ReferralReward, User
+from app.models import Order, ReferralReward, User, WalletTransactionStatus, WalletTransactionType
+from app.repositories.wallet_transactions import WalletTransactionsRepository
 
 
 class ReferralService:
@@ -32,5 +33,13 @@ class ReferralService:
             amount=amount,
         )
         self.session.add(reward)
+        await WalletTransactionsRepository(self.session).create(
+            user_id=referrer.id,
+            amount=amount,
+            type=WalletTransactionType.REFERRAL_REWARD.value,
+            status=WalletTransactionStatus.APPROVED.value,
+            description=f"پاداش زیرمجموعه‌گیری سفارش {order.tracking_code}",
+            related_order_id=order.id,
+        )
         await self.session.flush()
         return reward

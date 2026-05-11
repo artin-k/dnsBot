@@ -13,3 +13,35 @@ class AdminAddPlanStates(StatesGroup):
 
 class AdminEditPlanStates(StatesGroup):
     value = State()
+
+
+class AdminAddTestAccountStates(StatesGroup):
+    title = State()
+    description = State()
+    config_link = State()
+    subscription_link = State()
+    duration_hours = State()
+    max_claims = State()
+    confirm = State()
+
+
+class AdminEditTestAccountStates(StatesGroup):
+    value = State()
+
+
+class AdminSearchStates(StatesGroup):
+    user_query = State()
+    service_query = State()
+
+
+class AdminWalletAdjustStates(StatesGroup):
+    amount = State()
+
+
+class AdminServiceEditStates(StatesGroup):
+    value = State()
+
+
+class AdminBroadcastStates(StatesGroup):
+    text = State()
+    confirm = State()

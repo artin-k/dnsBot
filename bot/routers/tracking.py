@@ -1,8 +1,6 @@
-from zoneinfo import ZoneInfo
-
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -10,33 +8,68 @@ from app.models import OrderStatus
 from app.repositories.orders import OrdersRepository
 from app.repositories.users import UsersRepository
 from app.services.order_service import OrderService
-from app.services.order_status import order_kind_label, order_status_label
-from app.utils.money import format_toman
-from bot import texts
+from bot import menu_actions, texts
 from bot.keyboards.main_menu import main_menu_keyboard
+from bot.keyboards.tracking import OrderDetailCallback, OrderSearchCallback
+from bot.routers.menu import handle_main_menu_text
 from bot.states.tracking import TrackingStates
 
 router = Router(name="tracking")
 
 
 @router.message(F.text == texts.BTN_TRACK_ORDER)
-async def ask_tracking_code(message: Message, state: FSMContext) -> None:
+async def show_tracking_orders(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    await state.clear()
+    await menu_actions.show_order_tracking(message, session, settings)
+
+
+@router.callback_query(OrderSearchCallback.filter())
+async def ask_tracking_code(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
     await state.set_state(TrackingStates.waiting_code)
-    await message.answer("لطفاً کد پیگیری سفارش خود را ارسال کنید:")
+    if callback.message:
+        await callback.message.answer("لطفاً کد پیگیری سفارش خود را ارسال کنید:")
 
 
-@router.message(TrackingStates.waiting_code)
+@router.callback_query(OrderDetailCallback.filter())
+async def order_detail(
+    callback: CallbackQuery,
+    callback_data: OrderDetailCallback,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    if callback.from_user is None:
+        await callback.answer("این درخواست دیگر معتبر نیست.", show_alert=True)
+        return
+
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    order = await OrdersRepository(session).get_with_details(callback_data.order_id)
+    if user is None or order is None or order.user_id != user.id:
+        await callback.answer("این درخواست دیگر معتبر نیست.", show_alert=True)
+        return
+
+    if order.status == OrderStatus.PENDING_PAYMENT.value:
+        await OrderService(session, settings).expire_order_if_unpaid(order)
+
+    await callback.answer()
+    await _safe_edit_or_answer(callback, menu_actions.format_order_detail(order))
+
+
+@router.message(TrackingStates.waiting_code, F.text)
 async def receive_tracking_code(
     message: Message,
     state: FSMContext,
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    if message.from_user is None or not message.text:
+    if await handle_main_menu_text(message, state, session, settings):
         return
-    if message.text in {texts.BTN_BACK, texts.BTN_MAIN_MENU}:
-        await state.clear()
-        await message.answer(texts.MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
+    if message.from_user is None or not message.text:
         return
 
     user = await UsersRepository(session).get_by_telegram_id(message.from_user.id)
@@ -55,34 +88,17 @@ async def receive_tracking_code(
         await OrderService(session, settings).expire_order_if_unpaid(order)
 
     await state.clear()
-    await message.answer(_format_order_tracking(order), reply_markup=main_menu_keyboard())
+    await message.answer(menu_actions.format_order_detail(order), reply_markup=main_menu_keyboard())
 
 
-def _format_order_tracking(order) -> str:
-    tehran = ZoneInfo("Asia/Tehran")
-    created_at = order.created_at.astimezone(tehran).strftime("%Y-%m-%d %H:%M")
-    expires_at = order.expires_at.astimezone(tehran).strftime("%Y-%m-%d %H:%M") if order.expires_at else "-"
-    extra_message = _extra_message(order.status)
-
-    return f"""📦 وضعیت سفارش شما
-
-🛒 کد پیگیری: {order.tracking_code}
-⚡ نوع سفارش: {order_kind_label(order.order_kind)}
-📌 وضعیت: {order_status_label(order.status)}
-💵 مبلغ: {format_toman(order.amount)} تومان
-🗓 تاریخ ثبت: {created_at}
-⏳ مهلت پرداخت: {expires_at if order.status == OrderStatus.PENDING_PAYMENT.value else "-"}
-
-{extra_message}"""
+@router.message(TrackingStates.waiting_code)
+async def receive_invalid_tracking_code(message: Message) -> None:
+    await message.answer("لطفاً کد پیگیری سفارش را به صورت متن ارسال کنید.")
 
 
-def _extra_message(status: str) -> str:
-    if status == OrderStatus.PENDING_PAYMENT.value:
-        return "برای ادامه، پرداخت را انجام دهید و رسید را ارسال کنید."
-    if status == OrderStatus.COMPLETED.value:
-        return "سفارش شما با موفقیت تکمیل شده است."
-    if status == OrderStatus.EXPIRED.value:
-        return "مهلت پرداخت این سفارش به پایان رسیده است."
-    if status == OrderStatus.FAILED.value:
-        return "این سفارش ناموفق بوده است. برای بررسی بیشتر با پشتیبانی در ارتباط باشید."
-    return ""
+async def _safe_edit_or_answer(callback: CallbackQuery, text: str) -> None:
+    if callback.message:
+        try:
+            await callback.message.edit_text(text)
+        except Exception:
+            await callback.message.answer(text)

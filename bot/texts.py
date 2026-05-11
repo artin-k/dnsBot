@@ -12,8 +12,44 @@ BTN_TRACK_ORDER = "📦 پیگیری سفارش"
 BTN_BACK = "↩️ بازگشت"
 BTN_MAIN_MENU = "🏠 منوی اصلی"
 
+MAIN_MENU_BUTTONS = {
+    BTN_BUY,
+    BTN_RENEW,
+    BTN_TEST_ACCOUNT,
+    BTN_LUCKY_WHEEL,
+    BTN_MY_SERVICES,
+    BTN_WALLET,
+    BTN_REFERRAL,
+    BTN_TARIFFS,
+    BTN_SUPPORT,
+    BTN_TUTORIALS,
+    BTN_TRACK_ORDER,
+    BTN_BACK,
+    BTN_MAIN_MENU,
+}
+
+ADMIN_MENU_BUTTONS = {
+    "📦 مدیریت تعرفه‌ها",
+    "🔑 مدیریت اکانت تست",
+    "💳 پرداخت‌های در انتظار تایید",
+    "🏦 شارژهای کیف پول",
+    "🧾 سفارش‌ها",
+    "👥 کاربران",
+    "🛍 سرویس‌ها",
+    "🎲 گردونه شانس",
+    "📢 پیام همگانی",
+    "⚙️ تنظیمات",
+    "↩️ بازگشت به ربات",
+    "➕ افزودن تعرفه",
+    "📋 لیست تعرفه‌ها",
+    "✏️ ویرایش تعرفه",
+    "🟢 فعال/غیرفعال کردن تعرفه",
+    "🗑 حذف تعرفه",
+    "↩️ بازگشت به پنل مدیریت",
+}
+
 MAIN_MENU_TEXT = "به صفحه اصلی بازگشتید."
-COMING_SOON_TEXT = "این بخش هنوز کامل فعال نشده است. لطفاً از گزینه‌های دیگر منو استفاده کنید."
+COMING_SOON_TEXT = "این بخش به‌زودی فعال می‌شود. تا آن زمان می‌توانید از سایر گزینه‌های منو استفاده کنید."
 EXPIRED_ORDER_TEXT = "❌ این تراکنش منقضی شده است. لطفاً سفارش جدید ثبت کنید."
 
 BUY_PLANS_TEXT = "🛍 لطفاً تعرفه مورد نظر خود را برای خرید انتخاب کنید:"
@@ -48,3 +84,15 @@ def welcome_text(first_name: str | None) -> str:
 ☎️ با پشتیبانی در ارتباط باشید
 
 برای شروع، یکی از گزینه‌های زیر را انتخاب کنید 👇"""
+
+
+def is_main_menu_text(text: str | None) -> bool:
+    if text is None:
+        return False
+    return text.strip() in MAIN_MENU_BUTTONS
+
+
+def is_admin_menu_text(text: str | None) -> bool:
+    if text is None:
+        return False
+    return text.strip() in ADMIN_MENU_BUTTONS

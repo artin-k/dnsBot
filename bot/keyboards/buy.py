@@ -16,10 +16,19 @@ class PlanCallback(CallbackData, prefix="plan"):
 
 class ConfirmPlanCallback(CallbackData, prefix="buy_confirm"):
     plan_id: int
+    discount_roll_id: int = 0
 
 
 class PaymentCallback(CallbackData, prefix="pay"):
     order_id: int
+
+
+class WalletPaymentCallback(CallbackData, prefix="wallet_pay"):
+    order_id: int
+
+
+class PurchaseDiscountCallback(CallbackData, prefix="buy_disc"):
+    plan_id: int
 
 
 def plans_keyboard(plans: list[Plan]) -> InlineKeyboardMarkup:
@@ -38,16 +47,31 @@ def plans_inline_keyboard(plans: list[Plan]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def pre_invoice_keyboard(plan_id: int) -> InlineKeyboardMarkup:
+def pre_invoice_keyboard(plan_id: int, discount_roll_id: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ ادامه خرید", callback_data=ConfirmPlanCallback(plan_id=plan_id))
+    builder.button(
+        text="✅ ادامه خرید",
+        callback_data=ConfirmPlanCallback(plan_id=plan_id, discount_roll_id=discount_roll_id),
+    )
+    builder.button(text="🎟 استفاده از کد تخفیف", callback_data=PurchaseDiscountCallback(plan_id=plan_id))
     builder.button(text=texts.BTN_BACK, callback_data=BUY_BACK_TO_PLANS)
     builder.adjust(1)
     return builder.as_markup()
 
 
-def payment_keyboard(order_id: int) -> InlineKeyboardMarkup:
+def payment_keyboard(order_id: int, show_wallet: bool = True) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ تایید و پرداخت", callback_data=PaymentCallback(order_id=order_id))
+    builder.button(text="💳 پرداخت کارت به کارت", callback_data=PaymentCallback(order_id=order_id))
+    if show_wallet:
+        builder.button(text="🏦 پرداخت از کیف پول", callback_data=WalletPaymentCallback(order_id=order_id))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def insufficient_wallet_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ شارژ کیف پول", callback_data="wallet:topup")
+    builder.button(text="💳 پرداخت کارت به کارت", callback_data=PaymentCallback(order_id=order_id))
+    builder.button(text=texts.BTN_BACK, callback_data=BUY_BACK_TO_MENU)
     builder.adjust(1)
     return builder.as_markup()
