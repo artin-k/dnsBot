@@ -82,6 +82,15 @@ class TimestampMixin:
     )
 
 
+class AppSetting(TimestampMixin, Base):
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    value_type: Mapped[str] = mapped_column(String(32), nullable=False, default="str", server_default="str")
+    description: Mapped[str | None] = mapped_column(Text)
+
+
 class User(TimestampMixin, Base):
     __tablename__ = "users"
 

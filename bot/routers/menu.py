@@ -106,7 +106,7 @@ async def route_main_menu_text(
     elif text == texts.BTN_TUTORIALS:
         await menu_actions.show_tutorials(message)
     elif text == texts.BTN_SUPPORT:
-        await menu_actions.show_support(message, settings)
+        await menu_actions.show_support(message, session)
     elif text == texts.BTN_WALLET:
         await menu_actions.show_wallet(message, session, state)
     elif text == texts.BTN_TEST_ACCOUNT:

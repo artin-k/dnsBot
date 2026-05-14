@@ -17,6 +17,7 @@ from app.repositories.test_accounts import TestAccountsRepository
 from app.repositories.users import UsersRepository
 from app.services.order_service import OrderService
 from app.services.affiliate_service import AffiliateService
+from app.services.settings_service import AppSettingsService
 from app.utils.codes import generate_discount_code
 from app.utils.formatting import (
     format_datetime,
@@ -227,12 +228,14 @@ async def show_tutorials(message: Message) -> None:
     )
 
 
-async def show_support(message: Message, settings: Settings) -> None:
+async def show_support(message: Message, session: AsyncSession) -> None:
+    support_username = await AppSettingsService(session).get_support_username()
+    support_text = f"@{escape(support_username)}" if support_username else "ثبت نشده"
     await message.answer(
         f"""☎️ پشتیبانی
 
 برای ارتباط با پشتیبانی به آیدی زیر پیام دهید:
-@{escape(settings.support_username)}""",
+{support_text}""",
         reply_markup=main_menu_keyboard(),
     )
 

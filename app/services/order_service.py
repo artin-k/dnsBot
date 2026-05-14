@@ -6,6 +6,7 @@ from app.config import Settings
 from app.models import Order, OrderKind, OrderStatus, PaymentStatus, Plan, User
 from app.repositories.orders import OrdersRepository
 from app.repositories.payments import PaymentsRepository
+from app.services.settings_service import AppSettingsService
 from app.utils.tracking import generate_tracking_code
 
 
@@ -13,6 +14,7 @@ class OrderService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
         self.settings = settings
+        self.app_settings = AppSettingsService(session)
         self.orders = OrdersRepository(session)
         self.payments = PaymentsRepository(session)
 
@@ -29,7 +31,8 @@ class OrderService:
         discount_amount: int = 0,
     ) -> tuple[Order, object]:
         tracking_code = await self._generate_unique_tracking_code()
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.settings.order_expire_minutes)
+        order_expire_minutes = await self.app_settings.get_order_expire_minutes()
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=order_expire_minutes)
         final_amount = max(plan.price - discount_amount, 0)
 
         order = await self.orders.create(

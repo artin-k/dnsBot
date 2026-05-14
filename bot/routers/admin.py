@@ -42,6 +42,20 @@ from app.services.payment_service import (
     PaymentExpiredError,
     PaymentService,
 )
+from app.services.settings_service import (
+    PAYMENT_CARD_HOLDER,
+    PAYMENT_CARD_NUMBER,
+    PAYMENT_DESCRIPTION,
+    ORDER_EXPIRE_MINUTES,
+    REFERRAL_REWARD_AMOUNT,
+    SETTING_DEFINITION_BY_KEY,
+    SETTING_DEFINITIONS,
+    SUPPORT_USERNAME,
+    WALLET_MAX_TOPUP_AMOUNT,
+    WALLET_MIN_TOPUP_AMOUNT,
+    AppSettingsService,
+    SettingValidationError,
+)
 from app.services.wallet_service import WalletService, WalletTopupAlreadyProcessedError, WalletTopupError
 from app.services.vpn_panel import VPNPanelService
 from app.utils.formatting import (
@@ -61,6 +75,7 @@ from bot.keyboards.admin import (
     AdminPaymentCallback,
     AdminPlanCallback,
     AdminServiceCallback,
+    AdminSettingCallback,
     AdminTestAccountCallback,
     AdminUserCallback,
     add_plan_confirm_keyboard,
@@ -80,12 +95,14 @@ from bot.keyboards.admin import (
     affiliate_user_detail_keyboard,
     admin_main_keyboard,
     attach_orphans_confirm_keyboard,
+    bot_settings_keyboard,
     broadcast_confirm_keyboard,
     pending_payments_keyboard,
     plan_delete_confirm_keyboard,
     plan_detail_keyboard,
     plans_management_keyboard,
     service_detail_keyboard,
+    setting_edit_keyboard,
     services_admin_keyboard,
     test_account_detail_keyboard,
     test_accounts_keyboard,
@@ -103,6 +120,7 @@ from bot.states.admin import (
     AdminEditTestAccountStates,
     AdminSearchStates,
     AdminServiceEditStates,
+    AdminSettingsStates,
     AdminWalletAdjustStates,
 )
 
@@ -244,8 +262,11 @@ async def admin_action(
         return
 
     if action == "settings":
+        if not _is_env_admin(callback.from_user.id if callback.from_user else None, settings):
+            await _safe_edit_or_answer(callback, "⛔ فقط مدیران ثبت‌شده در ADMIN_IDS می‌توانند تنظیمات ربات را تغییر دهند.")
+            return
         await state.clear()
-        await _show_settings(callback, settings)
+        await _show_settings(callback, session)
         return
 
     if action == "broadcast":
@@ -294,6 +315,44 @@ async def admin_action(
 
     if callback.message:
         await callback.message.answer(texts.COMING_SOON_TEXT)
+
+
+@router.callback_query(AdminSettingCallback.filter())
+async def admin_setting_action(
+    callback: CallbackQuery,
+    callback_data: AdminSettingCallback,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    if not _is_env_admin(callback.from_user.id if callback.from_user else None, settings):
+        await callback.answer("⛔ شما دسترسی تغییر تنظیمات را ندارید.", show_alert=True)
+        return
+
+    await callback.answer()
+    action = callback_data.action
+
+    if action in {"list", "cancel"}:
+        await state.clear()
+        await _show_settings(callback, session)
+        return
+
+    if action == "edit":
+        definition = SETTING_DEFINITION_BY_KEY.get(callback_data.key)
+        if definition is None:
+            await _safe_edit_or_answer(callback, "تنظیم انتخاب‌شده معتبر نیست.", reply_markup=bot_settings_keyboard())
+            return
+
+        values = await AppSettingsService(session).get_all_settings()
+        current_value = values.get(definition.key, definition.default)
+        await state.set_state(AdminSettingsStates.value)
+        await state.update_data(setting_key=definition.key)
+        prompt = _format_setting_prompt(definition.key, current_value)
+        if callback.message:
+            await callback.message.answer(prompt, reply_markup=setting_edit_keyboard())
+        return
+
+    await _safe_edit_or_answer(callback, "عملیات نامعتبر است.", reply_markup=bot_settings_keyboard())
 
 
 @router.callback_query(AdminAffiliateCallback.filter())
@@ -1111,6 +1170,30 @@ async def admin_service_edit(message: Message, state: FSMContext, session: Async
     await message.answer(_format_service_detail(service), reply_markup=service_detail_keyboard(service))
 
 
+@router.message(AdminSettingsStates.value)
+async def admin_setting_value(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
+    if not await _guard_settings_message(message, state, session, settings):
+        return
+    data = await state.get_data()
+    key = str(data.get("setting_key") or "")
+    if key not in SETTING_DEFINITION_BY_KEY:
+        await state.clear()
+        await message.answer("ویرایش تنظیمات قابل ادامه نیست. دوباره تلاش کنید.", reply_markup=bot_settings_keyboard())
+        return
+
+    app_settings = AppSettingsService(session)
+    try:
+        await app_settings.set_setting(key, message.text or "")
+    except SettingValidationError as exc:
+        await message.answer(str(exc))
+        return
+
+    await session.commit()
+    await state.clear()
+    await message.answer("✅ تنظیم با موفقیت ذخیره شد.")
+    await _send_settings(message, session)
+
+
 @router.message(AdminBroadcastStates.text)
 async def admin_broadcast_text(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
     if not await _guard_admin_message(message, state, session, settings):
@@ -1769,25 +1852,69 @@ async def _show_dice(callback: CallbackQuery, session: AsyncSession, settings: S
     await _safe_edit_or_answer(callback, "\n".join(lines), reply_markup=admin_main_keyboard())
 
 
-async def _show_settings(callback: CallbackQuery, settings: Settings) -> None:
-    card = settings.payment_card_number
-    masked_card = f"{card[:4]}****{card[-4:]}" if len(card) >= 8 else ("ثبت نشده" if not card else "****")
-    text = f"""⚙️ تنظیمات
+async def _show_settings(callback: CallbackQuery, session: AsyncSession) -> None:
+    app_settings = AppSettingsService(session)
+    await app_settings.ensure_defaults()
+    await session.commit()
+    values = await app_settings.get_all_settings()
+    await _safe_edit_or_answer(callback, _format_settings_text(values), reply_markup=bot_settings_keyboard())
 
-این مقادیر از فایل .env خوانده می‌شوند و از داخل ربات فقط نمایش داده می‌شوند.
 
-پشتیبانی: @{escape(settings.support_username)}
-شماره کارت: {escape(masked_card)}
-نام صاحب کارت: {escape(settings.payment_card_holder or "-")}
-پاداش زیرمجموعه‌گیری: {format_money(settings.referral_reward_amount)} تومان
-مالک ریشه: {settings.root_admin_telegram_id or "-"}
-کمیسیون مالک: {format_percent(settings.owner_commission_percent)}
-کمیسیون معرف مستقیم: {format_percent(settings.referral_commission_percent)}
-حداقل شارژ کیف پول: {format_money(settings.wallet_min_topup_amount)} تومان
-حداکثر شارژ کیف پول: {"بدون محدودیت" if settings.wallet_max_topup_amount == 0 else format_money(settings.wallet_max_topup_amount) + " تومان"}
-درصد تخفیف تاس: {settings.dice_win_discount_percent}٪
-فاصله تلاش تاس: {settings.dice_cooldown_hours} ساعت"""
-    await _safe_edit_or_answer(callback, text, reply_markup=admin_main_keyboard())
+async def _send_settings(message: Message, session: AsyncSession) -> None:
+    app_settings = AppSettingsService(session)
+    await app_settings.ensure_defaults()
+    await session.commit()
+    values = await app_settings.get_all_settings()
+    await message.answer(_format_settings_text(values), reply_markup=bot_settings_keyboard())
+
+
+def _format_settings_text(values: dict[str, str | int]) -> str:
+    lines = [
+        "⚙️ تنظیمات",
+        "",
+        "این مقادیر از پایگاه داده خوانده می‌شوند و از همین بخش قابل ویرایش هستند.",
+        "",
+    ]
+    for definition in SETTING_DEFINITIONS:
+        value = values.get(definition.key, definition.default)
+        lines.append(f"{definition.label}: {_format_setting_value(definition.key, value)}")
+    return "\n".join(lines)
+
+
+def _format_setting_prompt(key: str, current_value: str | int) -> str:
+    definition = SETTING_DEFINITION_BY_KEY[key]
+    if definition.value_type == "int":
+        min_hint = f"حداقل مقدار مجاز: {definition.min_value}" if definition.min_value is not None else "عدد صحیح ارسال کنید."
+        if key == WALLET_MAX_TOPUP_AMOUNT:
+            min_hint = "عدد 0 یعنی بدون محدودیت. مقدار منفی مجاز نیست."
+        hint = f"لطفاً مقدار جدید را به صورت عدد صحیح ارسال کنید.\n{min_hint}"
+    else:
+        hint = "مقدار جدید را ارسال کنید. برای خالی کردن مقدار، - بفرستید."
+        if key == SUPPORT_USERNAME:
+            hint += "\nنام کاربری را بدون @ هم می‌توانید بفرستید."
+    return f"""✏️ ویرایش {definition.label}
+
+مقدار فعلی:
+{_format_setting_value(key, current_value)}
+
+{hint}"""
+
+
+def _format_setting_value(key: str, value: str | int | None) -> str:
+    if key == SUPPORT_USERNAME:
+        text = str(value or "").strip().removeprefix("@")
+        return f"@{escape(text)}" if text else "ثبت نشده"
+    if key in {PAYMENT_CARD_NUMBER, PAYMENT_CARD_HOLDER, PAYMENT_DESCRIPTION}:
+        text = str(value or "").strip()
+        return escape(text) if text else "ثبت نشده"
+    if key in {REFERRAL_REWARD_AMOUNT, WALLET_MIN_TOPUP_AMOUNT}:
+        return f"{format_money(int(value or 0))} تومان"
+    if key == WALLET_MAX_TOPUP_AMOUNT:
+        parsed = int(value or 0)
+        return "بدون محدودیت" if parsed == 0 else f"{format_money(parsed)} تومان"
+    if key == ORDER_EXPIRE_MINUTES:
+        return f"{int(value or 0)} دقیقه"
+    return escape(str(value if value is not None else ""))
 
 
 async def _show_plan_detail(callback: CallbackQuery, plan) -> None:
@@ -1806,6 +1933,10 @@ async def _is_admin(telegram_id: int | None, session: AsyncSession, settings: Se
         return True
     user = await UsersRepository(session).get_by_telegram_id(telegram_id)
     return bool(user and user.is_admin)
+
+
+def _is_env_admin(telegram_id: int | None, settings: Settings) -> bool:
+    return telegram_id is not None and telegram_id in settings.admin_ids
 
 
 async def _ensure_admin_user_record(
@@ -1844,6 +1975,30 @@ async def _guard_admin_message(message: Message, state: FSMContext, session: Asy
     if (message.text or "").strip() in {texts.BTN_BACK, texts.BTN_MAIN_MENU}:
         await state.clear()
         await message.answer(texts.ADMIN_PANEL_TEXT, reply_markup=admin_main_keyboard())
+        return False
+    if texts.is_admin_menu_text(message.text):
+        await state.clear()
+        await message.answer(texts.ADMIN_PANEL_TEXT, reply_markup=admin_main_keyboard())
+        return False
+    return True
+
+
+async def _guard_settings_message(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> bool:
+    if not _is_env_admin(message.from_user.id if message.from_user else None, settings):
+        await state.clear()
+        await message.answer("⛔ شما دسترسی تغییر تنظیمات را ندارید.")
+        return False
+    await _ensure_admin_user_record(message.from_user, session, settings)
+    if texts.is_main_menu_text(message.text):
+        await state.clear()
+        from bot.routers.menu import route_main_menu_text
+
+        await route_main_menu_text(message, state, session, settings)
+        return False
+    text = (message.text or "").strip()
+    if text in {texts.BTN_BACK, texts.BTN_MAIN_MENU, "لغو", "انصراف"}:
+        await state.clear()
+        await _send_settings(message, session)
         return False
     if texts.is_admin_menu_text(message.text):
         await state.clear()

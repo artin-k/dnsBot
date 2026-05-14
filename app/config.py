@@ -3,6 +3,7 @@ from functools import lru_cache
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+# ArtinVps2026
 
 class Settings(BaseSettings):
     bot_token: str = Field(default="", alias="BOT_TOKEN")
@@ -13,22 +14,11 @@ class Settings(BaseSettings):
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     fsm_storage: str = Field(default="memory", alias="FSM_STORAGE")
     admin_ids_raw: str = Field(default="", alias="ADMIN_IDS")
-    support_username: str = Field(default="support", alias="SUPPORT_USERNAME")
-    payment_card_number: str = Field(default="", alias="PAYMENT_CARD_NUMBER")
-    payment_card_holder: str = Field(default="", alias="PAYMENT_CARD_HOLDER")
-    payment_description: str = Field(
-        default="پرداخت سفارش اشتراک VPN",
-        alias="PAYMENT_DESCRIPTION",
-    )
-    order_expire_minutes: int = Field(default=15, alias="ORDER_EXPIRE_MINUTES")
-    referral_reward_amount: int = Field(default=0, alias="REFERRAL_REWARD_AMOUNT")
     root_admin_telegram_id: int | None = Field(default=None, alias="ROOT_ADMIN_TELEGRAM_ID")
     owner_commission_percent: float = Field(default=10, alias="OWNER_COMMISSION_PERCENT")
     referral_commission_percent: float = Field(default=0, alias="REFERRAL_COMMISSION_PERCENT")
     commission_base: str = Field(default="final_amount", alias="COMMISSION_BASE")
     affiliate_default_to_root: bool = Field(default=True, alias="AFFILIATE_DEFAULT_TO_ROOT")
-    wallet_min_topup_amount: int = Field(default=50000, alias="WALLET_MIN_TOPUP_AMOUNT")
-    wallet_max_topup_amount: int = Field(default=0, alias="WALLET_MAX_TOPUP_AMOUNT")
     dice_win_discount_percent: int = Field(default=10, alias="DICE_WIN_DISCOUNT_PERCENT")
     dice_cooldown_hours: int = Field(default=24, alias="DICE_COOLDOWN_HOURS")
     dice_discount_expire_hours: int = Field(default=72, alias="DICE_DISCOUNT_EXPIRE_HOURS")
@@ -50,11 +40,6 @@ class Settings(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return init_settings, dotenv_settings, env_settings, file_secret_settings
-
-    @field_validator("support_username", mode="after")
-    @classmethod
-    def normalize_support_username(cls, value: str) -> str:
-        return value.strip().removeprefix("@")
 
     @field_validator("redis_url", mode="after")
     @classmethod

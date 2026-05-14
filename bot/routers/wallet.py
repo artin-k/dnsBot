@@ -1,3 +1,5 @@
+from html import escape
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -7,6 +9,7 @@ from app.config import Settings
 from app.repositories.users import UsersRepository
 from app.repositories.wallet_transactions import WalletTransactionsRepository
 from app.services.payment_service import PaymentService
+from app.services.settings_service import AppSettingsService
 from app.services.vpn_panel import VPNPanelService
 from app.services.wallet_service import WalletService
 from app.utils.formatting import (
@@ -67,6 +70,7 @@ async def wallet_callback(
         return
 
     if callback_data.action == "topup":
+        min_topup_amount = await AppSettingsService(session).get_wallet_min_topup_amount()
         await state.set_state(WalletStates.waiting_topup_amount)
         await callback.message.answer(
             f"""لطفاً مبلغ شارژ کیف پول را به تومان وارد کنید:
@@ -74,7 +78,7 @@ async def wallet_callback(
 مثال:
 100000
 
-حداقل مبلغ شارژ: {format_money(settings.wallet_min_topup_amount)} تومان"""
+حداقل مبلغ شارژ: {format_money(min_topup_amount)} تومان"""
         )
         return
 
@@ -99,11 +103,14 @@ async def receive_topup_amount(
     if amount is None:
         await message.answer("لطفاً یک مبلغ صحیح و مثبت به تومان وارد کنید.")
         return
-    if amount < settings.wallet_min_topup_amount:
-        await message.answer(f"حداقل مبلغ شارژ کیف پول {format_money(settings.wallet_min_topup_amount)} تومان است.")
+    app_settings = AppSettingsService(session)
+    min_topup_amount = await app_settings.get_wallet_min_topup_amount()
+    max_topup_amount = await app_settings.get_wallet_max_topup_amount()
+    if amount < min_topup_amount:
+        await message.answer(f"حداقل مبلغ شارژ کیف پول {format_money(min_topup_amount)} تومان است.")
         return
-    if settings.wallet_max_topup_amount > 0 and amount > settings.wallet_max_topup_amount:
-        await message.answer(f"حداکثر مبلغ شارژ کیف پول {format_money(settings.wallet_max_topup_amount)} تومان است.")
+    if max_topup_amount > 0 and amount > max_topup_amount:
+        await message.answer(f"حداکثر مبلغ شارژ کیف پول {format_money(max_topup_amount)} تومان است.")
         return
 
     user = await UsersRepository(session).get_by_telegram_id(message.from_user.id)
@@ -117,6 +124,10 @@ async def receive_topup_amount(
         return
 
     payment, transaction = await WalletService(session).create_topup_request(user_id=user.id, amount=amount)
+    card_number = await app_settings.get_payment_card_number()
+    card_holder = await app_settings.get_payment_card_holder()
+    payment_description = await app_settings.get_payment_description()
+    description_text = f"\nتوضیحات پرداخت:\n{escape(payment_description)}\n" if payment_description else ""
     await state.set_state(WalletStates.waiting_topup_receipt)
     await state.update_data(payment_id=payment.id, transaction_id=transaction.id)
     await message.answer(
@@ -126,10 +137,11 @@ async def receive_topup_amount(
 {format_money(amount)} تومان
 
 شماره کارت:
-{settings.payment_card_number or "ثبت نشده"}
+{escape(card_number) or "ثبت نشده"}
 
 به نام:
-{settings.payment_card_holder or "ثبت نشده"}
+{escape(card_holder) or "ثبت نشده"}
+{description_text}
 
 بعد از پرداخت، تصویر رسید را همینجا ارسال کنید."""
     )

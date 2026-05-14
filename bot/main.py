@@ -4,7 +4,8 @@ import structlog
 from sqlalchemy.engine import make_url
 
 from app.config import get_settings
-from app.database import engine
+from app.database import async_session_maker, engine
+from app.services.settings_service import AppSettingsService
 from bot.loader import create_bot, create_dispatcher, setup_logging
 
 logger = structlog.get_logger(__name__)
@@ -31,6 +32,9 @@ async def main() -> None:
     )
     if settings.invalid_admin_ids:
         logger.warning("invalid_admin_ids_ignored", values=settings.invalid_admin_ids)
+    async with async_session_maker() as session:
+        await AppSettingsService(session).ensure_defaults()
+        await session.commit()
     try:
         await dp.start_polling(bot)
     finally:

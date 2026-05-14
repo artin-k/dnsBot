@@ -24,6 +24,7 @@ from app.services.payment_service import (
     PaymentExpiredError,
     PaymentService,
 )
+from app.services.settings_service import AppSettingsService
 from app.services.username_validator import validate_username
 from app.services.vpn_panel import VPNPanelService
 from app.utils.formatting import format_money
@@ -233,6 +234,7 @@ async def receive_username(
         discount_percent=int(data.get("discount_percent") or 0),
         discount_amount=int(data.get("discount_amount") or 0),
     )
+    expire_minutes = await AppSettingsService(session).get_order_expire_minutes()
 
     await state.clear()
     await message.answer(
@@ -243,7 +245,7 @@ async def receive_username(
 
 💢 لطفاً به این نکات قبل از پرداخت توجه کنید 👇
 
-🔹 تراکنش تا یک ربع اعتبار دارد و پس از آن در صورت پرداخت تایید نخواهد شد.
+🔹 تراکنش تا {expire_minutes} دقیقه اعتبار دارد و پس از آن در صورت پرداخت تایید نخواهد شد.
 ❌ پس از پرداخت، تایید تراکنش ممکن است 15 دقیقه تا 1 ساعت زمان ببرد.
 ✅ در صورت مشکل می‌توانید با پشتیبانی در ارتباط باشید.""",
         reply_markup=payment_keyboard(order.id),
@@ -280,6 +282,11 @@ async def show_payment_info(
 
     await state.set_state(BuyStates.waiting_receipt)
     await state.update_data(order_id=order.id, payment_id=payment.id)
+    app_settings = AppSettingsService(session)
+    card_number = await app_settings.get_payment_card_number()
+    card_holder = await app_settings.get_payment_card_holder()
+    payment_description = await app_settings.get_payment_description()
+    description_text = f"\nتوضیحات پرداخت:\n{escape(payment_description)}\n" if payment_description else ""
     if callback.message:
         await callback.message.answer(
             f"""💳 پرداخت دستی
@@ -288,10 +295,11 @@ async def show_payment_info(
 {format_money(order.amount)} تومان
 
 شماره کارت:
-{escape(settings.payment_card_number) or "ثبت نشده"}
+{escape(card_number) or "ثبت نشده"}
 
 به نام:
-{escape(settings.payment_card_holder) or "ثبت نشده"}
+{escape(card_holder) or "ثبت نشده"}
+{description_text}
 
 بعد از پرداخت، تصویر رسید را همینجا ارسال کنید."""
         )

@@ -46,3 +46,7 @@ class AdminServiceEditStates(StatesGroup):
 class AdminBroadcastStates(StatesGroup):
     text = State()
     confirm = State()
+
+
+class AdminSettingsStates(StatesGroup):
+    value = State()

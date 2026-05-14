@@ -23,6 +23,7 @@ from app.services.affiliate_service import AffiliateService
 from app.services.order_service import OrderService
 from app.services.referral_service import ReferralService
 from app.services.renewal_service import RenewalService
+from app.services.settings_service import AppSettingsService
 from app.services.vpn_panel import VPNPanelService
 
 
@@ -69,6 +70,7 @@ class PaymentService:
         self.session = session
         self.vpn_panel = vpn_panel
         self.settings = settings
+        self.app_settings = AppSettingsService(session)
 
     async def attach_receipt(self, payment: Payment, receipt_file_id: str) -> None:
         payment.receipt_file_id = receipt_file_id
@@ -261,7 +263,7 @@ class PaymentService:
             status=VPNServiceStatus.ACTIVE.value,
         )
 
-        reward_amount = self.settings.referral_reward_amount if self.settings else 0
+        reward_amount = await self.app_settings.get_referral_reward_amount()
         await ReferralService(self.session).grant_first_purchase_reward(
             user=user,
             order=order,

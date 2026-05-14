@@ -3,6 +3,7 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.models import Payment, Plan, TestAccount, User, VPNService, WalletTransaction
+from app.services.settings_service import SETTING_DEFINITIONS
 
 
 class AdminActionCallback(CallbackData, prefix="adm"):
@@ -39,6 +40,11 @@ class AdminAffiliateCallback(CallbackData, prefix="adm_aff"):
     user_id: int = 0
     page: int = 0
     commission_id: int = 0
+
+
+class AdminSettingCallback(CallbackData, prefix="adm_set"):
+    action: str
+    key: str = "_"
 
 
 def admin_main_keyboard() -> InlineKeyboardMarkup:
@@ -111,10 +117,30 @@ def admin_communications_keyboard() -> InlineKeyboardMarkup:
 
 def admin_settings_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="⚙️ تنظیمات پرداخت", callback_data=AdminActionCallback(action="settings"))
+    builder.button(text="⚙️ تنظیمات", callback_data=AdminActionCallback(action="settings"))
     builder.button(text="⚙️ تنظیمات زیرمجموعه‌گیری", callback_data=AdminAffiliateCallback(action="settings"))
     builder.button(text="🎲 تنظیمات گردونه شانس", callback_data=AdminActionCallback(action="dice"))
     builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="panel"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def bot_settings_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for definition in SETTING_DEFINITIONS:
+        builder.button(
+            text=f"✏️ {definition.label}",
+            callback_data=AdminSettingCallback(action="edit", key=definition.key),
+        )
+    builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="cat_settings"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def setting_edit_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="↩️ بازگشت به تنظیمات", callback_data=AdminSettingCallback(action="list"))
+    builder.button(text="❌ لغو", callback_data=AdminSettingCallback(action="cancel"))
     builder.adjust(1)
     return builder.as_markup()
 
