@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     dice_win_discount_percent: int = Field(default=10, alias="DICE_WIN_DISCOUNT_PERCENT")
     dice_cooldown_hours: int = Field(default=24, alias="DICE_COOLDOWN_HOURS")
     dice_discount_expire_hours: int = Field(default=72, alias="DICE_DISCOUNT_EXPIRE_HOURS")
+    allow_placeholder_configs: bool = Field(default=False, alias="ALLOW_PLACEHOLDER_CONFIGS")
+    config_low_stock_threshold: int = Field(default=3, alias="CONFIG_LOW_STOCK_THRESHOLD")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -91,6 +93,29 @@ class Settings(BaseSettings):
         if not text:
             return True
         return text in {"1", "true", "yes", "on", "y"}
+
+    @field_validator("allow_placeholder_configs", mode="before")
+    @classmethod
+    def normalize_allow_placeholder_configs(cls, value: object) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if not text:
+            return False
+        return text in {"1", "true", "yes", "on", "y"}
+
+    @field_validator("config_low_stock_threshold", mode="before")
+    @classmethod
+    def normalize_config_low_stock_threshold(cls, value: object) -> int:
+        if value is None:
+            return 3
+        try:
+            parsed = int(str(value).strip())
+        except ValueError:
+            return 3
+        return max(parsed, 0)
 
     @field_validator("commission_base", mode="after")
     @classmethod

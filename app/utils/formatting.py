@@ -24,6 +24,7 @@ ORDER_STATUS_LABELS = {
     OrderStatus.PAID.value: "پرداخت شده",
     OrderStatus.CREATING_SERVICE.value: "در حال ساخت سرویس",
     OrderStatus.COMPLETED.value: "تکمیل شده",
+    OrderStatus.WAITING_INVENTORY.value: "در انتظار شارژ موجودی",
     OrderStatus.EXPIRED.value: "منقضی شده",
     OrderStatus.CANCELLED.value: "لغو شده",
     OrderStatus.FAILED.value: "ناموفق",

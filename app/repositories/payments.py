@@ -19,6 +19,7 @@ class PaymentsRepository:
                 joinedload(Payment.user),
                 joinedload(Payment.order).joinedload(Order.plan),
                 joinedload(Payment.order).joinedload(Order.renewal_service),
+                joinedload(Payment.order).joinedload(Order.config_inventory_item),
             )
             .where(Payment.id == payment_id)
         )
@@ -33,6 +34,7 @@ class PaymentsRepository:
                 joinedload(Payment.user),
                 joinedload(Payment.order).joinedload(Order.plan),
                 joinedload(Payment.order).joinedload(Order.renewal_service),
+                joinedload(Payment.order).joinedload(Order.config_inventory_item),
             )
             .where(
                 Payment.order_id.is_not(None),
@@ -48,6 +50,7 @@ class PaymentsRepository:
             select(Payment)
             .options(
                 joinedload(Payment.order).joinedload(Order.plan),
+                joinedload(Payment.order).joinedload(Order.config_inventory_item),
             )
             .where(
                 Payment.user_id == user_id,

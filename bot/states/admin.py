@@ -50,3 +50,21 @@ class AdminBroadcastStates(StatesGroup):
 
 class AdminSettingsStates(StatesGroup):
     value = State()
+
+
+class AdminInventoryAddStates(StatesGroup):
+    config_link = State()
+    subscription_link = State()
+    note = State()
+
+
+class AdminInventoryBulkStates(StatesGroup):
+    text = State()
+
+
+class AdminInventorySearchStates(StatesGroup):
+    query = State()
+
+
+class AdminInventoryEditStates(StatesGroup):
+    value = State()

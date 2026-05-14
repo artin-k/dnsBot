@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.models import DiceRoll, OrderKind, OrderStatus
+from app.repositories.config_inventory import ConfigInventoryRepository
 from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.orders import OrdersRepository
 from app.repositories.payments import PaymentsRepository
@@ -17,6 +18,13 @@ from app.repositories.plans import PlansRepository
 from app.repositories.services import ServicesRepository
 from app.repositories.users import UsersRepository
 from app.services.order_service import OrderService
+from app.services.inventory_service import (
+    InventoryUnavailableError,
+    get_available_count,
+    notify_admins_empty_inventory_attempt,
+    notify_admins_low_or_empty_inventory,
+    release_expired_reservations,
+)
 from app.services.payment_service import (
     InsufficientWalletBalanceError,
     PaymentAlreadyProcessedError,
@@ -53,12 +61,26 @@ router = Router(name="buy")
 
 @router.message(F.text == texts.BTN_BUY)
 async def show_plans(message: Message, session: AsyncSession) -> None:
+    released = await release_expired_reservations(session)
+    if released:
+        await session.commit()
     plans = await PlansRepository(session).list_active()
     if not plans:
         await message.answer("در حال حاضر پلن فعالی برای خرید وجود ندارد.", reply_markup=main_menu_keyboard())
         return
 
-    await message.answer(texts.BUY_PLANS_TEXT, reply_markup=plans_keyboard(plans))
+    counts = await ConfigInventoryRepository(session).available_counts_for_plans([plan.id for plan in plans])
+    if all(counts.get(plan.id, 0) <= 0 for plan in plans):
+        await message.answer(
+            "در حال حاضر موجودی سرویس‌ها به پایان رسیده است.\nلطفاً بعداً مراجعه کنید یا با پشتیبانی در ارتباط باشید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    unavailable_lines = [f"❌ {plan.title} | ناموجود" for plan in plans if counts.get(plan.id, 0) <= 0]
+    text = texts.BUY_PLANS_TEXT
+    if unavailable_lines:
+        text += "\n\n" + "\n".join(unavailable_lines)
+    await message.answer(text, reply_markup=plans_keyboard(plans, counts))
 
 
 @router.callback_query(F.data == BUY_BACK_TO_MENU)
@@ -71,9 +93,13 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == BUY_BACK_TO_PLANS)
 async def buy_back_to_plans(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
+    released = await release_expired_reservations(session)
+    if released:
+        await session.commit()
     plans = await PlansRepository(session).list_active()
+    counts = await ConfigInventoryRepository(session).available_counts_for_plans([plan.id for plan in plans])
     if callback.message:
-        await callback.message.edit_text(texts.BUY_PLANS_TEXT, reply_markup=plans_keyboard(plans))
+        await callback.message.edit_text(texts.BUY_PLANS_TEXT, reply_markup=plans_keyboard(plans, counts))
 
 
 @router.callback_query(PlanCallback.filter())
@@ -86,6 +112,14 @@ async def show_pre_invoice(
     plan = await PlansRepository(session).get(callback_data.plan_id)
     if plan is None or not plan.is_active:
         await _safe_edit_or_answer(callback, "این پلن در دسترس نیست.")
+        return
+    if await get_available_count(session, plan.id) <= 0:
+        await notify_admins_empty_inventory_attempt(callback.bot, session, plan)
+        await _safe_edit_or_answer(
+            callback,
+            "❌ موجودی این تعرفه در حال حاضر به پایان رسیده است.\nلطفاً تعرفه دیگری انتخاب کنید یا با پشتیبانی در ارتباط باشید.",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
     user = None
@@ -170,6 +204,14 @@ async def receive_discount_code(
             await state.clear()
             await message.answer("این پلن در دسترس نیست.", reply_markup=main_menu_keyboard())
             return
+        if await get_available_count(session, plan.id) <= 0:
+            await state.clear()
+            await notify_admins_empty_inventory_attempt(message.bot, session, plan)
+            await message.answer(
+                "❌ موجودی این تعرفه در حال حاضر به پایان رسیده است.\nلطفاً تعرفه دیگری انتخاب کنید یا با پشتیبانی در ارتباط باشید.",
+                reply_markup=main_menu_keyboard(),
+            )
+            return
         await state.clear()
         await message.answer(
             _format_purchase_invoice(plan, user.wallet_balance, discount),
@@ -224,16 +266,33 @@ async def receive_username(
         await state.clear()
         await message.answer("سفارش قابل ادامه نیست. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
         return
+    if await get_available_count(session, plan.id) <= 0:
+        await state.clear()
+        await notify_admins_empty_inventory_attempt(message.bot, session, plan)
+        await message.answer(
+            "❌ موجودی این سرویس در حال حاضر به پایان رسیده است.\n\nلطفاً یکی از سرویس‌های دیگر را انتخاب کنید یا با پشتیبانی در ارتباط باشید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
 
     order_service = OrderService(session, settings)
-    order, payment = await order_service.create_order_with_payment(
-        user=user,
-        plan=plan,
-        custom_username=normalized_or_reason,
-        discount_code=data.get("discount_code"),
-        discount_percent=int(data.get("discount_percent") or 0),
-        discount_amount=int(data.get("discount_amount") or 0),
-    )
+    try:
+        order, payment = await order_service.create_order_with_payment(
+            user=user,
+            plan=plan,
+            custom_username=normalized_or_reason,
+            discount_code=data.get("discount_code"),
+            discount_percent=int(data.get("discount_percent") or 0),
+            discount_amount=int(data.get("discount_amount") or 0),
+        )
+    except InventoryUnavailableError:
+        await state.clear()
+        await notify_admins_empty_inventory_attempt(message.bot, session, plan)
+        await message.answer(
+            "❌ موجودی این سرویس در حال حاضر به پایان رسیده است.\n\nلطفاً یکی از سرویس‌های دیگر را انتخاب کنید یا با پشتیبانی در ارتباط باشید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
     expire_minutes = await AppSettingsService(session).get_order_expire_minutes()
 
     await state.clear()
@@ -354,6 +413,8 @@ async def pay_from_wallet(
         _approved_wallet_message(result),
         reply_markup=main_menu_keyboard(),
     )
+    if result.plan_id:
+        await notify_admins_low_or_empty_inventory(callback.bot, session, result.plan_id)
 
 
 @router.message(BuyStates.waiting_receipt, F.photo)
@@ -487,6 +548,8 @@ def _discount_amount(price: int, discount: DiceRoll | None) -> int:
 
 
 def _approved_wallet_message(result) -> str:
+    if result.waiting_inventory:
+        return "پرداخت شما تایید شد، اما موجودی سرویس انتخاب‌شده به پایان رسیده است. پشتیبانی به‌زودی سرویس شما را ارسال می‌کند."
     wallet_line = f"\n\n🏦 موجودی کیف پول: {format_money(result.wallet_balance)} تومان" if result.wallet_balance is not None else ""
     if result.order_kind == OrderKind.RENEWAL.value:
         return f"""✅ پرداخت از کیف پول انجام شد و تمدید سرویس شما با موفقیت ثبت شد.
@@ -496,18 +559,15 @@ def _approved_wallet_message(result) -> str:
 📦 حجم افزوده: {result.volume_gb} گیگ
 🗓 اعتبار افزوده: {result.duration_days} روز{wallet_line}"""
 
+    config_line = f"\n🔗 کانفیگ شما:\n{escape(result.config_link)}" if result.config_link else ""
+    subscription_line = f"\n\n🔗 لینک اشتراک:\n{escape(result.subscription_link)}" if result.subscription_link else ""
     return f"""✅ پرداخت از کیف پول انجام شد و سرویس شما ساخته شد.
 
 👤 نام کاربری: {escape(result.service_username)}
 ⚡ پلن: {escape(result.plan_title)}
 📦 حجم: {result.volume_gb} گیگ
 🗓 اعتبار: {result.duration_days} روز
-
-🔗 کانفیگ شما:
-{escape(result.config_link or "-")}
-
-🔗 لینک اشتراک:
-{escape(result.subscription_link or "-")}{wallet_line}"""
+{config_line}{subscription_line}{wallet_line}"""
 
 
 async def _safe_edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None) -> None:

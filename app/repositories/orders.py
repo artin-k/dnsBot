@@ -20,6 +20,7 @@ class OrdersRepository:
                 joinedload(Order.plan),
                 joinedload(Order.payment),
                 joinedload(Order.renewal_service),
+                joinedload(Order.config_inventory_item),
             )
             .where(Order.id == order_id)
         )
@@ -34,6 +35,7 @@ class OrdersRepository:
                 joinedload(Order.plan),
                 joinedload(Order.payment),
                 joinedload(Order.renewal_service),
+                joinedload(Order.config_inventory_item),
             )
             .where(Order.tracking_code == tracking_code, Order.user_id == user_id)
         )
@@ -45,6 +47,7 @@ class OrdersRepository:
                 joinedload(Order.plan),
                 joinedload(Order.payment),
                 joinedload(Order.renewal_service),
+                joinedload(Order.config_inventory_item),
             )
             .where(Order.user_id == user_id)
             .order_by(Order.created_at.desc())
@@ -69,6 +72,7 @@ class OrdersRepository:
         discount_amount: int = 0,
         status: str,
         expires_at,
+        config_inventory_id: int | None = None,
     ) -> Order:
         order = Order(
             user_id=user_id,
@@ -83,6 +87,7 @@ class OrdersRepository:
             discount_amount=discount_amount,
             status=status,
             expires_at=expires_at,
+            config_inventory_id=config_inventory_id,
         )
         self.session.add(order)
         await self.session.flush()

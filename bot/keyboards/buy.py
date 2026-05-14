@@ -31,15 +31,19 @@ class PurchaseDiscountCallback(CallbackData, prefix="buy_disc"):
     plan_id: int
 
 
-def plans_keyboard(plans: list[Plan]) -> InlineKeyboardMarkup:
-    return plans_inline_keyboard(plans)
+def plans_keyboard(plans: list[Plan], inventory_counts: dict[int, int] | None = None) -> InlineKeyboardMarkup:
+    return plans_inline_keyboard(plans, inventory_counts)
 
 
-def plans_inline_keyboard(plans: list[Plan]) -> InlineKeyboardMarkup:
+def plans_inline_keyboard(plans: list[Plan], inventory_counts: dict[int, int] | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for plan in plans:
+        available_count = inventory_counts.get(plan.id) if inventory_counts is not None else None
+        if available_count is not None and available_count <= 0:
+            continue
+        inventory_text = f" | موجودی: {available_count}" if available_count is not None else ""
         builder.button(
-            text=f"{plan.title} | {plan.volume_gb} گیگ | {format_toman(plan.price)} تومان",
+            text=f"{plan.title} | {plan.volume_gb} گیگ | {format_toman(plan.price)} تومان{inventory_text}",
             callback_data=PlanCallback(plan_id=plan.id),
         )
     builder.button(text=texts.BTN_BACK, callback_data=BUY_BACK_TO_MENU)

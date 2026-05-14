@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -15,6 +15,7 @@ class OrderStatus(str, Enum):
     PAID = "paid"
     CREATING_SERVICE = "creating_service"
     COMPLETED = "completed"
+    WAITING_INVENTORY = "waiting_inventory"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -35,6 +36,13 @@ class PaymentStatus(str, Enum):
 class VPNServiceStatus(str, Enum):
     ACTIVE = "active"
     EXPIRED = "expired"
+    DISABLED = "disabled"
+
+
+class ConfigInventoryStatus(str, Enum):
+    AVAILABLE = "available"
+    RESERVED = "reserved"
+    SOLD = "sold"
     DISABLED = "disabled"
 
 
@@ -118,6 +126,10 @@ class User(TimestampMixin, Base):
     payments: Mapped[list[Payment]] = relationship(back_populates="user")
     services: Mapped[list[VPNService]] = relationship(back_populates="user")
     wallet_transactions: Mapped[list[WalletTransaction]] = relationship(back_populates="user")
+    sold_config_inventory_items: Mapped[list[ConfigInventory]] = relationship(
+        back_populates="sold_to_user",
+        foreign_keys="ConfigInventory.sold_to_user_id",
+    )
     affiliate_commissions_earned: Mapped[list[AffiliateCommission]] = relationship(
         back_populates="beneficiary",
         foreign_keys="AffiliateCommission.beneficiary_user_id",
@@ -151,6 +163,7 @@ class Plan(TimestampMixin, Base):
 
     orders: Mapped[list[Order]] = relationship(back_populates="plan")
     services: Mapped[list[VPNService]] = relationship(back_populates="plan")
+    config_inventory_items: Mapped[list[ConfigInventory]] = relationship(back_populates="plan")
 
 
 class Order(TimestampMixin, Base):
@@ -167,6 +180,7 @@ class Order(TimestampMixin, Base):
         server_default=OrderKind.PURCHASE.value,
     )
     service_id: Mapped[int | None] = mapped_column(ForeignKey("vpn_services.id", ondelete="SET NULL"), index=True)
+    config_inventory_id: Mapped[int | None] = mapped_column(ForeignKey("config_inventory.id", ondelete="SET NULL"), index=True)
     tracking_code: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     discount_code: Mapped[str | None] = mapped_column(String(32))
@@ -192,6 +206,9 @@ class Order(TimestampMixin, Base):
     )
     renewal_service: Mapped[VPNService | None] = relationship(
         foreign_keys=[service_id],
+    )
+    config_inventory_item: Mapped[ConfigInventory | None] = relationship(
+        foreign_keys=[config_inventory_id],
     )
 
 
@@ -258,6 +275,10 @@ class VPNService(TimestampMixin, Base):
         nullable=False,
     )
     plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id", ondelete="RESTRICT"), index=True, nullable=False)
+    config_inventory_id: Mapped[int | None] = mapped_column(
+        ForeignKey("config_inventory.id", ondelete="SET NULL"),
+        index=True,
+    )
     username: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     config_link: Mapped[str | None] = mapped_column(Text)
     subscription_link: Mapped[str | None] = mapped_column(Text)
@@ -274,6 +295,47 @@ class VPNService(TimestampMixin, Base):
     user: Mapped[User] = relationship(back_populates="services")
     order: Mapped[Order] = relationship(back_populates="vpn_service", foreign_keys=[order_id])
     plan: Mapped[Plan] = relationship(back_populates="services")
+    config_inventory_item: Mapped[ConfigInventory | None] = relationship(
+        foreign_keys=[config_inventory_id],
+    )
+
+
+class ConfigInventory(TimestampMixin, Base):
+    __tablename__ = "config_inventory"
+    __table_args__ = (
+        CheckConstraint(
+            "(config_link IS NOT NULL AND config_link <> '') OR "
+            "(subscription_link IS NOT NULL AND subscription_link <> '')",
+            name="ck_config_inventory_has_link",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id", ondelete="CASCADE"), index=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255))
+    config_link: Mapped[str | None] = mapped_column(Text)
+    subscription_link: Mapped[str | None] = mapped_column(Text)
+    username: Mapped[str | None] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=ConfigInventoryStatus.AVAILABLE.value,
+        server_default=ConfigInventoryStatus.AVAILABLE.value,
+        index=True,
+    )
+    reserved_by_order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"), index=True)
+    sold_to_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    reserved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sold_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+
+    plan: Mapped[Plan] = relationship(back_populates="config_inventory_items")
+    reserved_order: Mapped[Order | None] = relationship(foreign_keys=[reserved_by_order_id])
+    sold_to_user: Mapped[User | None] = relationship(
+        back_populates="sold_config_inventory_items",
+        foreign_keys=[sold_to_user_id],
+    )
 
 
 class ReferralReward(TimestampMixin, Base):

@@ -7,7 +7,7 @@ from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.models import Order, Payment, WalletTransaction
+from app.models import Order, OrderKind, Payment, WalletTransaction
 from app.repositories.users import UsersRepository
 from app.utils.formatting import format_money, format_order_type_fa
 from bot.keyboards.admin import payment_review_keyboard
@@ -102,6 +102,9 @@ def format_order_payment_admin_caption(order: Order, payment: Payment) -> str:
     if order.renewal_service:
         service_username = order.renewal_service.username
     receipt_status = "رسید دریافت شده" if payment.receipt_file_id else "بدون رسید"
+    inventory_line = ""
+    if order.order_kind == OrderKind.PURCHASE.value:
+        inventory_line = f"\n📦 کانفیگ رزرو شده: {'بله' if order.config_inventory_id else 'خیر'} | شناسه: {order.config_inventory_id or '-'}"
     return f"""🧾 پرداخت جدید در انتظار تایید
 
 👤 کاربر: {escape(user.first_name or "-")}
@@ -113,7 +116,7 @@ def format_order_payment_admin_caption(order: Order, payment: Payment) -> str:
 ⚡ پلن: {escape(order.plan.title if order.plan else "-")}
 💵 مبلغ: {format_money(order.amount)} تومان
 🔐 نام کاربری/سرویس: {escape(service_username)}
-📎 وضعیت رسید: {receipt_status}"""
+📎 وضعیت رسید: {receipt_status}{inventory_line}"""
 
 
 def format_wallet_topup_admin_caption(transaction: WalletTransaction) -> str:

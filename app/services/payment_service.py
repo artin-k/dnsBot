@@ -20,6 +20,11 @@ from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.services import ServicesRepository
 from app.repositories.wallet_transactions import WalletTransactionsRepository
 from app.services.affiliate_service import AffiliateService
+from app.services.inventory_service import (
+    InventoryUnavailableError,
+    mark_config_sold,
+    release_reserved_config,
+)
 from app.services.order_service import OrderService
 from app.services.referral_service import ReferralService
 from app.services.renewal_service import RenewalService
@@ -58,6 +63,8 @@ class ApprovedPaymentResult:
     subscription_link: str | None
     new_expire_at: datetime | None = None
     wallet_balance: int | None = None
+    waiting_inventory: bool = False
+    plan_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +97,7 @@ class PaymentService:
         if self._is_unpaid_order_expired(order, payment):
             order.status = OrderStatus.EXPIRED.value
             payment.status = PaymentStatus.EXPIRED.value
+            await release_reserved_config(self.session, order.id)
             await self.session.commit()
             raise PaymentExpiredError("Order expired")
         if order.order_kind == OrderKind.RENEWAL.value and order.renewal_service is None:
@@ -105,11 +113,12 @@ class PaymentService:
         order.status = OrderStatus.CREATING_SERVICE.value
         result = await self._complete_order(order, now)
 
-        order.status = OrderStatus.COMPLETED.value
-        order.completed_at = now
-        await self._record_discount_usage(order, now)
-        if self.settings is not None:
-            await AffiliateService(self.session, self.settings).create_commissions_for_order(order.id)
+        if not result.waiting_inventory:
+            order.status = OrderStatus.COMPLETED.value
+            order.completed_at = now
+            await self._record_discount_usage(order, now)
+            if self.settings is not None:
+                await AffiliateService(self.session, self.settings).create_commissions_for_order(order.id)
         await self.session.commit()
 
         return result
@@ -125,6 +134,7 @@ class PaymentService:
         payment.verified_at = datetime.now(timezone.utc)
         if payment.order:
             payment.order.status = OrderStatus.FAILED.value
+            await release_reserved_config(self.session, payment.order.id)
             if self.settings is not None:
                 await AffiliateService(self.session, self.settings).reverse_order_commissions(payment.order.id)
         await self.session.commit()
@@ -152,6 +162,7 @@ class PaymentService:
         if OrderService.is_order_expired(order):
             order.status = OrderStatus.EXPIRED.value
             payment.status = PaymentStatus.EXPIRED.value
+            await release_reserved_config(self.session, order.id)
             await self.session.commit()
             raise PaymentExpiredError("Order expired")
         if user.wallet_balance < order.amount:
@@ -184,11 +195,12 @@ class PaymentService:
 
         order.status = OrderStatus.CREATING_SERVICE.value
         result = await self._complete_order(order, now)
-        order.status = OrderStatus.COMPLETED.value
-        order.completed_at = now
-        await self._record_discount_usage(order, now)
-        if self.settings is not None:
-            await AffiliateService(self.session, self.settings).create_commissions_for_order(order.id)
+        if not result.waiting_inventory:
+            order.status = OrderStatus.COMPLETED.value
+            order.completed_at = now
+            await self._record_discount_usage(order, now)
+            if self.settings is not None:
+                await AffiliateService(self.session, self.settings).create_commissions_for_order(order.id)
         await self.session.commit()
 
         return ApprovedPaymentResult(
@@ -210,8 +222,6 @@ class PaymentService:
 
     @staticmethod
     def _is_unpaid_order_expired(order: Order, payment: Payment) -> bool:
-        if payment.receipt_file_id:
-            return False
         return OrderService.is_order_expired(order)
 
     async def _complete_order(self, order: Order, now: datetime) -> ApprovedPaymentResult:
@@ -243,20 +253,45 @@ class PaymentService:
         user = order.user
         username = order.custom_username or f"user{user.telegram_id}"
 
-        provisioned = await self.vpn_panel.provision_user(
-            username=username,
-            volume_gb=plan.volume_gb,
-            duration_days=plan.duration_days,
-        )
+        try:
+            inventory_item = await mark_config_sold(self.session, order.id, user.id)
+            config_link = inventory_item.config_link
+            subscription_link = inventory_item.subscription_link
+            username = order.custom_username or inventory_item.username or username
+            config_inventory_id = inventory_item.id
+        except InventoryUnavailableError:
+            if not (self.settings and self.settings.allow_placeholder_configs):
+                order.status = OrderStatus.WAITING_INVENTORY.value
+                return ApprovedPaymentResult(
+                    user_telegram_id=user.telegram_id,
+                    order_kind=OrderKind.PURCHASE.value,
+                    service_username=username,
+                    plan_title=plan.title,
+                    volume_gb=plan.volume_gb,
+                    duration_days=plan.duration_days,
+                    config_link=None,
+                    subscription_link=None,
+                    waiting_inventory=True,
+                    plan_id=plan.id,
+                )
+            provisioned = await self.vpn_panel.provision_user(
+                username=username,
+                volume_gb=plan.volume_gb,
+                duration_days=plan.duration_days,
+            )
+            config_link = provisioned.config_link
+            subscription_link = provisioned.subscription_link
+            config_inventory_id = None
 
         services = ServicesRepository(self.session)
         await services.create(
             user_id=user.id,
             order_id=order.id,
             plan_id=plan.id,
+            config_inventory_id=config_inventory_id,
             username=username,
-            config_link=provisioned.config_link,
-            subscription_link=provisioned.subscription_link,
+            config_link=config_link,
+            subscription_link=subscription_link,
             volume_gb=plan.volume_gb,
             duration_days=plan.duration_days,
             expire_at=now + timedelta(days=plan.duration_days),
@@ -277,8 +312,9 @@ class PaymentService:
             plan_title=plan.title,
             volume_gb=plan.volume_gb,
             duration_days=plan.duration_days,
-            config_link=provisioned.config_link,
-            subscription_link=provisioned.subscription_link,
+            config_link=config_link,
+            subscription_link=subscription_link,
+            plan_id=plan.id,
         )
 
     async def _complete_renewal(self, order: Order, now: datetime) -> ApprovedPaymentResult:
@@ -304,4 +340,5 @@ class PaymentService:
             config_link=service.config_link,
             subscription_link=service.subscription_link,
             new_expire_at=new_expire_at,
+            plan_id=plan.id,
         )

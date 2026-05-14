@@ -15,8 +15,10 @@ from app.repositories.plans import PlansRepository
 from app.repositories.services import ServicesRepository
 from app.repositories.test_accounts import TestAccountsRepository
 from app.repositories.users import UsersRepository
+from app.repositories.config_inventory import ConfigInventoryRepository
 from app.services.order_service import OrderService
 from app.services.affiliate_service import AffiliateService
+from app.services.inventory_service import release_expired_reservations
 from app.services.settings_service import AppSettingsService
 from app.utils.codes import generate_discount_code
 from app.utils.formatting import (
@@ -82,11 +84,25 @@ async def show_account_dashboard(message: Message, session: AsyncSession) -> Non
 
 
 async def show_buy_plans(message: Message, session: AsyncSession) -> None:
+    released = await release_expired_reservations(session)
+    if released:
+        await session.commit()
     plans = await PlansRepository(session).list_active()
     if not plans:
         await message.answer("در حال حاضر پلن فعالی برای خرید وجود ندارد.", reply_markup=main_menu_keyboard())
         return
-    await message.answer(texts.BUY_PLANS_TEXT, reply_markup=plans_keyboard(plans))
+    counts = await ConfigInventoryRepository(session).available_counts_for_plans([plan.id for plan in plans])
+    if all(counts.get(plan.id, 0) <= 0 for plan in plans):
+        await message.answer(
+            "در حال حاضر موجودی سرویس‌ها به پایان رسیده است.\nلطفاً بعداً مراجعه کنید یا با پشتیبانی در ارتباط باشید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    unavailable_lines = [f"❌ {plan.title} | ناموجود" for plan in plans if counts.get(plan.id, 0) <= 0]
+    text = texts.BUY_PLANS_TEXT
+    if unavailable_lines:
+        text += "\n\n" + "\n".join(unavailable_lines)
+    await message.answer(text, reply_markup=plans_keyboard(plans, counts))
 
 
 async def show_renewal_services(message: Message, session: AsyncSession) -> None:
@@ -147,6 +163,9 @@ async def show_tariffs(message: Message, session: AsyncSession) -> None:
 
 
 async def show_order_tracking(message: Message, session: AsyncSession, settings: Settings) -> None:
+    released = await release_expired_reservations(session)
+    if released:
+        await session.commit()
     user = await _get_current_user(message, session)
     if user is None:
         await message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())

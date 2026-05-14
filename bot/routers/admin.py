@@ -17,6 +17,8 @@ from app.models import (
     AffiliateBeneficiaryType,
     AffiliateCommission,
     AffiliateCommissionStatus,
+    ConfigInventory,
+    ConfigInventoryStatus,
     Order,
     OrderKind,
     Payment,
@@ -25,6 +27,7 @@ from app.models import (
     WalletTransactionStatus,
     WalletTransactionType,
 )
+from app.repositories.config_inventory import ConfigInventoryRepository
 from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.orders import OrdersRepository
 from app.repositories.payments import PaymentsRepository
@@ -35,6 +38,14 @@ from app.repositories.users import UsersRepository
 from app.repositories.wallet_transactions import WalletTransactionsRepository
 from app.services.order_status import order_kind_label
 from app.services.affiliate_service import AffiliateService
+from app.services.inventory_service import (
+    ConfigInventoryValidationError,
+    get_available_count,
+    normalize_inventory_link,
+    notify_admins_empty_inventory_attempt,
+    notify_admins_low_or_empty_inventory,
+    release_expired_reservations,
+)
 from app.services.payment_service import (
     ApprovedPaymentResult,
     PaymentAlreadyProcessedError,
@@ -72,6 +83,7 @@ from bot import texts
 from bot.keyboards.admin import (
     AdminActionCallback,
     AdminAffiliateCallback,
+    AdminInventoryCallback,
     AdminPaymentCallback,
     AdminPlanCallback,
     AdminServiceCallback,
@@ -97,6 +109,12 @@ from bot.keyboards.admin import (
     attach_orphans_confirm_keyboard,
     bot_settings_keyboard,
     broadcast_confirm_keyboard,
+    inventory_detail_keyboard,
+    inventory_list_keyboard,
+    inventory_main_keyboard,
+    inventory_plan_select_keyboard,
+    inventory_search_results_keyboard,
+    inventory_status_filter_keyboard,
     pending_payments_keyboard,
     plan_delete_confirm_keyboard,
     plan_detail_keyboard,
@@ -118,6 +136,10 @@ from bot.states.admin import (
     AdminBroadcastStates,
     AdminEditPlanStates,
     AdminEditTestAccountStates,
+    AdminInventoryAddStates,
+    AdminInventoryBulkStates,
+    AdminInventoryEditStates,
+    AdminInventorySearchStates,
     AdminSearchStates,
     AdminServiceEditStates,
     AdminSettingsStates,
@@ -219,6 +241,11 @@ async def admin_action(
     if action == "plans":
         await state.clear()
         await _show_plans(callback, session)
+        return
+
+    if action == "inventory":
+        await state.clear()
+        await _show_inventory_main(callback)
         return
 
     if action == "test_accounts":
@@ -353,6 +380,119 @@ async def admin_setting_action(
         return
 
     await _safe_edit_or_answer(callback, "عملیات نامعتبر است.", reply_markup=bot_settings_keyboard())
+
+
+@router.callback_query(AdminInventoryCallback.filter())
+async def admin_inventory_action(
+    callback: CallbackQuery,
+    callback_data: AdminInventoryCallback,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    if not await _is_admin(callback.from_user.id if callback.from_user else None, session, settings):
+        await callback.answer("⛔ شما دسترسی مدیریت ندارید.", show_alert=True)
+        return
+
+    await callback.answer()
+    action = callback_data.action
+
+    if action == "summary":
+        await state.clear()
+        await _show_inventory_summary(callback, session)
+        return
+    if action == "low":
+        await state.clear()
+        await _show_low_inventory(callback, session, settings)
+        return
+    if action == "add_plan":
+        await state.clear()
+        await _show_inventory_plan_select(callback, session, "add")
+        return
+    if action == "bulk_plan":
+        await state.clear()
+        await _show_inventory_plan_select(callback, session, "bulk")
+        return
+    if action == "list_plan":
+        await state.clear()
+        await _show_inventory_plan_select(callback, session, "list_status")
+        return
+    if action == "add":
+        await state.clear()
+        await state.set_state(AdminInventoryAddStates.config_link)
+        await state.update_data(plan_id=callback_data.plan_id)
+        if callback.message:
+            await callback.message.answer("لینک کانفیگ را ارسال کنید:")
+        return
+    if action == "bulk":
+        await state.clear()
+        await state.set_state(AdminInventoryBulkStates.text)
+        await state.update_data(plan_id=callback_data.plan_id)
+        if callback.message:
+            await callback.message.answer(
+                """لطفاً کانفیگ‌ها را ارسال کنید.
+هر کانفیگ در یک خط باشد.
+اگر لینک اشتراک هم دارید، هر خط را به این شکل ارسال کنید:
+config_link | subscription_link"""
+            )
+        return
+    if action == "list_status":
+        await state.clear()
+        await _safe_edit_or_answer(callback, "وضعیت مورد نظر را انتخاب کنید:", reply_markup=inventory_status_filter_keyboard(callback_data.plan_id))
+        return
+    if action == "list":
+        await state.clear()
+        await _show_inventory_list(callback, session, plan_id=callback_data.plan_id or None, status=callback_data.status, page=callback_data.page)
+        return
+    if action == "detail":
+        await state.clear()
+        await _show_inventory_detail(callback, session, callback_data.item_id)
+        return
+    if action == "search":
+        await state.clear()
+        await state.set_state(AdminInventorySearchStates.query)
+        if callback.message:
+            await callback.message.answer("شناسه، لینک، عنوان، نام کاربری یا یادداشت کانفیگ را ارسال کنید:")
+        return
+
+    item = await ConfigInventoryRepository(session).get(callback_data.item_id)
+    if item is None:
+        await _safe_edit_or_answer(callback, "کانفیگ پیدا نشد.", reply_markup=inventory_main_keyboard())
+        return
+
+    if action == "disable":
+        if item.status == ConfigInventoryStatus.AVAILABLE.value:
+            item.status = ConfigInventoryStatus.DISABLED.value
+            await session.commit()
+        await _show_inventory_detail(callback, session, item.id)
+        return
+    if action == "enable":
+        if item.status == ConfigInventoryStatus.DISABLED.value:
+            item.status = ConfigInventoryStatus.AVAILABLE.value
+            await session.commit()
+        await _show_inventory_detail(callback, session, item.id)
+        return
+    if action == "delete":
+        if item.status not in {ConfigInventoryStatus.AVAILABLE.value, ConfigInventoryStatus.DISABLED.value}:
+            await callback.answer("کانفیگ فروخته‌شده یا رزروشده قابل حذف نیست.", show_alert=True)
+            return
+        await session.delete(item)
+        await session.commit()
+        await _safe_edit_or_answer(callback, "✅ کانفیگ حذف شد.", reply_markup=inventory_main_keyboard())
+        return
+    if action in {"edit_config", "edit_sub", "edit_note"}:
+        await state.set_state(AdminInventoryEditStates.value)
+        await state.update_data(item_id=item.id, field=action)
+        prompts = {
+            "edit_config": "لینک کانفیگ جدید را ارسال کنید:",
+            "edit_sub": "لینک اشتراک جدید را ارسال کنید یا برای خالی بودن - بفرستید:",
+            "edit_note": "یادداشت جدید را ارسال کنید یا برای خالی بودن - بفرستید:",
+        }
+        if callback.message:
+            await callback.message.answer(prompts[action])
+        return
+
+    await _safe_edit_or_answer(callback, "عملیات نامعتبر است.", reply_markup=inventory_main_keyboard())
 
 
 @router.callback_query(AdminAffiliateCallback.filter())
@@ -540,7 +680,14 @@ async def admin_payment_action(
                 chat_id=result.user_telegram_id,
                 text=_approved_message(result),
             )
-            await callback.answer("پرداخت تایید شد.")
+            if result.waiting_inventory:
+                await callback.answer("❌ موجودی کانفیگ برای این تعرفه تمام شده است. ابتدا موجودی را شارژ کنید.", show_alert=True)
+                if result.plan_id:
+                    await notify_admins_low_or_empty_inventory(callback.bot, session, result.plan_id)
+            else:
+                await callback.answer("پرداخت تایید شد.")
+                if result.plan_id:
+                    await notify_admins_low_or_empty_inventory(callback.bot, session, result.plan_id)
             await _remove_admin_buttons(callback)
         elif callback_data.action == "reject":
             result = await payment_service.reject_payment(callback_data.payment_id)
@@ -1194,6 +1341,148 @@ async def admin_setting_value(message: Message, state: FSMContext, session: Asyn
     await _send_settings(message, session)
 
 
+@router.message(AdminInventoryAddStates.config_link)
+async def inventory_add_config_link(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
+    if not await _guard_admin_message(message, state, session, settings):
+        return
+    try:
+        config_link = normalize_inventory_link(message.text, required=True)
+    except ConfigInventoryValidationError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(config_link=config_link)
+    await state.set_state(AdminInventoryAddStates.subscription_link)
+    await message.answer("لینک اشتراک را ارسال کنید یا برای خالی بودن - بفرستید:")
+
+
+@router.message(AdminInventoryAddStates.subscription_link)
+async def inventory_add_subscription_link(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
+    if not await _guard_admin_message(message, state, session, settings):
+        return
+    try:
+        subscription_link = normalize_inventory_link(message.text, required=False)
+    except ConfigInventoryValidationError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(subscription_link=subscription_link)
+    await state.set_state(AdminInventoryAddStates.note)
+    await message.answer("عنوان یا یادداشت این کانفیگ را ارسال کنید یا - بفرستید:")
+
+
+@router.message(AdminInventoryAddStates.note)
+async def inventory_add_note(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
+    if not await _guard_admin_message(message, state, session, settings):
+        return
+    data = await state.get_data()
+    plan_id = int(data.get("plan_id") or 0)
+    plan = await PlansRepository(session).get(plan_id)
+    if plan is None:
+        await state.clear()
+        await message.answer("تعرفه پیدا نشد.", reply_markup=inventory_main_keyboard())
+        return
+    note = (message.text or "").strip()
+    note = None if note == "-" else note
+    item = await ConfigInventoryRepository(session).create(
+        plan_id=plan.id,
+        config_link=str(data.get("config_link") or ""),
+        subscription_link=data.get("subscription_link"),
+        title=note,
+        note=note,
+    )
+    await session.commit()
+    await state.clear()
+    await message.answer(f"✅ کانفیگ #{item.id} برای تعرفه {escape(plan.title)} ذخیره شد.", reply_markup=inventory_main_keyboard())
+
+
+@router.message(AdminInventoryBulkStates.text)
+async def inventory_bulk_text(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
+    if not await _guard_admin_message(message, state, session, settings):
+        return
+    data = await state.get_data()
+    plan_id = int(data.get("plan_id") or 0)
+    plan = await PlansRepository(session).get(plan_id)
+    if plan is None:
+        await state.clear()
+        await message.answer("تعرفه پیدا نشد.", reply_markup=inventory_main_keyboard())
+        return
+    created = 0
+    failed = 0
+    for line in (message.text or "").splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        config_part, separator, subscription_part = raw.partition("|")
+        try:
+            config_link = normalize_inventory_link(config_part, required=True)
+            subscription_link = normalize_inventory_link(subscription_part, required=False) if separator else None
+        except ConfigInventoryValidationError:
+            failed += 1
+            continue
+        await ConfigInventoryRepository(session).create(
+            plan_id=plan.id,
+            config_link=config_link,
+            subscription_link=subscription_link,
+        )
+        created += 1
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        f"✅ {created} کانفیگ با موفقیت اضافه شد.\n❌ {failed} خط نامعتبر بود.",
+        reply_markup=inventory_main_keyboard(),
+    )
+
+
+@router.message(AdminInventorySearchStates.query)
+async def inventory_search_query(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
+    if not await _guard_admin_message(message, state, session, settings):
+        return
+    items = await ConfigInventoryRepository(session).search(message.text or "")
+    await state.clear()
+    if not items:
+        await message.answer("کانفیگی با این مشخصات پیدا نشد.", reply_markup=inventory_main_keyboard())
+        return
+    lines = ["نتایج جستجوی کانفیگ‌ها:"]
+    for item in items:
+        lines.append(_format_inventory_list_item(item))
+    await message.answer("\n".join(lines), reply_markup=inventory_search_results_keyboard(items))
+
+
+@router.message(AdminInventoryEditStates.value)
+async def inventory_edit_value(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
+    if not await _guard_admin_message(message, state, session, settings):
+        return
+    data = await state.get_data()
+    item = await ConfigInventoryRepository(session).get(int(data.get("item_id") or 0))
+    if item is None:
+        await state.clear()
+        await message.answer("کانفیگ پیدا نشد.", reply_markup=inventory_main_keyboard())
+        return
+    field = data.get("field")
+    try:
+        if field == "edit_config":
+            item.config_link = normalize_inventory_link(message.text, required=True)
+        elif field == "edit_sub":
+            item.subscription_link = normalize_inventory_link(message.text, required=False)
+        elif field == "edit_note":
+            text = (message.text or "").strip()
+            item.note = None if text == "-" else text
+            item.title = item.note
+    except ConfigInventoryValidationError as exc:
+        await message.answer(str(exc))
+        return
+    if not item.config_link and not item.subscription_link:
+        await message.answer("حداقل یکی از لینک کانفیگ یا لینک اشتراک باید ثبت شود.")
+        return
+    await session.commit()
+    await state.clear()
+    refreshed = await ConfigInventoryRepository(session).get_with_details(item.id)
+    await message.answer("✅ کانفیگ به‌روزرسانی شد.")
+    await message.answer(
+        _format_inventory_detail(refreshed or item),
+        reply_markup=inventory_detail_keyboard(refreshed or item),
+    )
+
+
 @router.message(AdminBroadcastStates.text)
 async def admin_broadcast_text(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
     if not await _guard_admin_message(message, state, session, settings):
@@ -1302,6 +1591,122 @@ async def _send_broadcast(callback: CallbackQuery, state: FSMContext, session: A
     await state.clear()
     if callback.message:
         await callback.message.answer(f"📢 ارسال پیام همگانی تمام شد.\n✅ موفق: {success}\n❌ ناموفق: {failed}")
+
+
+async def _show_inventory_main(callback: CallbackQuery) -> None:
+    await _safe_edit_or_answer(
+        callback,
+        """📦 مدیریت موجودی کانفیگ‌ها
+
+از این بخش می‌توانید کانفیگ‌های آماده هر تعرفه را مدیریت کنید.""",
+        reply_markup=inventory_main_keyboard(),
+    )
+
+
+async def _show_inventory_plan_select(callback: CallbackQuery, session: AsyncSession, action: str) -> None:
+    plans = await PlansRepository(session).list_all()
+    if not plans:
+        await _safe_edit_or_answer(callback, "ابتدا یک تعرفه بسازید.", reply_markup=inventory_main_keyboard())
+        return
+    await _safe_edit_or_answer(callback, "تعرفه مورد نظر را انتخاب کنید:", reply_markup=inventory_plan_select_keyboard(plans, action))
+
+
+async def _show_inventory_summary(callback: CallbackQuery, session: AsyncSession) -> None:
+    plans = await PlansRepository(session).list_all()
+    counts = await ConfigInventoryRepository(session).counts_by_plan()
+    if not plans:
+        await _safe_edit_or_answer(callback, "هنوز تعرفه‌ای ثبت نشده است.", reply_markup=inventory_main_keyboard())
+        return
+    lines = ["📊 خلاصه موجودی کانفیگ‌ها"]
+    for plan in plans:
+        plan_counts = counts.get(plan.id, {})
+        lines.append(
+            f"""
+⚡ {escape(plan.title)}
+🟢 آماده فروش: {plan_counts.get(ConfigInventoryStatus.AVAILABLE.value, 0)}
+🟡 رزرو شده: {plan_counts.get(ConfigInventoryStatus.RESERVED.value, 0)}
+🔴 فروخته شده: {plan_counts.get(ConfigInventoryStatus.SOLD.value, 0)}
+⚫ غیرفعال: {plan_counts.get(ConfigInventoryStatus.DISABLED.value, 0)}"""
+        )
+    await _safe_edit_or_answer(callback, "\n".join(lines), reply_markup=inventory_main_keyboard())
+
+
+async def _show_low_inventory(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+    plans = await ConfigInventoryRepository(session).plan_ids_low_or_empty(settings.config_low_stock_threshold)
+    if not plans:
+        await _safe_edit_or_answer(callback, "تعرفه کم‌موجودی وجود ندارد.", reply_markup=inventory_main_keyboard())
+        return
+    counts = await ConfigInventoryRepository(session).available_counts_for_plans([plan.id for plan in plans])
+    lines = [f"⚠️ تعرفه‌های کم‌موجودی\nآستانه هشدار: {settings.config_low_stock_threshold}"]
+    for plan in plans:
+        lines.append(f"⚡ {escape(plan.title)} | موجودی: {counts.get(plan.id, 0)}")
+    await _safe_edit_or_answer(callback, "\n".join(lines), reply_markup=inventory_main_keyboard())
+
+
+async def _show_inventory_list(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    *,
+    plan_id: int | None,
+    status: str,
+    page: int,
+) -> None:
+    items, has_next = await ConfigInventoryRepository(session).list_items(plan_id=plan_id, status=status, page=page)
+    if not items:
+        await _safe_edit_or_answer(callback, "کانفیگی با این فیلتر پیدا نشد.", reply_markup=inventory_main_keyboard())
+        return
+    lines = [f"📋 لیست کانفیگ‌ها | صفحه {max(page, 0) + 1}"]
+    for item in items:
+        lines.append(_format_inventory_list_item(item))
+    await _safe_edit_or_answer(
+        callback,
+        "\n".join(lines),
+        reply_markup=inventory_list_keyboard(items, plan_id=plan_id or 0, status=status, page=max(page, 0), has_next=has_next),
+    )
+
+
+async def _show_inventory_detail(callback: CallbackQuery, session: AsyncSession, item_id: int) -> None:
+    item = await ConfigInventoryRepository(session).get_with_details(item_id)
+    if item is None:
+        await _safe_edit_or_answer(callback, "کانفیگ پیدا نشد.", reply_markup=inventory_main_keyboard())
+        return
+    await _safe_edit_or_answer(callback, _format_inventory_detail(item), reply_markup=inventory_detail_keyboard(item))
+
+
+def _format_inventory_list_item(item: ConfigInventory) -> str:
+    preview = _short_preview(item.config_link or item.subscription_link or "-")
+    sold_to = f" | کاربر: {item.sold_to_user.telegram_id}" if item.sold_to_user else ""
+    reserved = f" | سفارش: {item.reserved_by_order_id}" if item.reserved_by_order_id else ""
+    return f"""
+#{item.id} | {escape(item.status)}
+⚡ پلن: {escape(item.plan.title if item.plan else "-")}
+🔗 {escape(preview)}
+🗓 {format_datetime(item.created_at)}{sold_to}{reserved}"""
+
+
+def _format_inventory_detail(item: ConfigInventory) -> str:
+    return f"""📦 جزئیات کانفیگ
+
+🆔 شناسه: {item.id}
+⚡ تعرفه: {escape(item.plan.title if item.plan else "-")}
+📌 وضعیت: {escape(item.status)}
+👤 نام کاربری موجودی: {escape(item.username or "-")}
+🛒 سفارش رزرو: {item.reserved_by_order_id or "-"}
+👤 کاربر خریدار: {item.sold_to_user_id or "-"}
+🗓 زمان فروش: {format_datetime(item.sold_at)}
+📝 یادداشت: {escape(item.note or "-")}
+
+🔗 کانفیگ:
+{escape(item.config_link or "-")}
+
+🔗 لینک اشتراک:
+{escape(item.subscription_link or "-")}"""
+
+
+def _short_preview(value: str, limit: int = 60) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."
 
 
 async def _show_affiliate_management(callback: CallbackQuery) -> None:
@@ -1596,6 +2001,9 @@ async def _show_wallet_transactions(callback: CallbackQuery, session: AsyncSessi
 
 
 async def _show_pending_payments(callback: CallbackQuery, session: AsyncSession) -> None:
+    released = await release_expired_reservations(session)
+    if released:
+        await session.commit()
     payments = await PaymentsRepository(session).list_pending_review()
     if not payments:
         text = "پرداختی در انتظار تایید نیست."
@@ -1607,6 +2015,11 @@ async def _show_pending_payments(callback: CallbackQuery, session: AsyncSession)
             telegram_username = f"@{payment.user.telegram_username}" if payment.user.telegram_username else "-"
             service_username = order.custom_username if order else "-"
             receipt_status = "رسید دریافت شده" if payment.receipt_file_id else "بدون رسید"
+            inventory_line = "📦 موجودی: -"
+            if order and order.order_kind == OrderKind.PURCHASE.value:
+                available_count = await get_available_count(session, order.plan_id)
+                reserved = "بله" if order.config_inventory_id else "خیر"
+                inventory_line = f"📦 کانفیگ رزرو شده: {reserved} | شناسه: {order.config_inventory_id or '-'} | موجودی پلن: {available_count}"
             lines.append(
                 f"""
 🛒 کد پیگیری: {order.tracking_code if order else "-"}
@@ -1617,7 +2030,8 @@ async def _show_pending_payments(callback: CallbackQuery, session: AsyncSession)
 ⚡ پلن: {escape(order.plan.title if order and order.plan else "-")}
 🔐 سرویس/نام کاربری: {escape(service_username or "-")}
 💵 مبلغ: {format_money(payment.amount)} تومان
-📎 وضعیت رسید: {receipt_status}"""
+📎 وضعیت رسید: {receipt_status}
+{inventory_line}"""
             )
         text = "\n".join(lines)
 
@@ -2092,6 +2506,8 @@ def _format_service_detail(service) -> str:
 
 
 def _approved_message(result: ApprovedPaymentResult) -> str:
+    if result.waiting_inventory:
+        return "پرداخت شما تایید شد، اما موجودی سرویس انتخاب‌شده به پایان رسیده است. پشتیبانی به‌زودی سرویس شما را ارسال می‌کند."
     if result.order_kind == OrderKind.RENEWAL.value:
         expire_at = _format_datetime(result.new_expire_at)
         return f"""✅ تمدید سرویس شما با موفقیت انجام شد
@@ -2102,6 +2518,8 @@ def _approved_message(result: ApprovedPaymentResult) -> str:
 🗓 اعتبار افزوده: {result.duration_days} روز
 📅 تاریخ انقضای جدید: {expire_at}"""
 
+    config_line = f"\n🔗 کانفیگ شما:\n{escape(result.config_link)}" if result.config_link else ""
+    subscription_line = f"\n\n🔗 لینک اشتراک:\n{escape(result.subscription_link)}" if result.subscription_link else ""
     return f"""✅ پرداخت شما تایید شد
 
 ✅ سرویس شما با موفقیت ساخته شد
@@ -2109,13 +2527,7 @@ def _approved_message(result: ApprovedPaymentResult) -> str:
 👤 نام کاربری: {escape(result.service_username)}
 ⚡ پلن: {escape(result.plan_title)}
 📦 حجم: {result.volume_gb} گیگ
-🗓 اعتبار: {result.duration_days} روز
-
-🔗 کانفیگ شما:
-{escape(result.config_link or "-")}
-
-🔗 لینک اشتراک:
-{escape(result.subscription_link or "-")}"""
+🗓 اعتبار: {result.duration_days} روز{config_line}{subscription_line}"""
 
 
 def _format_datetime(value: datetime | None) -> str:

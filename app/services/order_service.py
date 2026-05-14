@@ -6,6 +6,7 @@ from app.config import Settings
 from app.models import Order, OrderKind, OrderStatus, PaymentStatus, Plan, User
 from app.repositories.orders import OrdersRepository
 from app.repositories.payments import PaymentsRepository
+from app.services.inventory_service import InventoryUnavailableError, reserve_config_for_order
 from app.services.settings_service import AppSettingsService
 from app.utils.tracking import generate_tracking_code
 
@@ -54,6 +55,13 @@ class OrderService:
             user_id=user.id,
             amount=final_amount,
         )
+        if order_kind == OrderKind.PURCHASE.value:
+            inventory_item = await reserve_config_for_order(self.session, plan.id, order.id)
+            if inventory_item is None:
+                order.status = OrderStatus.FAILED.value
+                payment.status = PaymentStatus.EXPIRED.value
+                await self.session.commit()
+                raise InventoryUnavailableError("No config inventory available")
         await self.session.commit()
         return order, payment
 
@@ -62,11 +70,12 @@ class OrderService:
             return False
         if order.status != OrderStatus.PENDING_PAYMENT.value:
             return False
-        if order.payment and order.payment.receipt_file_id:
-            return False
         order.status = OrderStatus.EXPIRED.value
-        if order.payment and order.payment.status == PaymentStatus.PENDING.value and not order.payment.receipt_file_id:
+        if order.payment and order.payment.status == PaymentStatus.PENDING.value:
             order.payment.status = PaymentStatus.EXPIRED.value
+        from app.services.inventory_service import release_reserved_config
+
+        await release_reserved_config(self.session, order.id)
         await self.session.commit()
         return True
 
