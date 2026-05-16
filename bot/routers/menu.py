@@ -154,7 +154,7 @@ async def main_menu_callback(
     elif action == MENU_FEATURES_CALLBACK:
         await menu_actions.show_features_menu(callback.message)
     elif action == MENU_ACCOUNT_CALLBACK:
-        await menu_actions.show_account_dashboard(callback.message, session)
+        await menu_actions.show_account_dashboard(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_BUY_CALLBACK:
         await menu_actions.show_buy_plans(callback.message, session)
     elif action == MENU_RENEW_CALLBACK:
@@ -162,18 +162,18 @@ async def main_menu_callback(
     elif action == MENU_TARIFFS_CALLBACK:
         await menu_actions.show_tariffs(callback.message, session)
     elif action in {MENU_TRACK_CALLBACK, MENU_ORDERS_CALLBACK}:
-        await menu_actions.show_order_tracking(callback.message, session, settings)
+        await menu_actions.show_order_tracking(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_REFERRAL_CALLBACK:
         await state.clear()
         await menu_actions.show_referral(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_TUTORIALS_CALLBACK:
         await menu_actions.show_tutorials(callback.message)
     elif action == MENU_WALLET_CALLBACK:
-        await menu_actions.show_wallet(callback.message, session, state)
+        await menu_actions.show_wallet(callback.message, session, state, settings, telegram_user=callback.from_user)
     elif action == MENU_TEST_CALLBACK:
-        await menu_actions.show_test_account(callback.message, session)
+        await menu_actions.show_test_account(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_DICE_CALLBACK:
-        await menu_actions.show_lucky_wheel(callback.message, session, settings)
+        await menu_actions.show_lucky_wheel(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_VERIFY_PHONE_CALLBACK:
         await state.clear()
         await state.set_state(VerificationStates.waiting_contact)

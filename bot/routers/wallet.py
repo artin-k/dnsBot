@@ -44,9 +44,9 @@ router = Router(name="wallet")
 
 
 @router.message(F.text == texts.BTN_WALLET)
-async def wallet(message: Message, state: FSMContext, session: AsyncSession) -> None:
+async def wallet(message: Message, state: FSMContext, session: AsyncSession, settings: Settings) -> None:
     await state.clear()
-    await menu_actions.show_wallet(message, session, state)
+    await menu_actions.show_wallet(message, session, state, settings)
 
 
 @router.callback_query(WalletCallback.filter())
@@ -64,8 +64,7 @@ async def wallet_callback(
     action = callback_data.action
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
     if user is None:
-        await callback.message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())
-        return
+        user = await menu_actions._get_or_create_user_from_telegram_user(callback.from_user, session, settings)
 
     if action == "back":
         await state.clear()
@@ -219,7 +218,7 @@ async def receive_topup_amount(
         return
     if not user.is_phone_verified:
         await state.clear()
-        await menu_actions.show_wallet(message, session, state)
+        await menu_actions.show_wallet(message, session, state, settings)
         return
 
     payment, transaction = await WalletService(session).create_topup_request(user_id=user.id, amount=amount)
@@ -312,7 +311,7 @@ async def receive_withdraw_amount(
         return
     if not user.is_phone_verified:
         await state.clear()
-        await menu_actions.show_wallet(message, session, state)
+        await menu_actions.show_wallet(message, session, state, settings)
         return
 
     amount = _parse_positive_int(message.text)

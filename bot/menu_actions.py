@@ -46,8 +46,9 @@ async def show_main_menu(
     message: Message,
     session: AsyncSession | None = None,
     settings: Settings | None = None,
+    telegram_user: TelegramUser | None = None,
 ) -> None:
-    user = await _get_current_user(message, session) if session is not None else None
+    user = await _get_current_or_create_user(message, session, settings, telegram_user) if session is not None else None
     await message.answer(
         texts.MAIN_MENU_TEXT,
         reply_markup=main_menu_keyboard(is_admin=bool(settings and is_user_admin(user, settings))),
@@ -68,10 +69,15 @@ async def show_features_menu(message: Message) -> None:
     )
 
 
-async def show_account_dashboard(message: Message, session: AsyncSession) -> None:
-    user = await _get_current_user(message, session)
+async def show_account_dashboard(
+    message: Message,
+    session: AsyncSession,
+    settings: Settings | None = None,
+    telegram_user: TelegramUser | None = None,
+) -> None:
+    user = await _get_current_or_create_user(message, session, settings, telegram_user)
     if user is None:
-        await message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())
+        await message.answer("امکان شناسایی حساب تلگرام شما وجود ندارد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
         return
 
     direct_referrals = await UsersRepository(session).count_referrals(user.id)
@@ -124,10 +130,15 @@ async def show_renewal_disabled(message: Message, session: AsyncSession | None =
         reply_markup=buy_renew_menu_keyboard(),
     )
 
-async def show_my_services(message: Message, session: AsyncSession) -> None:
-    user = await _get_current_user(message, session)
+async def show_my_services(
+    message: Message,
+    session: AsyncSession,
+    settings: Settings | None = None,
+    telegram_user: TelegramUser | None = None,
+) -> None:
+    user = await _get_current_or_create_user(message, session, settings, telegram_user)
     if user is None:
-        await message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())
+        await message.answer("امکان شناسایی حساب تلگرام شما وجود ندارد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
         return
 
     services = await ServicesRepository(session).list_by_user(user.id)
@@ -164,13 +175,18 @@ async def show_tariffs(message: Message, session: AsyncSession) -> None:
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
 
 
-async def show_order_tracking(message: Message, session: AsyncSession, settings: Settings) -> None:
+async def show_order_tracking(
+    message: Message,
+    session: AsyncSession,
+    settings: Settings,
+    telegram_user: TelegramUser | None = None,
+) -> None:
     released = await release_expired_reservations(session)
     if released:
         await session.commit()
-    user = await _get_current_user(message, session)
+    user = await _get_current_or_create_user(message, session, settings, telegram_user)
     if user is None:
-        await message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())
+        await message.answer("امکان شناسایی حساب تلگرام شما وجود ندارد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
         return
 
     orders = await OrdersRepository(session).list_by_user(user.id)
@@ -261,10 +277,16 @@ async def show_support(message: Message, session: AsyncSession) -> None:
     )
 
 
-async def show_wallet(message: Message, session: AsyncSession, state: FSMContext | None = None) -> None:
-    user = await _get_current_user(message, session)
+async def show_wallet(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext | None = None,
+    settings: Settings | None = None,
+    telegram_user: TelegramUser | None = None,
+) -> None:
+    user = await _get_current_or_create_user(message, session, settings, telegram_user)
     if user is None:
-        await message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())
+        await message.answer("امکان شناسایی حساب تلگرام شما وجود ندارد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
         return
     if not user.is_phone_verified:
         if state is not None:
@@ -289,10 +311,15 @@ async def show_wallet(message: Message, session: AsyncSession, state: FSMContext
     )
 
 
-async def show_test_account(message: Message, session: AsyncSession) -> None:
-    user = await _get_current_user(message, session)
+async def show_test_account(
+    message: Message,
+    session: AsyncSession,
+    settings: Settings | None = None,
+    telegram_user: TelegramUser | None = None,
+) -> None:
+    user = await _get_current_or_create_user(message, session, settings, telegram_user)
     if user is None:
-        await message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())
+        await message.answer("امکان شناسایی حساب تلگرام شما وجود ندارد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
         return
 
     repo = TestAccountsRepository(session)
@@ -331,10 +358,15 @@ async def show_test_account(message: Message, session: AsyncSession) -> None:
     await message.answer(text, reply_markup=main_menu_keyboard())
 
 
-async def show_lucky_wheel(message: Message, session: AsyncSession, settings: Settings) -> None:
-    user = await _get_current_user(message, session)
+async def show_lucky_wheel(
+    message: Message,
+    session: AsyncSession,
+    settings: Settings,
+    telegram_user: TelegramUser | None = None,
+) -> None:
+    user = await _get_current_or_create_user(message, session, settings, telegram_user)
     if user is None:
-        await message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())
+        await message.answer("امکان شناسایی حساب تلگرام شما وجود ندارد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
         return
 
     now = datetime.now(timezone.utc)
@@ -461,6 +493,28 @@ async def _get_current_user(message: Message, session: AsyncSession):
     if message.from_user is None:
         return None
     return await UsersRepository(session).get_by_telegram_id(message.from_user.id)
+
+
+async def _get_current_or_create_user(
+    message: Message,
+    session: AsyncSession,
+    settings: Settings | None = None,
+    telegram_user: TelegramUser | None = None,
+) -> User | None:
+    """Return the real Telegram user for both normal messages and inline-callback messages.
+
+    In callback handlers, callback.message.from_user is the bot itself, not the user who
+    clicked the inline button. Passing callback.from_user prevents account/wallet/order
+    pages from looking up the bot account and incorrectly saying /start is required.
+    """
+    actual_user = telegram_user or message.from_user
+    if actual_user is None:
+        return None
+    repo = UsersRepository(session)
+    user = await repo.get_by_telegram_id(actual_user.id)
+    if user is not None:
+        return user
+    return await _get_or_create_user_from_telegram_user(actual_user, session, settings or get_settings())
 
 
 async def get_or_create_user_from_message(message: Message, session: AsyncSession) -> User:
