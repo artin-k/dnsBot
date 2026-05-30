@@ -321,6 +321,13 @@ async def admin_action(
         await state.clear()
         await _show_settings(callback, session)
         return
+    
+    if action == "open_channels_menu":
+            await state.clear()
+            # Import the menu generator from our new file and trigger it
+            from bot.routers.mandatory_channels import cmd_admin_channels
+            await cmd_admin_channels(callback, session, settings)
+            return
 
     if action == "broadcast":
         await state.clear()
