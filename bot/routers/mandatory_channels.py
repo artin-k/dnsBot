@@ -127,6 +127,17 @@ async def callback_mandatory_join_check(
                 await query.answer("❌ خطا در بروزرسانی", show_alert=True)
         else:
             await query.answer("✅ بررسی شد", show_alert=False)
+            
+    else:
+        # --- FIXED: ADDED THE MISSING ELSE BLOCK ---
+        # User has joined all mandatory channels!
+        try:
+            await query.message.delete()
+        except Exception as e:
+            logger.warning("failed_to_delete_mandatory_channels_message", error=str(e))
+            
+        await query.answer("✅ شما در تمام کانال‌های اجباری عضو هستید!", show_alert=True)
+
 
 async def _show_mandatory_channels_dashboard(
     update: Message | CallbackQuery,
