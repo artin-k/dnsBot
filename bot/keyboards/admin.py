@@ -79,7 +79,7 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🛍 سرویس‌ها", callback_data=AdminActionCallback(action="cat_services"))
     builder.button(text="📣 ارتباطات", callback_data=AdminActionCallback(action="cat_comms"))
     builder.button(text="⚙️ تنظیمات", callback_data=AdminActionCallback(action="cat_settings"))
-    builder.button(text="📢 مدیریت کانال‌های اجباری", callback_data="admin_channels_raw_btn")
+    builder.button(text="📢 مدیریت کانال‌های اجباری", callback_data=AdminActionCallback(action="open_channels_menu"))
     builder.button(text="↩️ بازگشت به ربات", callback_data=AdminActionCallback(action="back"))
     
     builder.adjust(1)

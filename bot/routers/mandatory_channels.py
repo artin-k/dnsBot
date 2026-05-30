@@ -115,13 +115,16 @@ async def callback_mandatory_join_check(
         await query.answer("✅ شما در تمام کانال‌های اجباری عضو هستید!", show_alert=True)
 
 
-@router.message(Command("admin_channels"))
-async def cmd_admin_channels(
+async def _show_mandatory_channels_dashboard(
     update: Message | CallbackQuery,
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Display list of all mandatory channels with delete/add buttons."""
+    """Helper function to display mandatory channels dashboard.
+    
+    Works with both Message (from /admin_channels command) 
+    and CallbackQuery (from button click).
+    """
 
     # Check admin access
     if not is_admin_identity(
@@ -168,12 +171,41 @@ async def cmd_admin_channels(
 
     text += "برای حذف کانال روی دکمه آن کلیک کنید."
 
-    # 🔴 THE FIX: Smoothly handle both clicks and text commands without crashing
+    # Handle both Message and CallbackQuery
     if isinstance(update, CallbackQuery):
         await update.message.edit_text(text, reply_markup=markup)
         await update.answer()
     else:
         await update.answer(text, reply_markup=markup)
+
+
+@router.message(Command("admin_channels"))
+async def cmd_admin_channels(
+    update: Message | CallbackQuery,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Display list of all mandatory channels with delete/add buttons.
+    
+    Can be called from:
+    - @router.message for /admin_channels text command
+    - admin.py's admin_action handler with callback data
+    """
+    await _show_mandatory_channels_dashboard(update, session, settings)
+
+
+@router.callback_query(F.data.startswith("adm:open_channels_menu"))
+async def callback_open_channels_menu(
+    query: CallbackQuery,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Handle button click for mandatory channels menu (fallback).
+    
+    This catches AdminActionCallback(action='open_channels_menu') directly.
+    Note: May also be caught by admin.py's admin_action handler depending on registration order.
+    """
+    await _show_mandatory_channels_dashboard(query, session, settings)
 
 
 @router.callback_query(F.data == "add_new_channel")
