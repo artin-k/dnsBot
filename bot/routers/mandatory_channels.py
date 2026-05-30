@@ -11,13 +11,11 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.config import Settings
 from app.repositories.mandatory_channels import MandatoryChannelsRepository
-from app.utils.admin_access import is_admin_identity
+from app.repositories.users import UsersRepository # Imported to support robust admin checking
 
 logger = structlog.get_logger(__name__)
 
@@ -30,6 +28,18 @@ class MandatoryChannelCreationStates(StatesGroup):
     waiting_for_channel_id = State()
     waiting_for_channel_name = State()
     waiting_for_invite_link = State()
+
+
+async def _is_admin(telegram_id: int | None, session: AsyncSession, settings: Settings) -> bool:
+    """Robust, database-backed admin check aligning with admin.py."""
+    if telegram_id is None:
+        return False
+    if settings.root_admin_telegram_id is not None and telegram_id == settings.root_admin_telegram_id:
+        return True
+    if telegram_id in settings.admin_ids:
+        return True
+    user = await UsersRepository(session).get_by_telegram_id(telegram_id)
+    return bool(user and user.is_admin)
 
 
 async def check_user_mandatory_channels(user_id: int, bot, session: AsyncSession) -> list:
@@ -56,6 +66,7 @@ async def check_user_mandatory_channels(user_id: int, bot, session: AsyncSession
                 channel_id=channel.channel_id,
                 user_id=user_id,
                 error=str(e),
+                _is_logged_out=True
             )
             # If we can't verify, assume they're not a member (safer)
             unjoined_channels.append(channel)
@@ -120,17 +131,10 @@ async def _show_mandatory_channels_dashboard(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Helper function to display mandatory channels dashboard.
-    
-    Works with both Message (from /admin_channels command) 
-    and CallbackQuery (from button click).
-    """
+    """Helper function to display mandatory channels dashboard."""
 
-    # Check admin access
-    if not is_admin_identity(
-        telegram_id=update.from_user.id,
-        settings=settings,
-    ):
+    # Updated admin check to use robust database-backed query
+    if not await _is_admin(update.from_user.id if update.from_user else None, session, settings):
         if isinstance(update, CallbackQuery):
             await update.answer("❌ شما دسترسی ادمین ندارید", show_alert=True)
         else:
@@ -157,6 +161,13 @@ async def _show_mandatory_channels_dashboard(
         callback_data="add_new_channel",
     )
     keyboard_buttons.append([add_button])
+
+    # Back button to return to the admin panel
+    back_button = InlineKeyboardButton(
+        text="↩️ بازگشت",
+        callback_data="adm:panel",
+    )
+    keyboard_buttons.append([back_button])
 
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 
@@ -185,14 +196,7 @@ async def cmd_admin_channels(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Display list of all mandatory channels with delete/add buttons.
-    
-    Works from ANY FSM state, allowing admins to access this menu at any time.
-    
-    Can be called from:
-    - @router.message for /admin_channels text command (from any state)
-    - admin.py's admin_action handler with callback data
-    """
+    """Display list of all mandatory channels with delete/add buttons."""
     await _show_mandatory_channels_dashboard(update, session, settings)
 
 
@@ -202,11 +206,7 @@ async def callback_open_channels_menu(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Handle button click for mandatory channels menu (fallback).
-    
-    This catches AdminActionCallback(action='open_channels_menu') directly.
-    Note: May also be caught by admin.py's admin_action handler depending on registration order.
-    """
+    """Handle button click for mandatory channels menu (fallback)."""
     await _show_mandatory_channels_dashboard(query, session, settings)
 
 
@@ -219,11 +219,8 @@ async def callback_add_new_channel(
 ) -> None:
     """Start the new channel creation process."""
 
-    # Check admin access
-    if not is_admin_identity(
-        telegram_id=query.from_user.id,
-        settings=settings,
-    ):
+    # Updated admin check
+    if not await _is_admin(query.from_user.id if query.from_user else None, session, settings):
         await query.answer("❌ شما دسترسی ادمین ندارید", show_alert=True)
         return
 
@@ -252,7 +249,6 @@ async def process_channel_id(
         await message.answer("❌ شناسه کانال باید یک عدد باشد. دوباره سعی کنید:")
         return
 
-    # Store the channel_id in state - we'll check for duplicates during create
     await state.update_data(channel_id=channel_id)
     await state.set_state(MandatoryChannelCreationStates.waiting_for_channel_name)
     await message.answer(
@@ -309,7 +305,7 @@ async def process_invite_link(
         )
         return
 
-    # Ensure we have https or tg URL
+    # Ensure we have a valid https URL
     if invite_link.startswith("t.me"):
         invite_link = f"https://{invite_link}"
 
@@ -317,7 +313,6 @@ async def process_invite_link(
     channel_id = data.get("channel_id")
     channel_name = data.get("channel_name")
 
-    # Save to database
     repo = MandatoryChannelsRepository(session)
     try:
         await repo.create(
@@ -359,11 +354,8 @@ async def callback_delete_channel(
 ) -> None:
     """Delete a mandatory channel."""
 
-    # Check admin access
-    if not is_admin_identity(
-        telegram_id=query.from_user.id,
-        settings=settings,
-    ):
+    # Updated admin check
+    if not await _is_admin(query.from_user.id if query.from_user else None, session, settings):
         await query.answer("❌ شما دسترسی ادمین ندارید", show_alert=True)
         return
 
@@ -385,7 +377,6 @@ async def callback_delete_channel(
             )
 
             await query.answer("✅ کانال با موفقیت حذف شد!", show_alert=True)
-            # Refresh the message
             try:
                 await query.message.delete()
             except Exception as e:
