@@ -13,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.config import Settings
 from app.repositories.mandatory_channels import MandatoryChannelsRepository
@@ -115,7 +116,6 @@ async def callback_mandatory_join_check(
 
 
 @router.message(Command("admin_channels"))
-@router.callback_query(F.data == "admin_channels_raw_btn")
 async def cmd_admin_channels(
     update: Message | CallbackQuery,
     session: AsyncSession,
@@ -168,7 +168,7 @@ async def cmd_admin_channels(
 
     text += "برای حذف کانال روی دکمه آن کلیک کنید."
 
-    # Handle the response depending on if it was a button click or a typed command
+    # 🔴 THE FIX: Smoothly handle both clicks and text commands without crashing
     if isinstance(update, CallbackQuery):
         await update.message.edit_text(text, reply_markup=markup)
         await update.answer()
