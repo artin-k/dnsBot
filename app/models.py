@@ -512,3 +512,13 @@ class DiceRoll(TimestampMixin, Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[User] = relationship()
+
+
+class MandatoryChannel(TimestampMixin, Base):
+    __tablename__ = "mandatory_channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
+    channel_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    invite_link: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")

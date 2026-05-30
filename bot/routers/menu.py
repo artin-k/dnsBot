@@ -176,12 +176,19 @@ async def main_menu_callback(
         await menu_actions.show_lucky_wheel(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_VERIFY_PHONE_CALLBACK:
         await state.clear()
-        await state.set_state(VerificationStates.waiting_contact)
-        await state.update_data(next_section="account")
-        await callback.message.answer(
-            """برای تایید شماره موبایل، دکمه زیر را بزنید و شماره تلگرام خودتان را ارسال کنید 👇""",
-            reply_markup=phone_verification_keyboard(),
+        # Directly show the account dashboard instead of asking for phone verification
+        await menu_actions.show_account_dashboard(
+            callback.message, session, settings, telegram_user=callback.from_user
         )
+    
+    # elif action == MENU_VERIFY_PHONE_CALLBACK:
+    #     await state.clear()
+    #     await state.set_state(VerificationStates.waiting_contact)
+    #     await state.update_data(next_section="account")
+    #     await callback.message.answer(
+    #         """برای تایید شماره موبایل، دکمه زیر را بزنید و شماره تلگرام خودتان را ارسال کنید 👇""",
+    #         reply_markup=phone_verification_keyboard(),
+    #     )
 
 
 async def _show_admin_panel_from_menu(message: Message, session: AsyncSession, settings: Settings) -> None:

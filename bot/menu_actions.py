@@ -83,18 +83,17 @@ async def show_account_dashboard(
     direct_referrals = await UsersRepository(session).count_referrals(user.id)
     active_services_count = len(await ServicesRepository(session).list_active_by_user(user.id))
     recent_orders_count = await OrdersRepository(session).count_by_user(user.id)
-    phone = user.phone_number or "تایید نشده"
 
+    # Note: Removed the phone number display and set phone_verified=True to prevent the verify button from showing up on the menu
     await message.answer(
         f"""👤 حساب کاربری شما
 
 🆔 آیدی عددی: {user.telegram_id}
-📱 موبایل: {escape(phone)}
 🏦 موجودی کیف پول: {format_money(user.wallet_balance)} تومان
 👥 دعوت مستقیم: {direct_referrals}
 🛍 سرویس‌های فعال: {active_services_count}
 📦 سفارش‌های اخیر: {recent_orders_count}""",
-        reply_markup=account_dashboard_keyboard(phone_verified=user.is_phone_verified),
+        reply_markup=account_dashboard_keyboard(phone_verified=True),
     )
 
 
@@ -288,23 +287,12 @@ async def show_wallet(
     if user is None:
         await message.answer("امکان شناسایی حساب تلگرام شما وجود ندارد. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
         return
-    if not user.is_phone_verified:
-        if state is not None:
-            await state.set_state(VerificationStates.waiting_contact)
-            await state.update_data(next_section="wallet")
-        await message.answer(
-            """برای استفاده از این بخش، ابتدا باید شماره موبایل خود را تایید کنید.
 
-لطفاً با دکمه زیر شماره موبایل تلگرام خود را ارسال کنید 👇""",
-            reply_markup=phone_verification_keyboard(),
-        )
-        return
-
+    # Note: Removed the phone verification check. All users can now directly access the wallet menu.
     await message.answer(
         f"""🏦 کیف پول شما
 
 💵 موجودی فعلی: {format_money(user.wallet_balance)} تومان
-📱 شماره تایید شده: {escape(user.phone_number or "-")}
 
 لطفاً یکی از گزینه‌های زیر را انتخاب کنید:""",
         reply_markup=wallet_keyboard(),

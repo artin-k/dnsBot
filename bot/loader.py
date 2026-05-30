@@ -10,7 +10,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app.config import Settings
 from app.database import async_session_maker
 from bot.middlewares.db import DbSessionMiddleware
-from bot.routers import admin, buy, common, errors, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet
+from bot.middlewares.mandatory_channels import DynamicMandatoryJoinMiddleware
+from bot.routers import admin, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet
 
 
 def setup_logging() -> None:
@@ -40,6 +41,10 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     db_middleware = DbSessionMiddleware(async_session_maker)
     dp.update.middleware(db_middleware)
 
+    # Register mandatory channels middleware (checks after db middleware)
+    mandatory_join_middleware = DynamicMandatoryJoinMiddleware()
+    dp.update.middleware(mandatory_join_middleware)
+
     dp.include_router(errors.router)
     dp.include_router(referral.router)
     dp.include_router(menu.router)
@@ -52,6 +57,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     dp.include_router(tutorials.router)
     dp.include_router(wallet.router)
     dp.include_router(support.router)
+    dp.include_router(mandatory_channels.router)
     dp.include_router(admin.router)
     dp.include_router(common.router)
     return dp
