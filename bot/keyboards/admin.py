@@ -467,28 +467,32 @@ def payment_review_keyboard(payment_id: int) -> InlineKeyboardMarkup:
 def plans_management_keyboard(plans: list[Plan]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ افزودن تعرفه", callback_data=AdminActionCallback(action="add_plan"))
+    
     for plan in plans:
-        status = "🟢" if plan.is_active else "🔴"
-        toggle_text = "🔴 غیرفعال" if plan.is_active else "🟢 فعال"
+        status_emoji = "🟢" if plan.is_active else "🔴"
+        
+        # Button 1: Management Detail (shows emoji label + title)
         builder.button(
-            text=f"⚙️ مدیریت {status} {plan.title}",
+            text=f"⚙️ {status_emoji} {plan.title}",
             callback_data=AdminPlanCallback(action="detail", plan_id=plan.id),
         )
-        builder.button(
-            text=toggle_text,
-            callback_data=AdminPlanCallback(action="toggle", plan_id=plan.id),
-        )
+        # Button 2: Quick Delete
         builder.button(
             text="🗑 حذف",
             callback_data=AdminPlanCallback(action="delete", plan_id=plan.id),
         )
+        
     builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="panel"))
+    
     if plans:
-        builder.adjust(1, *([3] * len(plans)), 1)
+        # First row: Add Plan (1 button)
+        # Then, each plan row has exactly 2 buttons: [⚙️ Detail] [🗑 Delete]
+        # Last row: Back (1 button)
+        builder.adjust(1, *([2] * len(plans)), 1)
     else:
         builder.adjust(1)
+        
     return builder.as_markup()
-
 
 def plan_delete_confirm_keyboard(plan: Plan) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
