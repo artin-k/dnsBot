@@ -9,7 +9,8 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User as TelegramUser, InlineKeyboardButton
-from sqlalchemy import func, select, delete # Imported delete
+from sqlalchemy import func, select, delete, update # Added 'update'
+from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import Settings
@@ -21,14 +22,17 @@ from app.models import (
     ConfigInventoryStatus,
     Order,
     OrderKind,
+    OrderStatus,       # <-- Added
     Payment,
     User,
+    VPNService,        # <-- Added
     VPNServiceStatus,
     WalletTransactionStatus,
     WalletTransactionType,
     WalletWithdrawalRequest,
     WalletWithdrawalStatus,
 )
+
 from app.repositories.config_inventory import ConfigInventoryRepository
 from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.orders import OrdersRepository
@@ -1034,26 +1038,39 @@ async def admin_plan_action(
 
     if action == "delete_confirm":
         # Cascade delete associated services and orders to prevent foreign key violations
-        # We need to wipe payments, commissions, inventory configs, orders, and services linked to this plan.
         order_ids_subquery = select(Order.id).where(Order.plan_id == plan.id)
         
         try:
-            # 1. Delete associated payments
+            # 1. Break circular references by setting foreign keys to NULL first
+            # Clear reserved order links in ConfigInventory
+            await session.execute(
+                update(ConfigInventory)
+                .where(ConfigInventory.reserved_by_order_id.in_(order_ids_subquery))
+                .values(reserved_by_order_id=None)
+            )
+            # Clear inventory links in Orders
+            await session.execute(
+                update(Order)
+                .where(Order.plan_id == plan.id)
+                .values(config_inventory_id=None)
+            )
+
+            # 2. Safe to delete payments associated with those orders
             await session.execute(delete(Payment).where(Payment.order_id.in_(order_ids_subquery)))
             
-            # 2. Delete associated commissions
+            # 3. Delete associated commissions
             await session.execute(delete(AffiliateCommission).where(AffiliateCommission.order_id.in_(order_ids_subquery)))
             
-            # 3. Delete associated inventory configs
+            # 4. Delete associated inventory configs
             await session.execute(delete(ConfigInventory).where(ConfigInventory.plan_id == plan.id))
             
-            # 4. Delete associated orders
+            # 5. Delete associated orders
             await session.execute(delete(Order).where(Order.plan_id == plan.id))
             
-            # 5. Delete associated services
+            # 6. Delete associated services
             await session.execute(delete(VPNService).where(VPNService.plan_id == plan.id))
             
-            # 6. Delete the plan itself
+            # 7. Delete the plan itself
             await plans_repo.delete(plan.id)
             await session.commit()
             
