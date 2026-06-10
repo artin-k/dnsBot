@@ -36,6 +36,10 @@ def upgrade() -> None:
     op.create_index(op.f('ix_subscriptions_controld_device_id'), 'subscriptions', ['controld_device_id'], unique=False)
     op.create_index(op.f('ix_subscriptions_plan_id'), 'subscriptions', ['plan_id'], unique=False)
     op.create_index(op.f('ix_subscriptions_user_id'), 'subscriptions', ['user_id'], unique=False)
+    
+    # 💥 THE FIX: Add the column first with a default value so it exists before altering it!
+    op.add_column('vpn_services', sa.Column('is_test_account', sa.Boolean(), server_default=sa.text('false'), nullable=True))
+    
     op.alter_column('vpn_services', 'is_test_account',
                existing_type=sa.BOOLEAN(),
                nullable=False,
@@ -49,6 +53,10 @@ def downgrade() -> None:
                existing_type=sa.BOOLEAN(),
                nullable=True,
                existing_server_default=sa.text('false'))
+    
+    # Remove the column on rollback
+    op.drop_column('vpn_services', 'is_test_account')
+    
     op.drop_index(op.f('ix_subscriptions_user_id'), table_name='subscriptions')
     op.drop_index(op.f('ix_subscriptions_plan_id'), table_name='subscriptions')
     op.drop_index(op.f('ix_subscriptions_controld_device_id'), table_name='subscriptions')
