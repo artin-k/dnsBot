@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     bot_token: str = Field(default="", alias="BOT_TOKEN")
     database_url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/dns_bot",
+        default="postgresql+asyncpg://dns_admin:Artin2026@localhost:5432/dns_bot",
         alias="DATABASE_URL",
     )
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
