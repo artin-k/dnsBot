@@ -6,3 +6,4 @@ class BuyStates(StatesGroup):
     waiting_discount_code = State()
     waiting_receipt = State()
     waiting_receipt_selection = State()
+    waiting_manual_ip = State() 

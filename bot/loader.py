@@ -9,9 +9,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.config import Settings
 from app.database import async_session_maker
+
 from bot.middlewares.db import DbSessionMiddleware
 from bot.middlewares.mandatory_channels import DynamicMandatoryJoinMiddleware
-from bot.routers import admin, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet, controld_buy
+from bot.routers import admin, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet 
 
 
 def setup_logging() -> None:
@@ -58,7 +59,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     dp.include_router(verification.router)
     dp.include_router(start.router)
     dp.include_router(buy.router)
-    dp.include_router(controld_buy.router)
+    # dp.include_router(controld_buy.router)
     dp.include_router(services.router)
     dp.include_router(tariffs.router)
     dp.include_router(tracking.router)

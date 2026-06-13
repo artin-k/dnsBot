@@ -1,21 +1,32 @@
 # Open bot/routers/buy.py
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import os
+import re
+import secrets
+import httpx
+from datetime import datetime, timezone, timedelta
 from html import escape
+import jdatetime
+from zoneinfo import ZoneInfo
+
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.models import OrderKind, OrderStatus
+from app.models import Plan, VPNService, OrderKind, OrderStatus, DiceRoll, Payment
 from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.orders import OrdersRepository
 from app.repositories.plans import PlansRepository
 from app.repositories.services import ServicesRepository
 from app.repositories.users import UsersRepository
+from app.repositories.payments import PaymentsRepository
 from app.services.order_service import OrderService
 from app.services.payment_service import (
     InsufficientWalletBalanceError,
@@ -27,371 +38,525 @@ from app.services.payment_service import (
 from app.services.settings_service import AppSettingsService
 from app.services.username_validator import validate_username
 from app.services.vpn_panel import VPNPanelService
+from app.services.controld import create_dns_device, ControlDService  # ControlD direct integration
 from app.utils.formatting import format_money
 from bot import texts
-from bot.keyboards.buy import (
-    BUY_BACK_TO_MENU,
-    BUY_BACK_TO_PLANS,
-    ConfirmPlanCallback,
-    PurchaseDiscountCallback,
-    PaymentCallback,
-    PlanCallback,
-    WalletPaymentCallback,
-    insufficient_wallet_keyboard,
-    payment_keyboard,
-    plans_keyboard,
-    pre_invoice_keyboard,
-)
+from bot.keyboards.buy import PlanCallback
 from bot.keyboards.main_menu import main_menu_keyboard
 from bot.keyboards.renewal import renewal_invoice_keyboard
 from bot.notifications import notify_admins_order_payment
 from bot.routers.menu import handle_main_menu_text
 from bot.states.buy import BuyStates
-from app.models import OrderKind, OrderStatus, DiceRoll
-from app.repositories.payments import PaymentsRepository
 
 router = Router(name="buy")
 
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+# For local testing, paste your active ngrok URL here (WITHOUT trailing slash /).
+# Example: "https://your-ngrok-subdomain.ngrok-free.app"
+# When moving to VPS production, replace this with your VPS domain or IP:
+# Example: "http://82.115.24.241:8000"
+# In buy.py and admin.py
+WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
+
+
+def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
+    """
+    Generates the inline keyboard matching your design screenshot [1].
+    """
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{device_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+# ============================================================================
+# 1. MAIN DNS PLANS MENU
+# ============================================================================
+
+# Inside bot/routers/buy.py
+
+# ============================================================================
+# 1. MAIN DNS PLANS MENU
+# ============================================================================
 
 @router.message(F.text == texts.BTN_BUY)
-async def show_plans(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    if message.from_user:
-        user = await UsersRepository(session).get_by_telegram_id(message.from_user.id)
-        if user is None or not user.is_phone_verified:
-            from bot.keyboards.verification import phone_verification_keyboard
-            from bot.states.wallet import VerificationStates
-            await state.set_state(VerificationStates.waiting_contact)
-            await state.update_data(next_section="buy")
-            await message.answer(
-                "⚠️ برای خرید اشتراک DNS، ابتدا باید شماره موبایل خود را تایید کنید.\n\nلطفاً دکمه زیر را بزنید تا شماره تماس شما ارسال شود 👇",
-                reply_markup=phone_verification_keyboard(),
-            )
-            return
+@router.callback_query(F.data == "buy_back_to_plans", StateFilter("*"))
+async def show_plans(event: Message | CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    user_id = event.from_user.id if event.from_user else 0
+    user = await UsersRepository(session).get_by_telegram_id(user_id) if user_id else None
+    
+    # Enforce Phone Verification
+    if user is None or not user.is_phone_verified:
+        from bot.keyboards.verification import phone_verification_keyboard
+        from bot.states.wallet import VerificationStates
+        await state.set_state(VerificationStates.waiting_contact)
+        await state.update_data(next_section="buy")
+        
+        prompt_text = "⚠️ برای خرید اشتراک DNS، ابتدا باید شماره موبایل خود را تایید کنید.\n\nلطفاً دکمه زیر را بزنید تا شماره تماس شما ارسال شود 👇"
+        if isinstance(event, CallbackQuery):
+            await event.answer()
+            await event.message.answer(prompt_text, reply_markup=phone_verification_keyboard())
+        else:
+            await event.answer(prompt_text, reply_markup=phone_verification_keyboard())
+        return
+
+    if isinstance(event, CallbackQuery):
+        await event.answer()
 
     plans = await PlansRepository(session).list_active()
     if not plans:
-        await message.answer("در حال حاضر پلن فعالی برای خرید وجود ندارد.", reply_markup=main_menu_keyboard())
+        msg = "در حال حاضر پلن فعالی برای خرید وجود ندارد."
+        if isinstance(event, CallbackQuery):
+            await event.message.answer(msg, reply_markup=main_menu_keyboard())
+        else:
+            await event.answer(msg, reply_markup=main_menu_keyboard())
         return
 
-    # DNS has unlimited stock; bypass inventory counts
-    counts = {plan.id: 9999 for plan in plans}
-    text = texts.BUY_PLANS_TEXT
-    await message.answer(text, reply_markup=plans_keyboard(plans, counts))
+    # Build the inline plans keyboard
+    builder = InlineKeyboardBuilder()
+    for plan in plans:
+        formatted_price = f"{plan.price:,}"
+        
+        # --- FIXED: Use PlanCallback directly instead of raw buy_plan_select string ---
+        builder.button(
+            text=f"🔹 {plan.title} - {formatted_price} تومان 🔹",
+            callback_data=PlanCallback(plan_id=plan.id)
+        )
+        # ------------------------------------------------------------------------------
+        
+    builder.button(text="🎁 دریافت اکانت تست (۲ ساعته) 🆓", callback_data="get_test_account")
+    builder.button(text=texts.BTN_BACK, callback_data="buy_back_to_menu")
+    builder.adjust(1)
 
+    text = (
+        "لطفا یکی از پلن‌های زیر را انتخاب کنید:\n\n"
+        "در صورتی که قبلا یک پلن فعال داشته باشید و پلن جدید خریداری کنید ، "
+        "مدت زمان پلن جدید به پلن قبلی شما اضافه خواهد شد\n\n"
+        "در صورت تمدید پلن، بخاطر انتخاب مجدد شما 10 درصد تخفیف بصورت دائمی "
+        "بصورت اتوماتیک برای شما در نظر گرفته می‌شود!"
+    )
 
-@router.callback_query(F.data == BUY_BACK_TO_MENU)
+    if isinstance(event, CallbackQuery):
+        await event.message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    else:
+        await event.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+@router.callback_query(F.data == "buy_back_to_menu")
 async def buy_back_to_menu(callback: CallbackQuery) -> None:
     await callback.answer()
     if callback.message:
         await callback.message.answer(texts.MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
 
 
-@router.callback_query(F.data == BUY_BACK_TO_PLANS)
-async def buy_back_to_plans(callback: CallbackQuery, session: AsyncSession) -> None:
-    await callback.answer()
-    plans = await PlansRepository(session).list_active()
-    counts = {plan.id: 9999 for plan in plans}
-    text = texts.BUY_PLANS_TEXT
-    if callback.message:
-        await callback.message.edit_text(text, reply_markup=plans_keyboard(plans, counts))
+# ============================================================================
+# 2. THE TEST ACCOUNT (FREE TRIAL) FLOW
+# ============================================================================
 
-
-@router.callback_query(PlanCallback.filter())
-async def show_pre_invoice(
+@router.callback_query(F.data == "get_test_account", StateFilter("*"))
+async def handle_get_test_account(
     callback: CallbackQuery,
-    callback_data: PlanCallback,
-    session: AsyncSession,
-) -> None:
-    await callback.answer()
-    plan = await PlansRepository(session).get(callback_data.plan_id)
-    if plan is None or not plan.is_active:
-        await _safe_edit_or_answer(callback, "این پلن در دسترس نیست.")
-        return
-
-    # --- REMOVED: Old inventory stock checks ---
-
-    user = None
-    if callback.from_user:
-        user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-
-    text = _format_purchase_invoice(plan, user.wallet_balance if user else 0)
-    await _safe_edit_or_answer(callback, text, reply_markup=pre_invoice_keyboard(plan.id))
-
-
-@router.callback_query(PurchaseDiscountCallback.filter())
-async def ask_purchase_discount_code(
-    callback: CallbackQuery,
-    callback_data: PurchaseDiscountCallback,
-    state: FSMContext,
-) -> None:
-    await callback.answer()
-    await state.set_state(BuyStates.waiting_discount_code)
-    await state.update_data(flow="purchase", plan_id=callback_data.plan_id)
-    if callback.message:
-        await callback.message.answer("🎟 کد تخفیف خود را ارسال کنید:")
-
-
-@router.callback_query(ConfirmPlanCallback.filter())
-async def ask_username(
-    callback: CallbackQuery,
-    callback_data: ConfirmPlanCallback,
-    state: FSMContext,
-    session: AsyncSession,
-) -> None:
-    await callback.answer()
-    plan = await PlansRepository(session).get(callback_data.plan_id)
-    if plan is None or not plan.is_active:
-        await _safe_edit_or_answer(callback, "این پلن در دسترس نیست.")
-        return
-
-    discount = await _get_discount_from_callback(callback, session, callback_data.discount_roll_id, plan.price)
-    if callback_data.discount_roll_id and discount is None:
-        await _safe_edit_or_answer(callback, "کد تخفیف معتبر نیست یا منقضی شده است.")
-        return
-
-    await state.set_state(BuyStates.waiting_username)
-    await state.update_data(
-        plan_id=plan.id,
-        discount_code=discount.discount_code if discount else None,
-        discount_percent=discount.discount_percent if discount else 0,
-        discount_amount=_discount_amount(plan.price, discount) if discount else 0,
-    )
-    if callback.message:
-        await callback.message.answer(texts.USERNAME_PROMPT)
-
-
-@router.message(BuyStates.waiting_discount_code, F.text)
-async def receive_discount_code(
-    message: Message,
     state: FSMContext,
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    if await handle_main_menu_text(message, state, session, settings):
-        return
-    if message.from_user is None or message.text is None:
+    if callback.message is None or callback.from_user is None:
         return
 
-    data = await state.get_data()
-    flow = data.get("flow")
-    code = message.text.strip().upper()
-    user = await UsersRepository(session).get_by_telegram_id(message.from_user.id)
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
     if user is None:
-        await state.clear()
-        await message.answer("ابتدا /start را ارسال کنید.", reply_markup=main_menu_keyboard())
+        await callback.message.answer("ابتدا /start را ارسال کنید.")
+        await callback.answer()
         return
 
-    discount = await DiceRollsRepository(session).get_valid_discount(user.id, code, datetime.now(timezone.utc))
-    if discount is None:
-        await message.answer("❌ کد تخفیف معتبر نیست، استفاده شده یا منقضی شده است.")
+    # Strict Anti-Abuse DB Check [1]
+    stmt = select(VPNService).where(
+        VPNService.user_id == user.id,
+        VPNService.is_test_account == True
+    )
+    result = await session.execute(stmt)
+    existing_test = result.scalars().first()
+
+    if existing_test is not None:
+        await callback.answer("❌ شما قبلا از اکانت تست استفاده کرده‌اید.", show_alert=True)
         return
 
-    if flow == "purchase":
-        plan = await PlansRepository(session).get(int(data.get("plan_id") or 0))
-        if plan is None or not plan.is_active:
-            await state.clear()
-            await message.answer("این پلن در دسترس نیست.", reply_markup=main_menu_keyboard())
-            return
-        
-        await state.clear()
-        await message.answer(
-            _format_purchase_invoice(plan, user.wallet_balance, discount),
-            reply_markup=pre_invoice_keyboard(plan.id, discount.id),
-        )
+    await callback.answer()
+
+    profile_id = settings.controld_profile_id
+    if not profile_id:
+        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
         return
 
-    if flow == "renewal":
-        service = await ServicesRepository(session).get_user_service(
-            int(data.get("service_id") or 0),
-            user.id,
-        )
-        plan = await PlansRepository(session).get(int(data.get("plan_id") or 0))
-        if service is None or plan is None or not plan.is_active:
-            await state.clear()
-            await message.answer("تمدید قابل ادامه نیست. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
-            return
-        await state.clear()
-        await message.answer(
-            _format_renewal_invoice(service, plan, discount),
-            reply_markup=renewal_invoice_keyboard(service.id, plan.id, discount.id),
-        )
+    await callback.message.answer("⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...")
+
+    # Generate unique device identifier [1]
+    random_hex = secrets.token_hex(4)
+    unique_device_name = f"tg_test_{user.telegram_id}_{random_hex}"
+
+    controld_service = ControlDService(settings)
+    device_data = await controld_service.create_dns_device(
+        tg_user_id=user.telegram_id,
+        profile_id=profile_id,
+        duration_hours=2,
+        device_name=unique_device_name
+    )
+
+    if device_data is None:
+        await callback.message.answer("❌ خطا در برقراری ارتباط با سرورهای Control D. لطفاً مجدداً تلاش کنید.")
         return
 
+    now = datetime.now(timezone.utc)
+    expire_at = now + timedelta(hours=2)
 
-@router.message(BuyStates.waiting_username)
-async def receive_username(
-    message: Message,
+    new_test_sub = VPNService(
+        user_id=user.id,
+        plan_id=None,
+        controld_device_id=device_data["device_id"],
+        config_link=device_data["doh"],
+        subscription_link=device_data["dot"],
+        username=unique_device_name,
+        expire_at=expire_at,
+        status="active",
+        is_test_account=True
+    )
+    session.add(new_test_sub)
+    await session.commit()
+    await state.clear()
+
+    # Shamsi translation
+    try:
+        tehran_tz = ZoneInfo("Asia/Tehran")
+        tehran_expire = expire_at.astimezone(tehran_tz)
+        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=tehran_expire)
+        expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
+    except ImportError:
+        tehran_tz = ZoneInfo("Asia/Tehran")
+        expire_str = expire_at.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Match the layout design of your screenshot
+    success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
+🔷 زمان باقی‌مانده: 2 ساعت
+دی ان اس اختصاصی شما :
+
+🔷 Primary : <code>{device_data['ipv4_primary']}</code>
+🔷 Secondary : <code>{device_data['ipv4_secondary']}</code>
+
+
+مراحل ثبت آی‌پی :
+1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
+2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+
+: مخصوص موبایل DNS
+🔷 Primary : <code>2.189.86.93</code>
+🔷 Secondary : <code>2.189.86.94</code>
+
+توجه : اگر لینک ثبت آی‌پی اتوماتیک برای شما باز نشد ، از لینک ثبت آی‌پی اتوماتیک 2 استفاده نمایید"""
+
+    await callback.message.answer(
+        success_text, 
+        reply_markup=_get_ip_registration_keyboard(device_data["device_id"]), 
+        parse_mode="HTML"
+    )
+
+
+# Inside bot/routers/buy.py
+
+# ============================================================================
+# 3. CHOOSE PLAN & SYSTEM AUTOMATION/MANUAL SELECTION
+# ============================================================================
+
+@router.callback_query(PlanCallback.filter(), StateFilter("*"))  # <-- FIXED: Listen directly to PlanCallback filter
+async def handle_buy_plan_select(
+    callback: CallbackQuery,
+    callback_data: PlanCallback,  # <-- FIXED: Access unpacked CallbackData
+    session: AsyncSession,
+) -> None:
+    await callback.answer()
+    if callback.message is None or callback.from_user is None:
+        return
+
+    plan_id = callback_data.plan_id  # <-- FIXED: Safely read from callback_data
+    stmt = select(Plan).where(Plan.id == plan_id)
+    result = await session.execute(stmt)
+    plan = result.scalars().first()
+
+    if plan is None or not plan.is_active:
+        await callback.message.answer("❌ این طرح دیگر فعال نیست.")
+        return
+
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if user is None:
+        await callback.message.answer("حساب کاربری یافت نشد.")
+        return
+
+    # Check renewal
+    active_stmt = select(VPNService).where(
+        VPNService.user_id == user.id,
+        VPNService.status == "active"
+    )
+    active_result = await session.execute(active_stmt)
+    current_sub = active_result.scalars().first()
+
+    final_price = plan.price
+    discount_msg = ""
+    if current_sub is not None:
+        discount_amount = int(plan.price * 0.1)
+        final_price = plan.price - discount_amount
+        discount_msg = f"🎁 تخفیف تمدید فعال: {discount_amount:,} تومان\n"
+
+    # Pre-invoice text showing wallet details
+    invoice_text = f"""🧾 پیش‌فاکتور خرید اشتراک DNS
+
+⚡ نام سرویس: {escape(plan.title)}
+🗓 مدت اعتبار: {plan.duration_hours} ساعت
+💵 قیمت طرح: {plan.price:,} تومان
+{discount_msg}💵 قیمت نهایی شما: {final_price:,} تومان
+🏦 موجودی فعلی شما: {user.wallet_balance:,} تومان
+
+آیا مایل هستید این طرح را خریداری کنید؟"""
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🏦 پرداخت از کیف پول (آنی)", callback_data=f"pay_instant_wallet:{plan.id}")
+    builder.button(text="💳 کارت به کارت (دستی)", callback_data=f"pay_manual_card:{plan.id}")
+    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
+    builder.adjust(1)
+
+    await callback.message.edit_text(invoice_text, reply_markup=builder.as_markup())
+
+# ============================================================================
+# 4. INSTANT PAYMENT FROM WALLET
+# ============================================================================
+
+@router.callback_query(F.data.startswith("pay_instant_wallet:"), StateFilter("*"))
+async def handle_pay_instant_wallet(
+    callback: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    if await handle_main_menu_text(message, state, session, settings):
-        return
-    if message.from_user is None or message.text is None:
-        return
-
-    is_valid, normalized_or_reason = validate_username(message.text)
-    if not is_valid:
-        await message.answer(f"❌ {normalized_or_reason}\n\n{texts.USERNAME_PROMPT}")
+    await callback.answer()
+    if callback.message is None or callback.from_user is None:
         return
 
-    data = await state.get_data()
-    plan_id = data.get("plan_id")
-    plan = await PlansRepository(session).get(int(plan_id)) if plan_id else None
-    user = await UsersRepository(session).get_by_telegram_id(message.from_user.id)
+    plan_id = int(callback.data.split(":")[1])
+    stmt = select(Plan).where(Plan.id == plan_id)
+    result = await session.execute(stmt)
+    plan = result.scalars().first()
 
-    if plan is None or not plan.is_active or user is None:
-        await state.clear()
-        await message.answer("سفارش قابل ادامه نیست. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_keyboard())
+    if plan is None:
+        await callback.message.answer("❌ طرح مورد نظر پیدا نشد.")
         return
 
-    # --- REMOVED: Unused exception and stock checking triggers ---
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if user is None:
+        return
+
+    active_stmt = select(VPNService).where(
+        VPNService.user_id == user.id,
+        VPNService.status == "active"
+    )
+    active_result = await session.execute(active_stmt)
+    current_sub = active_result.scalars().first()
+
+    final_price = plan.price
+    if current_sub is not None:
+        final_price = plan.price - int(plan.price * 0.1)
+
+    # Validate wallet balance [1]
+    if user.wallet_balance < final_price:
+        await callback.message.answer(
+            f"❌ موجودی کیف پول کافی نیست.\n"
+            f"قیمت نهایی طرح: {final_price:,} تومان\n"
+            f"موجودی شما: {user.wallet_balance:,} تومان\n\n"
+            f"لطفاً گزینه 'کارت به کارت دستی' را برای شارژ حساب خود انتخاب کنید."
+        )
+        return
+
+    await callback.message.answer("⚙️ در حال پردازش تراکنش و فعال‌سازی اشتراک دی‌ان‌اس...")
+
+    now = datetime.now(timezone.utc)
+
+    if current_sub is None:
+        # Create new device
+        expire_at = now + timedelta(hours=plan.duration_hours)
+        random_hex = secrets.token_hex(4)
+        unique_device_name = f"tg_user_{user.telegram_id}_{random_hex}"
+
+        device_data = await create_dns_device(
+            tg_user_id=user.telegram_id,
+            profile_id=plan.controld_profile_id,
+            duration_hours=plan.duration_hours,
+            device_type="mobile",
+            device_name=unique_device_name
+        )
+
+        if device_data is None:
+            await callback.message.answer("❌ خطا در برقراری ارتباط با سرورهای دی‌ان‌اس.")
+            return
+
+        device_id = device_data["device_id"]
+        ipv4_primary = device_data["ipv4_primary"]
+        ipv4_secondary = device_data["ipv4_secondary"]
+
+        new_subscription = VPNService(
+            user_id=user.id,
+            plan_id=plan.id,
+            controld_device_id=device_id,
+            config_link=device_data["doh"],
+            subscription_link=device_data["dot"],
+            username=unique_device_name,
+            expire_at=expire_at,
+            status="active"
+        )
+        session.add(new_subscription)
+        
+# Inside bot/routers/buy.py -> handle_pay_instant_wallet()
+
+    else:
+        # Renewal - accumulate time
+        current_expire = current_sub.expire_at
+        if current_expire.tzinfo is None:
+            current_expire = current_expire.replace(tzinfo=timezone.utc)
+
+        expire_at = current_expire + timedelta(hours=plan.duration_hours)
+        current_sub.expire_at = expire_at
+        current_sub.plan_id = plan.id
+
+        new_disable_ttl = int(expire_at.timestamp())
+        controld_service = ControlDService(settings)
+        
+        success = await controld_service.update_device(
+            device_id=current_sub.controld_device_id,
+            disable_ttl=new_disable_ttl
+        )
+
+        if not success:
+            await callback.message.answer("❌ خطا در تمدید اشتراک در سرورهای Control D.")
+            return
+
+        device_id = current_sub.controld_device_id
+        
+        # Fetch dynamic legacy IPs for renewal display instead of raw placeholders [1]
+        ips = await get_controld_device_ips(device_id, settings)
+        ipv4_primary = ips["ipv4_primary"]
+        ipv4_secondary = ips["ipv4_secondary"]
+
+    # Atomic balance deduction [1]
+    user.wallet_balance -= final_price
+    await session.commit()
+    await state.clear()
+
+    # Format Shamsi translation
+    try:
+        tehran_tz = ZoneInfo("Asia/Tehran")
+        tehran_expire = expire_at.astimezone(tehran_tz)
+        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=tehran_expire)
+        expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
+    except ImportError:
+        tehran_tz = ZoneInfo("Asia/Tehran")
+        expire_str = expire_at.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Beautiful Output design matching your target screenshot
+    success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
+🔷 زمان باقی‌مانده: {plan.duration_hours} ساعت
+دی ان اس اختصاصی شما :
+
+🔷 Primary : <code>{ipv4_primary}</code>
+🔷 Secondary : <code>{ipv4_secondary}</code>
+
+
+مراحل ثبت آی‌پی :
+1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
+2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+
+: مخصوص موبایل DNS
+🔷 Primary : <code>2.189.86.93</code>
+🔷 Secondary : <code>2.189.86.94</code>
+
+توجه : اگر لینک ثبت آی‌پی اتوماتیک برای شما باز نشد ، از لینک ثبت آی‌پی اتوماتیک 2 استفاده نمایید"""
+
+    await callback.message.answer(
+        success_text, 
+        reply_markup=_get_ip_registration_keyboard(device_id), 
+        parse_mode="HTML"
+    )
+
+
+# ============================================================================
+# 5. CARD-TO-CARD MANUAL BILLING FLOW
+# ============================================================================
+
+@router.callback_query(F.data.startswith("pay_manual_card:"), StateFilter("*"))
+async def handle_pay_manual_card(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    await callback.answer()
+    if callback.message is None or callback.from_user is None:
+        return
+
+    plan_id = int(callback.data.split(":")[1])
+    plan = await PlansRepository(session).get(plan_id)
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+
+    if plan is None or user is None:
+        await callback.message.answer("خطا در پردازش درخواست.")
+        return
+
+    # Check renewal discount
+    active_stmt = select(VPNService).where(
+        VPNService.user_id == user.id,
+        VPNService.status == "active"
+    )
+    active_result = await session.execute(active_stmt)
+    current_sub = active_result.scalars().first()
+
+    final_price = plan.price
+    if current_sub is not None:
+        final_price = plan.price - int(plan.price * 0.1)
+
+    # Build standard database order & payment records
     order_service = OrderService(session, settings)
     order, payment = await order_service.create_order_with_payment(
         user=user,
         plan=plan,
-        custom_username=normalized_or_reason,
-        discount_code=data.get("discount_code"),
-        discount_percent=int(data.get("discount_percent") or 0),
-        discount_amount=int(data.get("discount_amount") or 0),
-    )
-    
-    expire_minutes = await AppSettingsService(session).get_order_expire_minutes()
-
-    await state.clear()
-    await message.answer(
-        f"""✅ تراکنش شما ایجاد شد
-
-🛒 کد پیگیری: {order.tracking_code}
-💵 مبلغ تراکنش به تومان: {format_money(order.amount)}
-
-💢 لطفاً به این نکات قبل از پرداخت توجه کنید 👇
-
-🔹 تراکنش تا {expire_minutes} دقیقه اعتبار دارد و پس از آن در صورت پرداخت تایید نخواهد شد.
-❌ پس از پرداخت، تایید تراکنش ممکن است 15 دقیقه تا 1 ساعت زمان ببرد.
-✅ در صورت مشکل می‌توانید با پشتیبانی در ارتباط باشید.""",
-        reply_markup=payment_keyboard(order.id),
+        custom_username=f"dns_user_{user.telegram_id}",
+        discount_code=None,
+        discount_percent=10 if current_sub is not None else 0,
+        discount_amount=int(plan.price * 0.1) if current_sub is not None else 0,
     )
 
-
-# Open bot/routers/buy.py
-
-@router.callback_query(PaymentCallback.filter())
-async def show_payment_info(
-    callback: CallbackQuery,
-    callback_data: PaymentCallback,
-    state: FSMContext,
-    session: AsyncSession,
-    settings: Settings,
-) -> None:
-    # 1. Stop the inline keyboard loading spinner
-    await callback.answer()
-    
-    # 2. Fetch the user cleanly from the database to avoid relationship lookups
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id) if callback.from_user else None
-    
-    # 3. Retrieve the order object
-    order = await OrdersRepository(session).get(callback_data.order_id)
-    if order is None or user is None or order.user_id != user.id:
-        await _safe_edit_or_answer(callback, "این سفارش پیدا نشد.")
-        return
-
-    order_service = OrderService(session, settings)
-    if await order_service.expire_order_if_unpaid(order):
-        await _safe_edit_or_answer(callback, texts.EXPIRED_ORDER_TEXT)
-        return
-
-    if order.status not in (OrderStatus.PENDING_PAYMENT.value,):
-        await _safe_edit_or_answer(callback, "این سفارش قبلاً پردازش شده است.")
-        return
-
-    # 4. Fetch the payment record directly to prevent async lazy-load crashes
-    from app.models import Payment
-    from sqlalchemy import select
-    
-    payment = await session.scalar(
-        select(Payment).where(Payment.order_id == order.id)
-    )
-    if payment is None:
-        await _safe_edit_or_answer(callback, "پرداخت این سفارش پیدا نشد.")
-        return
-
-    # 5. Save state data and present the instructions to the user
     await state.set_state(BuyStates.waiting_receipt)
     await state.update_data(order_id=order.id, payment_id=payment.id)
-    
+
     app_settings = AppSettingsService(session)
     card_number = await app_settings.get_payment_card_number()
     card_holder = await app_settings.get_payment_card_holder()
     payment_description = await app_settings.get_payment_description()
     description_text = f"\nتوضیحات پرداخت:\n{escape(payment_description)}\n" if payment_description else ""
-    
-    if callback.message:
-        await callback.message.answer(
-            f"""💳 پرداخت دستی
+
+    await callback.message.answer(
+        f"""💳 پرداخت دستی (کارت به کارت)
 
 مبلغ قابل پرداخت:
-{format_money(order.amount)} تومان
+{format_money(final_price)} تومان
 
 شماره کارت:
-{escape(card_number) or "ثبت نشده"}
+`{escape(card_number) or "ثبت نشده"}`
 
 به نام:
 {escape(card_holder) or "ثبت نشده"}
 {description_text}
 
-بعد از پرداخت، تصویر رسید را همینجا ارسال کنید."""
-        )
-
-
-@router.callback_query(WalletPaymentCallback.filter())
-async def pay_from_wallet(
-    callback: CallbackQuery,
-    callback_data: WalletPaymentCallback,
-    session: AsyncSession,
-    settings: Settings,
-) -> None:
-    await callback.answer()
-    if callback.from_user is None:
-        await _safe_edit_or_answer(callback, "این سفارش پیدا نشد.")
-        return
-
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-    order = await OrdersRepository(session).get_with_details(callback_data.order_id)
-    if user is None or order is None or order.user_id != user.id:
-        await _safe_edit_or_answer(callback, "این سفارش پیدا نشد.")
-        return
-
-    if not user.is_phone_verified:
-        await callback.answer("⚠️ برای تکمیل خرید ابتدا شماره تماس خود را تایید کنید.", show_alert=True)
-        return
-
-    try:
-        result = await PaymentService(session, VPNPanelService(), settings).pay_order_from_wallet(order.id, user.id)
-    except InsufficientWalletBalanceError as exc:
-        await _safe_edit_or_answer(
-            callback,
-            f"""❌ موجودی کیف پول شما کافی نیست.
-
-💵 مبلغ سفارش: {format_money(exc.required_amount)} تومان
-🏦 موجودی کیف پول: {format_money(exc.wallet_balance)} تومان""",
-            reply_markup=insufficient_wallet_keyboard(order.id),
-        )
-        return
-    except PaymentExpiredError:
-        await _safe_edit_or_answer(callback, texts.EXPIRED_ORDER_TEXT)
-        return
-    except PaymentAlreadyProcessedError:
-        await _safe_edit_or_answer(callback, "این سفارش قبلاً پردازش شده است.")
-        return
-    except PaymentApprovalError:
-        await _safe_edit_or_answer(callback, "پرداخت از کیف پول قابل انجام نیست.")
-        return
-
-    await _safe_edit_or_answer(
-        callback,
-        _approved_wallet_message(result),
-        reply_markup=main_menu_keyboard(),
+بعد از پرداخت، تصویر رسید را همینجا ارسال کنید تا ادمین‌ها حساب شما را شارژ و اشتراک را فعال کنند."""
     )
 
 
@@ -436,135 +601,87 @@ async def receive_receipt_photo(
         await message.answer("رسید دریافت شد، اما ادمینی برای بررسی تنظیم نشده است. لطفاً با پشتیبانی تماس بگیرید.")
 
 
-@router.message(BuyStates.waiting_receipt, F.text)
-async def receive_non_photo_receipt(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    settings: Settings,
-) -> None:
-    if await handle_main_menu_text(message, state, session, settings):
-        return
-    await message.answer("لطفاً تصویر رسید پرداخت را ارسال کنید.")
+# ============================================================================
+# 6. MANUAL IP REGISTRATION FSM FLOW
+# ============================================================================
 
-
-def _format_purchase_invoice(plan, wallet_balance: int, discount: DiceRoll | None = None) -> str:
-    discount_amount = _discount_amount(plan.price, discount)
-    final_amount = max(plan.price - discount_amount, 0)
-    discount_lines = ""
-    if discount and discount_amount:
-        discount_lines = f"""
-🎟 کد تخفیف: {discount.discount_code}
-🎁 تخفیف: {discount.discount_percent}٪ | {format_money(discount_amount)} تومان
-💵 مبلغ نهایی: {format_money(final_amount)} تومان"""
-
-    # --- FIXED: Dynamically calculate days/hours from plan.duration_hours ---
-    hours = plan.duration_hours
-    duration_val = hours // 24 if hours >= 24 and hours % 24 == 0 else hours
-    duration_unit = "روز" if hours >= 24 and hours % 24 == 0 else "ساعت"
-    # ------------------------------------------------------------------------
-
-    return f"""🧾 پیش‌فاکتور خرید اشتراک DNS
-
-🔐 نام دستگاه: در مرحله بعد وارد می‌شود
-⚡ نام سرویس: {escape(plan.title)}
-🗓 مدت اعتبار: {duration_val} {duration_unit}
-💵 قیمت: {format_money(plan.price)} تومان{discount_lines}
-🏦 موجودی کیف پول شما: {format_money(wallet_balance)} تومان
-
-💰 سفارش شما آماده پرداخت است"""
-
-
-def _format_renewal_invoice(service, plan, discount: DiceRoll | None = None) -> str:
-    discount_amount = _discount_amount(plan.price, discount)
-    final_amount = max(plan.price - discount_amount, 0)
-    discount_lines = ""
-    if discount and discount_amount:
-        discount_lines = f"""
-🎟 کد تخفیف: {discount.discount_code}
-🎁 تخفیف: {discount.discount_percent}٪ | {format_money(discount_amount)} تومان
-💵 مبلغ نهایی: {format_money(final_amount)} تومان"""
-
-    # --- FIXED: Dynamically calculate days/hours from plan.duration_hours ---
-    hours = plan.duration_hours
-    duration_val = hours // 24 if hours >= 24 and hours % 24 == 0 else hours
-    duration_unit = "روز" if hours >= 24 and hours % 24 == 0 else "ساعت"
-    # ------------------------------------------------------------------------
-
-    return f"""♻️ پیش‌فاکتور تمدید اشتراک
-
-👤 نام دستگاه: {escape(service.username)}
-⚡ پلن تمدید: {escape(plan.title)}
-🗓 مدت تمدید: {duration_val} {duration_unit}
-💵 مبلغ: {format_money(plan.price)} تومان{discount_lines}
-
-آیا تایید می‌کنید؟"""
-
-
-async def _get_discount_from_callback(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    discount_roll_id: int,
-    price: int,
-) -> DiceRoll | None:
-    if not discount_roll_id or callback.from_user is None:
-        return None
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-    discount = await DiceRollsRepository(session).get(discount_roll_id)
-    now = datetime.now(timezone.utc)
-    expires_at = discount.expires_at if discount else None
-    if expires_at is not None and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if (
-        user is None
-        or discount is None
-        or discount.user_id != user.id
-        or not discount.won
-        or discount.used
-        or not discount.discount_code
-        or (expires_at is not None and expires_at <= now)
-        or _discount_amount(price, discount) <= 0
-    ):
-        return None
-    return discount
-
-
-def _discount_amount(price: int, discount: DiceRoll | None) -> int:
-    if discount is None or discount.discount_percent <= 0:
-        return 0
-    return max(price * discount.discount_percent // 100, 0)
-
-
-def _approved_wallet_message(result) -> str:
-    wallet_line = f"\n\n🏦 موجودی کیف پول: {format_money(result.wallet_balance)} تومان" if result.wallet_balance is not None else ""
+@router.callback_query(F.data.startswith("manual_ip_reg:"), StateFilter("*"))
+async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    device_id = callback.data.split(":")[1]
     
-    # --- FIXED: Safely fetch the duration parameter and format it cleanly ---
-    hours = getattr(result, "duration_hours", None) or getattr(result, "duration_days", 0)
-    duration_val = hours // 24 if hours >= 24 and hours % 24 == 0 else hours
-    duration_unit = "روز" if hours >= 24 and hours % 24 == 0 else "ساعت"
-    # -------------------------------------------------------------------------
-
-    if result.order_kind == OrderKind.RENEWAL.value:
-        return f"""✅ پرداخت از کیف پول انجام شد و تمدید اشتراک شما با موفقیت ثبت شد.
-
-👤 نام دستگاه: {escape(result.service_username)}
-⚡ پلن تمدید: {escape(result.plan_title)}
-🗓 اعتبار افزوده: {duration_val} {duration_unit}{wallet_line}"""
-
-    config_line = f"\n🌐 دی‌ان‌اس DoH شما:\n`{escape(result.config_link)}`" if result.config_link else ""
-    subscription_line = f"\n\n🔒 آدرس DoT شما:\n`{escape(result.subscription_link)}`" if result.subscription_link else ""
-    return f"""✅ پرداخت از کیف پول انجام شد و اشتراک شما با موفقیت ساخته شد.
-
-👤 نام دستگاه: {escape(result.service_username)}
-⚡ پلن: {escape(result.plan_title)}
-🗓 اعتبار: {duration_val} {duration_unit}
-{config_line}{subscription_line}{wallet_line}"""
+    await state.set_state(BuyStates.waiting_manual_ip)
+    await state.update_data(device_id=device_id)
+    
+    await callback.message.answer(
+        "🤖 لطفاً آی‌پی خارجی خود (IPv4) را بدون فیلترشکن وارد کنید.\n\n"
+        "مثال: `5.200.12.1`"
+    )
 
 
-async def _safe_edit_or_answer(callback: CallbackQuery, text: str, reply_markup=None) -> None:
-    if callback.message:
+@router.message(BuyStates.waiting_manual_ip, F.text)
+async def process_manual_ip(
+    message: Message, 
+    state: FSMContext, 
+    session: AsyncSession, 
+    settings: Settings
+) -> None:
+    user_ip = message.text.strip()
+    
+    if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", user_ip):
+        await message.answer("❌ فرمت آی‌پی نامعتبر است. لطفاً یک آی‌پی عددی معتبر ارسال کنید.")
+        return
+
+    data = await state.get_data()
+    device_id = data.get("device_id")
+    if not device_id:
+        await state.clear()
+        await message.answer("❌ خطای سیستمی. لطفاً مجدداً تلاش کنید.")
+        return
+
+    url = f"https://api.controld.com/devices/{device_id}/ips"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json",
+        "accept": "application/json"
+    }
+    payload = {"ip": user_ip}
+
+    async with httpx.AsyncClient() as client:
         try:
-            await callback.message.edit_text(text, reply_markup=reply_markup)
-            return
+            response = await client.post(url, json=payload, headers=headers, timeout=10.0)
+            if response.status_code in (200, 201):
+                await state.clear()
+                await message.answer(f"✅ آی‌پی <code>{user_ip}</code> با موفقیت به صورت دستی برای دستگاه شما ثبت شد.", parse_mode="HTML")
+            else:
+                await message.answer(f"❌ خطا در ثبت آی‌پی در سیستم Control D:\n<code>{response.text}</code>", parse_mode="HTML")
+        except Exception as e:
+            await message.answer(f"❌ خطا در ارتباط با پنل Control D: {str(e)}")
+
+
+            # bot/routers/buy.py (At the top of the file)
+
+async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
+    url = f"https://api.controld.com/devices/{device_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json"
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                body = data.get("body", {})
+                resolver_info = body.get("resolvers") or body.get("resolver") or {}
+                v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
+                return {
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                }
         except Exception:
-            await callback.message.answer(text, reply_markup=reply_markup)
+            pass
+    return {
+        "ipv4_primary": "94.183.166.203",
+        "ipv4_secondary": "94.183.166.208"
+    }

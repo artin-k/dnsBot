@@ -349,13 +349,17 @@ class VPNService(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
-    order_id: Mapped[int] = mapped_column(
+    order_id: Mapped[int | None] = mapped_column(
         ForeignKey("orders.id", ondelete="CASCADE"),
         unique=True,
         index=True,
-        nullable=False,
+        nullable=True,
     )
-    plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id", ondelete="RESTRICT"), index=True, nullable=False)
+    plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("plans.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=True,
+    )
     config_inventory_id: Mapped[int | None] = mapped_column(
         ForeignKey("config_inventory.id", ondelete="SET NULL"),
         index=True,
@@ -366,8 +370,8 @@ class VPNService(TimestampMixin, Base):
     username: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     config_link: Mapped[str | None] = mapped_column(Text)
     subscription_link: Mapped[str | None] = mapped_column(Text)
-    volume_gb: Mapped[int] = mapped_column(Integer, nullable=False)
-    duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    volume_gb: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expire_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32),
@@ -375,16 +379,12 @@ class VPNService(TimestampMixin, Base):
         default=VPNServiceStatus.ACTIVE.value,
         server_default=VPNServiceStatus.ACTIVE.value,
     )
-
-    controld_device_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-
     user: Mapped[User] = relationship(back_populates="services")
-    order: Mapped[Order] = relationship(back_populates="vpn_service", foreign_keys=[order_id])
-    plan: Mapped[Plan] = relationship(back_populates="services")
+    order: Mapped[Order | None] = relationship(back_populates="vpn_service", foreign_keys=[order_id])
+    plan: Mapped[Plan | None] = relationship(back_populates="services")
     config_inventory_item: Mapped[ConfigInventory | None] = relationship(
         foreign_keys=[config_inventory_id],
     )
-
 
 class ConfigInventory(TimestampMixin, Base):
     __tablename__ = "config_inventory"

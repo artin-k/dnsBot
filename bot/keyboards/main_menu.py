@@ -25,7 +25,7 @@ def main_menu_keyboard(user_or_is_admin: object = False, *, is_admin: bool | Non
     rows = [
         [texts.BTN_BUY_RENEW, texts.BTN_MY_SERVICES],
         [texts.BTN_ACCOUNT, texts.BTN_SUPPORT],
-        [texts.BTN_FEATURES],
+        [texts.BTN_TEST_ACCOUNT, texts.BTN_FEATURES], # <-- Changed this line!
     ]
     if admin:
         rows.append([texts.BTN_ADMIN_PANEL])
@@ -55,7 +55,7 @@ def buy_renew_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🔐 خرید اشتراک", callback_data=MENU_BUY_CALLBACK)
     builder.button(text="💰 مشاهده تعرفه‌ها", callback_data=MENU_TARIFFS_CALLBACK)
-    builder.button(text="🎁 دریافت اکانت تست", callback_data="get_test_account")
+    #builder.button(text="🎁 دریافت اکانت تست", callback_data="get_test_account")
     builder.button(text=texts.BTN_BACK, callback_data=MENU_MAIN_CALLBACK)
     builder.adjust(1)
     return builder.as_markup()

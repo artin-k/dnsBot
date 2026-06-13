@@ -4,12 +4,13 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from html import escape
 from zoneinfo import ZoneInfo
+import jdatetime # <-- Add this line [1]
 
 import structlog
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, User as TelegramUser, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, User as TelegramUser, InlineKeyboardButton
 from sqlalchemy import func, select, delete, update # Added 'update'
 from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -179,6 +180,61 @@ logger = structlog.get_logger(__name__)
 
 from aiogram.filters.callback_data import CallbackData
 
+# Inside bot/routers/admin.py (At the top, below imports)
+
+import httpx  # Ensure httpx is imported at the top
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+# Match this with your buy.py base URL (No trailing slash)
+WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
+
+
+
+def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
+    """
+    Generates the registration inline keyboard [1].
+    """
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{device_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
+    """
+    Real-time API fallback: Queries Control D on approval to fetch the exact 
+    legacy IPv4 addresses mapped to this device.
+    """
+    url = f"https://api.controld.com/devices/{device_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json"
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                body = data.get("body", {})
+                resolver_info = body.get("resolvers") or body.get("resolver") or {}
+                v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
+                return {
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                }
+        except Exception as e:
+            logger.warning("failed_to_fetch_controld_ips_for_admin", device_id=device_id, error=str(e))
+            
+    # Reliable hardcoded fallbacks
+    return {
+        "ipv4_primary": "94.183.166.203",
+        "ipv4_secondary": "94.183.166.208"
+    }
+
 # Callback used for interactive order management
 class AdminOrderCallback(CallbackData, prefix="adm_ord"):
     action: str
@@ -229,6 +285,8 @@ async def admin_order_callback(
 
     payment_service = PaymentService(session, VPNPanelService(), settings)
 
+# Inside bot/routers/admin.py -> admin_order_callback()
+
     if action == "complete":
         if order.status == OrderStatus.COMPLETED.value:
             await callback.answer("این سفارش قبلاً تکمیل شده است.", show_alert=True)
@@ -236,10 +294,31 @@ async def admin_order_callback(
         if order.payment:
             try:
                 result = await payment_service.approve_payment(order.payment.id)
-                # Notify the user on Telegram
+                
+                # Fetch the generated VPNService record
+                stmt = select(VPNService).where(VPNService.order_id == order.id)
+                res = await session.execute(stmt)
+                service_record = res.scalars().first()
+                
+                device_id = "unknown"
+                ips = {"ipv4_primary": "94.183.166.203", "ipv4_secondary": "94.183.166.208"}
+                
+                if service_record:
+                    device_id = service_record.controld_device_id
+                    # Query Control D in real-time to fetch the exact assigned legacy IPs [1]
+                    ips = await get_controld_device_ips(device_id, settings)
+
+                # Notify the user on Telegram with the new style and registration keyboard
                 await callback.bot.send_message(
                     chat_id=result.user_telegram_id,
-                    text=_approved_message(result),
+                    text=_approved_message(
+                        result, 
+                        expire_at=service_record.expire_at if service_record else None,
+                        ipv4_primary=ips["ipv4_primary"],
+                        ipv4_secondary=ips["ipv4_secondary"]
+                    ),
+                    reply_markup=_get_ip_registration_keyboard(device_id) if service_record else None,
+                    parse_mode="HTML"
                 )
                 await callback.message.answer(f"✅ سفارش {order.tracking_code} با موفقیت تکمیل و کانفیگ صادر شد.")
             except Exception as e:
@@ -294,6 +373,9 @@ async def admin_order_callback(
         return
 
 
+# Inside bot/routers/admin.py
+# Replace this function in bot/routers/admin.py
+
 @router.callback_query(F.data.startswith("admin_manual_activate:"))
 async def admin_manual_activate_order(
     callback: CallbackQuery,
@@ -338,10 +420,18 @@ async def admin_manual_activate_order(
         await callback.message.answer("❌ پروفایل Control D برای این پلن یا تنظیمات ربات ثبت نشده است.")
         return
 
+    # --- FIXED: Use only duration_hours from order.plan and provide a 30-day fallback ---
+    duration_hours = order.plan.duration_hours or 720
+    # Dynamically calculate days to save to the database column safely [1]
+    duration_days = duration_hours // 24 if duration_hours >= 24 else 1
+
     device_name = f"tg_user_{order.user.telegram_id}_{order.tracking_code}"
     try:
-        device_data = await ControlDService(settings).create_device(
+        # Use create_dns_device to parse full legacy IPs, dot, and stamps [1]
+        device_data = await ControlDService(settings).create_dns_device(
+            tg_user_id=order.user.telegram_id,
             profile_id=profile_id,
+            duration_hours=duration_hours,
             device_name=device_name,
         )
     except (TimeoutError, asyncio.TimeoutError) as exc:
@@ -354,7 +444,6 @@ async def admin_manual_activate_order(
         return
 
     if not device_data or not device_data.get("device_id") or not device_data.get("doh"):
-        # Error details have already been logged by create_device()
         await callback.message.answer(
             "❌ پاسخ Control D ناقص یا معتبر نبود.\n\n"
             "لطفاً موارد زیر را چک کنید:\n"
@@ -366,10 +455,12 @@ async def admin_manual_activate_order(
         return
 
     now = datetime.now(timezone.utc)
-    expire_at = now + timedelta(days=order.plan.duration_days)
+    expire_at = now + timedelta(hours=duration_hours)  # High-precision duration calculation
     device_id = str(device_data["device_id"])
     doh_link = str(device_data["doh"])
     dot_link = str(device_data.get("dot") or "")
+    ipv4_primary = str(device_data.get("ipv4_primary") or "94.183.166.203")
+    ipv4_secondary = str(device_data.get("ipv4_secondary") or "94.183.166.208")
     username = order.custom_username or device_name
 
     await SubscriptionsRepository(session).create(
@@ -389,7 +480,7 @@ async def admin_manual_activate_order(
         config_link=doh_link,
         subscription_link=dot_link or None,
         volume_gb=order.plan.volume_gb,
-        duration_days=order.plan.duration_days,
+        duration_days=duration_days,  # --- FIXED: Use calculated duration_days ---
         expire_at=expire_at,
         status=VPNServiceStatus.ACTIVE.value,
     )
@@ -404,15 +495,23 @@ async def admin_manual_activate_order(
     await session.commit()
 
     user_delivery_failed = False
+    
+    # --- FIXED: Generate the target layout with correct arguments ---
     user_text = _manual_activation_user_message(
         plan_title=order.plan.title,
-        duration_days=order.plan.duration_days,
+        duration_hours=duration_hours,
         expire_at=expire_at,
-        doh_link=doh_link,
-        dot_link=dot_link or None,
+        ipv4_primary=ipv4_primary,
+        ipv4_secondary=ipv4_secondary,
     )
     try:
-        await callback.bot.send_message(chat_id=order.user.telegram_id, text=user_text)
+        # Notify the user with the success card and registration keyboard markup [1]
+        await callback.bot.send_message(
+            chat_id=order.user.telegram_id, 
+            text=user_text,
+            reply_markup=_get_ip_registration_keyboard(device_id),
+            parse_mode="HTML"
+        )
     except Exception as exc:
         user_delivery_failed = True
         logger.warning(
@@ -437,7 +536,6 @@ async def admin_manual_activate_order(
     refreshed_order = await OrdersRepository(session).get_with_details(order.id)
     if refreshed_order is not None:
         await _show_order_detail_panel(callback, refreshed_order)
-
 
 @router.message(Command("admin"))
 async def admin_panel(message: Message, session: AsyncSession, settings: Settings) -> None:
@@ -988,6 +1086,8 @@ async def admin_affiliate_action(
     await _safe_edit_or_answer(callback, "عملیات نامعتبر است.", reply_markup=affiliate_management_keyboard())
 
 
+# Inside bot/routers/admin.py -> admin_payment_action()
+
 @router.callback_query(AdminPaymentCallback.filter())
 async def admin_payment_action(
     callback: CallbackQuery,
@@ -1003,21 +1103,41 @@ async def admin_payment_action(
     try:
         if callback_data.action == "approve":
             result = await payment_service.approve_payment(callback_data.payment_id)
+            
+            # Fetch the generated VPNService record
+            payment_record = await session.get(Payment, callback_data.payment_id)
+            device_id = "unknown"
+            service_record = None
+            ips = {"ipv4_primary": "94.183.166.203", "ipv4_secondary": "94.183.166.208"}
+            
+            if payment_record and payment_record.order_id:
+                stmt = select(VPNService).where(VPNService.order_id == payment_record.order_id)
+                res = await session.execute(stmt)
+                service_record = res.scalars().first()
+                if service_record:
+                    device_id = service_record.controld_device_id
+                    # Query Control D in real-time to fetch the exact assigned legacy IPs [1]
+                    ips = await get_controld_device_ips(device_id, settings)
+
             await callback.bot.send_message(
                 chat_id=result.user_telegram_id,
-                text=_approved_message(result),
+                text=_approved_message(
+                    result, 
+                    expire_at=service_record.expire_at if service_record else None,
+                    ipv4_primary=ips["ipv4_primary"],
+                    ipv4_secondary=ips["ipv4_secondary"]
+                ),
+                reply_markup=_get_ip_registration_keyboard(device_id) if service_record else None,
+                parse_mode="HTML"
             )
+            
             if result.waiting_inventory:
-                await callback.answer("❌ موجودی کانفیگ برای این تعرفه تمام شده است. ابتدا موجودی را شارژ کنید.", show_alert=True)
-                if result.order_kind == OrderKind.PURCHASE.value & result.plan_id:
-                    await notify_admins_low_or_empty_inventory(callback.bot, session, result.plan_id)
+                await callback.answer("❌ موجودی کانفیگ برای این تعرفه تمام شده است.", show_alert=True)
             else:
                 await callback.answer("پرداخت تایید شد.")
-                # Inventory belongs only to new purchases. Renewals extend the existing
-                # service/config and must not trigger low-stock or empty-stock alerts.
-                # if result.order_kind == OrderKind.PURCHASE.value and result.plan_id:
-                #     await notify_admins_low_or_empty_inventory(callback.bot, session, result.plan_id)
             await _remove_admin_buttons(callback)
+            
+
         elif callback_data.action == "reject":
             result = await payment_service.reject_payment(callback_data.payment_id)
             await callback.bot.send_message(
@@ -3123,74 +3243,91 @@ def _format_service_detail(service) -> str:
 {escape(service.subscription_link or "-")}"""
 
 
-# Open bot/routers/admin.py
-# Replace your _approved_message helper with this version:
+# Inside bot/routers/admin.py
 
-def _approved_message(result: ApprovedPaymentResult) -> str:
+def _approved_message(
+    result: ApprovedPaymentResult, 
+    expire_at: datetime | None = None,
+    ipv4_primary: str = "94.183.166.203",
+    ipv4_secondary: str = "94.183.166.208"
+) -> str:
     if result.waiting_inventory:
         return "پرداخت شما تایید شد. پشتیبانی به‌زودی اطلاعات اشتراک شما را ارسال می‌کند."
         
+    target_expire = expire_at or result.new_expire_at
+    try:
+        tehran_tz = ZoneInfo("Asia/Tehran")
+        tehran_expire = target_expire.astimezone(tehran_tz)
+        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=tehran_expire)
+        expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
+    except Exception:
+        expire_str = target_expire.strftime("%Y-%m-%d %H:%M:%S") if target_expire else "-"
+
+    # Translate duration cleanly
     hours = result.duration_days
     calculated_days = hours // 24 if hours >= 24 and hours % 24 == 0 else hours
     unit = "روز" if hours >= 24 and hours % 24 == 0 else "ساعت"
+    duration_text = f"{calculated_days} {unit}"
 
-    if result.order_kind == OrderKind.RENEWAL.value:
-        expire_at = _format_datetime(result.new_expire_at)
-        return f"""✅ <b>تمدید اشتراک شما با موفقیت انجام شد</b>
+    return f"""🔹 تاریخ انقضاء پلن : {expire_str}
+🔷 زمان باقی‌مانده: {duration_text}
+دی ان اس اختصاصی شما :
 
-👤 <b>نام دستگاه:</b> <code>{escape(result.service_username)}</code>
-⚡ <b>پلن تمدید:</b> {escape(result.plan_title)}
-🗓 <b>اعتبار افزوده:</b> {calculated_days} {unit}
-📅 <b>تاریخ انقضای جدید:</b> {expire_at}"""
+🔷 Primary : <code>{ipv4_primary}</code>
+🔷 Secondary : <code>{ipv4_secondary}</code>
 
-    # --- ADVANCED ENDPOINTS DISPLAY FOR NEW PURCHASES ---
-    device_name = escape(result.service_username)
-    calculated_duration = f"{calculated_days} {unit}"
-    resolver_id = result.resolver_id or (result.config_link.split("/")[-1] if result.config_link else "ثبت نشده")
-    stamp = result.stamp or "ثبت نشده"
 
-    return f"""✅ <b>اشتراک شما با موفقیت ساخته شد!</b>
+مراحل ثبت آی‌پی :
+1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
+2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-👤 <b>نام سرویس:</b> <code>{device_name}</code>
-🗓 <b>اعتبار:</b> {calculated_duration}
+: مخصوص موبایل DNS
+🔷 Primary : <code>2.189.86.93</code>
+🔷 Secondary : <code>2.189.86.94</code>
 
-🔐 <b>SECURE DNS (Encrypted)</b>
+توجه : اگر لینک ثبت آی‌پی اتوماتیک برای شما باز نشد ، از لینک ثبت آی‌پی اتوماتیک 2 استفاده نمایید"""
 
-🆔 <b>Resolver ID:</b>
-<code>{resolver_id}</code>
-
-🌐 <b>DNS-over-HTTPS/3:</b>
-<code>{result.config_link}</code>
-
-🔒 <b>DNS-over-TLS/DoQ:</b>
-<code>{result.subscription_link}</code>
-
-🖥 <b>Bootstrap IPs:</b>
-<code>76.76.2.22</code> | <code>2606:1a40::22</code>
-
-🔗 <b>DNS Stamp:</b>
-<code>{stamp}</code>
-
-⚠️ <i>جهت استفاده در برنامه‌هایی مانند v2rayNG، NekoBox یا Hiddify از DNS Stamp یا لینک‌های فوق استفاده کنید.</i>"""
-
+# Inside bot/routers/admin.py (Bottom)
 
 def _manual_activation_user_message(
     *,
     plan_title: str,
-    duration_days: int,
+    duration_hours: int,
     expire_at: datetime,
-    doh_link: str,
-    dot_link: str | None,
+    ipv4_primary: str = "94.183.166.203",
+    ipv4_secondary: str = "94.183.166.208"
 ) -> str:
-    dot_section = f"\n\n🔒 آدرس DoT شما:\n<code>{escape(dot_link)}</code>" if dot_link else ""
-    return f"""✅ اشتراک DNS شما با موفقیت فعال شد
+    try:
+        tehran_tz = ZoneInfo("Asia/Tehran")
+        tehran_expire = expire_at.astimezone(tehran_tz)
+        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=tehran_expire)
+        expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
+    except Exception:
+        expire_str = expire_at.strftime("%Y-%m-%d %H:%M:%S")
 
-⚡ پلن: {escape(plan_title)}
-🗓 اعتبار: {duration_days} روز
-📅 تاریخ انقضا: {_format_datetime(expire_at)}
+    # Format remaining time
+    days = duration_hours // 24 if duration_hours >= 24 and duration_hours % 24 == 0 else duration_hours
+    unit = "روز" if duration_hours >= 24 and duration_hours % 24 == 0 else "ساعت"
 
-🌐 دی‌ان‌اس DoH شما:
-<code>{escape(doh_link)}</code>{dot_section}"""
+    return f"""🔹 تاریخ انقضاء پلن : {expire_str}
+🔷 زمان باقی‌مانده: {days} {unit}
+دی ان اس اختصاصی شما :
+
+🔷 Primary : <code>{ipv4_primary}</code>
+🔷 Secondary : <code>{ipv4_secondary}</code>
+
+
+مراحل ثبت آی‌پی :
+1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
+2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+
+: مخصوص موبایل DNS
+🔷 Primary : <code>2.189.86.93</code>
+🔷 Secondary : <code>2.189.86.94</code>
+
+توجه : اگر لینک ثبت آی‌پی اتوماتیک برای شما باز نشد ، از لینک ثبت آی‌پی اتوماتیک 2 استفاده نمایید"""
 
 
 def _format_datetime(value: datetime | None) -> str:
