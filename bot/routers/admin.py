@@ -8,7 +8,7 @@ import jdatetime # <-- Add this line [1]
 
 import structlog
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message, User as TelegramUser, InlineKeyboardButton
 from sqlalchemy import func, select, delete, update # Added 'update'
@@ -174,6 +174,7 @@ from bot.states.admin import (
     AdminWalletAdjustStates,
     AdminWithdrawalStates,
 )
+from bot.states.buy import BuyStates
 
 router = Router(name="admin")
 logger = structlog.get_logger(__name__)
@@ -3243,8 +3244,6 @@ def _format_service_detail(service) -> str:
 {escape(service.subscription_link or "-")}"""
 
 
-# Inside bot/routers/admin.py
-
 def _approved_message(
     result: ApprovedPaymentResult, 
     expire_at: datetime | None = None,
@@ -3263,7 +3262,6 @@ def _approved_message(
     except Exception:
         expire_str = target_expire.strftime("%Y-%m-%d %H:%M:%S") if target_expire else "-"
 
-    # Translate duration cleanly
     hours = result.duration_days
     calculated_days = hours // 24 if hours >= 24 and hours % 24 == 0 else hours
     unit = "روز" if hours >= 24 and hours % 24 == 0 else "ساعت"
@@ -3282,13 +3280,8 @@ def _approved_message(
 2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-: مخصوص موبایل DNS
-🔷 Primary : <code>2.189.86.93</code>
-🔷 Secondary : <code>2.189.86.94</code>
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
 
-توجه : اگر لینک ثبت آی‌پی اتوماتیک برای شما باز نشد ، از لینک ثبت آی‌پی اتوماتیک 2 استفاده نمایید"""
-
-# Inside bot/routers/admin.py (Bottom)
 
 def _manual_activation_user_message(
     *,
@@ -3306,7 +3299,6 @@ def _manual_activation_user_message(
     except Exception:
         expire_str = expire_at.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Format remaining time
     days = duration_hours // 24 if duration_hours >= 24 and duration_hours % 24 == 0 else duration_hours
     unit = "روز" if duration_hours >= 24 and duration_hours % 24 == 0 else "ساعت"
 
@@ -3323,11 +3315,21 @@ def _manual_activation_user_message(
 2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-: مخصوص موبایل DNS
-🔷 Primary : <code>2.189.86.93</code>
-🔷 Secondary : <code>2.189.86.94</code>
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
 
-توجه : اگر لینک ثبت آی‌پی اتوماتیک برای شما باز نشد ، از لینک ثبت آی‌پی اتوماتیک 2 استفاده نمایید"""
+@router.callback_query(F.data.startswith("manual_ip_reg:"), StateFilter("*"))
+async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    device_id = callback.data.split(":")[1]
+    
+    await state.set_state(BuyStates.waiting_manual_ip)
+    await state.update_data(device_id=device_id)
+    
+    # "خارجی" removed from prompt
+    await callback.message.answer(
+        "🤖 لطفاً آی‌پی (IPv4) خود را بدون فیلترشکن وارد کنید.\n\n"
+        "مثال: `5.200.12.1`"
+    )
 
 
 def _format_datetime(value: datetime | None) -> str:

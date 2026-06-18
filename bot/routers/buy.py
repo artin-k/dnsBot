@@ -145,6 +145,17 @@ async def show_plans(event: Message | CallbackQuery, state: FSMContext, session:
     else:
         await event.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
+# Inside bot/routers/buy.py (At the top, below configurations)
+
+def format_duration_fa(hours: int) -> str:
+    """
+    Formats hours dynamically into a readable Persian duration string [1].
+    """
+    if hours >= 24 and hours % 24 == 0:
+        days = hours // 24
+        return f"{days} روز"
+    return f"{hours} ساعت"
+
 @router.callback_query(F.data == "buy_back_to_menu")
 async def buy_back_to_menu(callback: CallbackQuery) -> None:
     await callback.answer()
@@ -224,10 +235,17 @@ async def handle_get_test_account(
         is_test_account=True
     )
     session.add(new_test_sub)
+
+    # Inside bot/routers/buy.py -> handle_get_test_account()
+
+    # ... after committing the database transaction ...
     await session.commit()
     await state.clear()
 
-    # Shamsi translation
+    # --- FIXED: Define duration_text for trial ---
+    duration_text = "۲ ساعت"  # Test account is always 2 hours [1]
+
+    # Format Shamsi translation
     try:
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
@@ -239,7 +257,7 @@ async def handle_get_test_account(
 
     # Match the layout design of your screenshot
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
-🔷 زمان باقی‌مانده: 2 ساعت
+🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{device_data['ipv4_primary']}</code>
@@ -251,18 +269,13 @@ async def handle_get_test_account(
 2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-: مخصوص موبایل DNS
-🔷 Primary : <code>2.189.86.93</code>
-🔷 Secondary : <code>2.189.86.94</code>
-
-توجه : اگر لینک ثبت آی‌پی اتوماتیک برای شما باز نشد ، از لینک ثبت آی‌پی اتوماتیک 2 استفاده نمایید"""
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
 
     await callback.message.answer(
         success_text, 
         reply_markup=_get_ip_registration_keyboard(device_data["device_id"]), 
         parse_mode="HTML"
     )
-
 
 # Inside bot/routers/buy.py
 
@@ -415,7 +428,6 @@ async def handle_pay_instant_wallet(
         )
         session.add(new_subscription)
         
-# Inside bot/routers/buy.py -> handle_pay_instant_wallet()
 
     else:
         # Renewal - accumulate time
@@ -448,10 +460,17 @@ async def handle_pay_instant_wallet(
 
     # Atomic balance deduction [1]
     user.wallet_balance -= final_price
+# Inside bot/routers/buy.py -> handle_pay_instant_wallet()
+
+    # ... after committing the database transaction ...
     await session.commit()
     await state.clear()
 
-    # Format Shamsi translation
+    # --- FIXED: Define duration_text dynamically ---
+    duration_hours = plan.duration_hours or 720
+    duration_text = format_duration_fa(duration_hours)  # Calculates "30 روز" or "72 ساعت" [1]
+
+    # Format Expiration Timestamp using Jalali/Shamsi safely
     try:
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
@@ -463,7 +482,7 @@ async def handle_pay_instant_wallet(
 
     # Beautiful Output design matching your target screenshot
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
-🔷 زمان باقی‌مانده: {plan.duration_hours} ساعت
+🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{ipv4_primary}</code>
@@ -475,11 +494,7 @@ async def handle_pay_instant_wallet(
 2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-: مخصوص موبایل DNS
-🔷 Primary : <code>2.189.86.93</code>
-🔷 Secondary : <code>2.189.86.94</code>
-
-توجه : اگر لینک ثبت آی‌پی اتوماتیک برای شما باز نشد ، از لینک ثبت آی‌پی اتوماتیک 2 استفاده نمایید"""
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
 
     await callback.message.answer(
         success_text, 
@@ -613,11 +628,11 @@ async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) 
     await state.set_state(BuyStates.waiting_manual_ip)
     await state.update_data(device_id=device_id)
     
+    # "خارجی" removed from prompt
     await callback.message.answer(
-        "🤖 لطفاً آی‌پی خارجی خود (IPv4) را بدون فیلترشکن وارد کنید.\n\n"
+        "🤖 لطفاً آی‌پی (IPv4) خود را بدون فیلترشکن وارد کنید.\n\n"
         "مثال: `5.200.12.1`"
     )
-
 
 @router.message(BuyStates.waiting_manual_ip, F.text)
 async def process_manual_ip(

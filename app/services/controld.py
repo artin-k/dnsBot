@@ -249,7 +249,29 @@ async def delete_device(device_id: str) -> bool:
         logger.error(f"Error during deleting Control D device {device_id}: {str(e)}")
         return False
 
+# app/services/controld.py
 
+async def update_dns_device_profile(device_id: str, profile_id: str) -> bool:
+    """
+    Updates the profile (location/blocking rules) of an existing device in Control D.
+    """
+    url = f"{BASE_URL}/devices/{device_id}"
+    payload = {
+        "profile_id": profile_id
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
+            if response.status_code == 200:
+                logger.info("controld_device_profile_updated", device_id=device_id, profile_id=profile_id)
+                return True
+            else:
+                logger.error(f"Failed to update Control D device profile {device_id} (Status {response.status_code}): {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Error during updating Control D device profile {device_id}: {str(e)}")
+            return False
+        
 class ControlDService:
     """
     Class-based wrapper around Control D async functions.
@@ -280,3 +302,7 @@ class ControlDService:
 
     async def delete_device(self, device_id: str) -> bool:
         return await delete_device(device_id=device_id)
+    
+    async def update_device_profile(self, device_id: str, profile_id: str) -> bool:
+        """Exposes the profile updater function inside the class."""
+        return await update_dns_device_profile(device_id=device_id, profile_id=profile_id)
