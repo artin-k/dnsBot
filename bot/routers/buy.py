@@ -665,6 +665,8 @@ async def handle_pay_manual_card(
     )
 
 
+# Inside bot/routers/buy.py -> receive_receipt_photo()
+
 @router.message(BuyStates.waiting_receipt, F.photo)
 async def receive_receipt_photo(
     message: Message,
@@ -694,6 +696,10 @@ async def receive_receipt_photo(
     await state.clear()
 
     await message.answer("✅ رسید شما دریافت شد و در انتظار تایید ادمین است.")
+
+    # --- FIXED: Local import to bypass circular dependency name-error ---
+    from bot.notifications import notify_admins_order_payment
+
     sent_count = await notify_admins_order_payment(
         bot=message.bot,
         session=session,
@@ -704,7 +710,6 @@ async def receive_receipt_photo(
     )
     if sent_count == 0:
         await message.answer("رسید دریافت شد، اما ادمینی برای بررسی تنظیم نشده است. لطفاً با پشتیبانی تماس بگیرید.")
-
 
 # ============================================================================
 # 6. MANUAL IP REGISTRATION FSM FLOW

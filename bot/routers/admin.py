@@ -532,6 +532,7 @@ async def admin_manual_activate_order(
     refreshed_order = await OrdersRepository(session).get_with_details(order.id)
     if refreshed_order is not None:
         await _show_order_detail_panel(callback, refreshed_order)
+    
 @router.message(Command("admin"))
 async def admin_panel(message: Message, session: AsyncSession, settings: Settings) -> None:
     if not await _is_admin(message.from_user.id if message.from_user else None, session, settings):
