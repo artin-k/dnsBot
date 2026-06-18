@@ -272,6 +272,55 @@ async def update_dns_device_profile(device_id: str, profile_id: str) -> bool:
             logger.error(f"Error during updating Control D device profile {device_id}: {str(e)}")
             return False
         
+    
+# app/services/controld.py
+
+async def fetch_controld_proxies() -> list[dict] | None:
+    """
+    Fetches all available proxy locations (POP codes) from Control D [1].
+    """
+    url = f"{BASE_URL}/proxies"
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, headers=_get_headers(), timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                body = data.get("body", {})
+                proxies = body.get("proxies", [])
+                
+                result = []
+                for p in proxies:
+                    result.append({
+                        "code": p.get("code") or p.get("pk"),  # e.g., 'JFK', 'FRA' [1]
+                        "country": p.get("country"),
+                        "city": p.get("city")
+                    })
+                return result
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching Control D proxies: {str(e)}")
+            return None
+
+
+async def update_service_route(profile_id: str, service_name: str, pop_code: str) -> bool:
+    """
+    Sets a redirection route for a specific service (like netflix, youtube) 
+    via a specific proxy POP code [1].
+    """
+    url = f"{BASE_URL}/profiles/{profile_id}/services/{service_name}"
+    payload = {
+        "do": 3,      # 3 represents Proxy / Redirect [1]
+        "status": 1,  # 1 represents Enabled [1]
+        "via": pop_code
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
+            return response.status_code in (200, 201)
+        except Exception as e:
+            logger.error(f"Error updating service route for {service_name}: {str(e)}")
+            return False
+        
 class ControlDService:
     """
     Class-based wrapper around Control D async functions.
@@ -306,3 +355,9 @@ class ControlDService:
     async def update_device_profile(self, device_id: str, profile_id: str) -> bool:
         """Exposes the profile updater function inside the class."""
         return await update_dns_device_profile(device_id=device_id, profile_id=profile_id)
+    
+    async def fetch_controld_proxies(self) -> list[dict] | None:
+        return await fetch_controld_proxies()
+
+    async def update_service_route(self, profile_id: str, service_name: str, pop_code: str) -> bool:
+        return await update_service_route(profile_id, service_name, pop_code)

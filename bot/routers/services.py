@@ -6,9 +6,11 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.models import Plan, VPNService
 from app.repositories.services import ServicesRepository
 from app.repositories.users import UsersRepository
 from app.services.controld import ControlDService  # ControlD dynamic profile wrapper
@@ -21,10 +23,7 @@ router = Router(name="services")
 
 
 def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
-    """
-    Generates a unified active service management keyboard.
-    Appends the dynamic location changer option to the bottom [1].
-    """
+    """Generates active service management keyboard."""
     builder = InlineKeyboardBuilder()
     builder.button(
         text="🔗 لینک‌های اتصال",
@@ -35,8 +34,8 @@ def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
         callback_data=ServiceActionCallback(action="status", service_id=service_id)
     )
     builder.button(
-        text="🗺 تغییر سرور / لوکیشن",
-        callback_data=f"change_location_select:{service_id}"
+        text="🗺 تنظیم لوکیشن سرویس‌ها",
+        callback_data=f"service_routing_menu:{service_id}"  # Triggers service selection [1]
     )
     builder.adjust(1)
     return builder.as_markup()
@@ -93,11 +92,23 @@ async def service_action(
 
 
 # ============================================================================
-# DYNAMIC LOCATION CHANGER ACTION HANDLERS [1]
+# SERVICE ROUTING CONTROLLER (Interactive Redirection Menu) [1]
 # ============================================================================
 
-@router.callback_query(F.data.startswith("change_location_select:"), StateFilter("*"))
-async def change_location_select(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+# Define popular services supported by Control D
+POPULAR_SERVICES = [
+    {"pk": "netflix", "name": "🎬 Netflix"},
+    {"pk": "youtube", "name": "📹 YouTube"},
+    {"pk": "spotify", "name": "🎵 Spotify"},
+    {"pk": "disney", "name": "🏰 Disney+"},
+    {"pk": "twitch", "name": "🎮 Twitch"},
+    {"pk": "chatgpt", "name": "🤖 ChatGPT / OpenAI"}
+]
+
+
+@router.callback_query(F.data.startswith("service_routing_menu:"), StateFilter("*"))
+async def service_routing_menu(callback: CallbackQuery, session: AsyncSession) -> None:
+    """Lists popular web services the user can customize [1]."""
     await callback.answer()
     if callback.message is None:
         return
@@ -108,64 +119,124 @@ async def change_location_select(callback: CallbackQuery, session: AsyncSession,
         await callback.message.answer("❌ سرویس پیدا نشد.")
         return
 
-    # Fetch available profiles/locations in real-time from Control D API [1]
-    controld_service = ControlDService(settings)
-    profiles = await controld_service.fetch_controld_profiles()
-    
-    if not profiles:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد یا سروری تعریف نشده است.")
-        return
-
     builder = InlineKeyboardBuilder()
-    for p in profiles:
-        p_name = p.get("name") or "لوکیشن"
+    for s in POPULAR_SERVICES:
         builder.button(
-            text=f"📍 {p_name}",
-            callback_data=f"apply_loc_change:{service_id}:{p['id']}:{p_name}"
+            text=s["name"],
+            callback_data=f"select_srv_loc:{service_id}:{s['pk']}"  # Selected service [1]
         )
-    # Allows returning back to the active service status summary
     builder.button(text="↩️ بازگشت", callback_data=ServiceActionCallback(action="status", service_id=service_id))
-    builder.adjust(1)
+    builder.adjust(2)
 
     await callback.message.edit_text(
-        f"🗺 تعویض سرور / لوکیشن سرویس <b>{escape(service.username)}</b>\n\n"
-        f"یک سرور از لیست زیر انتخاب کنید. تغییر لوکیشن بلافاصله اعمال می‌شود و نیاز به تغییر تنظیمات یا کپی مجدد لینک در گوشی خود ندارید:",
+        f"🗺 <b>تنظیم لوکیشن سرویس‌ها</b> | دستگاه: <code>{escape(service.username)}</code>\n\n"
+        f"لطفاً برنامه‌ای که می‌خواهید لوکیشن آن را اختصاصی تغییر دهید انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data.startswith("apply_loc_change:"), StateFilter("*"))
-async def apply_location_change(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+@router.callback_query(F.data.startswith("select_srv_loc:"), StateFilter("*"))
+async def select_service_location(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+    """Fetches and displays available Control D proxies as buttons [1]."""
     await callback.answer()
     if callback.message is None:
         return
 
     parts = callback.data.split(":")
     service_id = int(parts[1])
-    profile_id = parts[2]
-    profile_name = parts[3]
+    service_pk = parts[2]
+
+    # Fetch available POP proxies from Control D API [1]
+    controld_service = ControlDService(settings)
+    proxies = await controld_service.fetch_controld_proxies()
+    
+    if not proxies:
+        await callback.message.answer("❌ خطایی در بارگذاری لوکیشن‌های معتبر رخ داد.")
+        return
+
+    # Map target service display name
+    service_display = next((s["name"] for s in POPULAR_SERVICES if s["pk"] == service_pk), service_pk)
+
+    builder = InlineKeyboardBuilder()
+    # Present popular proxy nodes (filter/limit if needed to keep buttons manageable)
+    for p in proxies[:12]:  # Show first 12 popular worldwide locations [1]
+        p_name = f"{p['country']} ({p['code']})"
+        builder.button(
+            text=f"📍 {p_name}",
+            callback_data=f"apply_srv_route:{service_id}:{service_pk}:{p['code']}:{p_name}"  # Apply routing [1]
+        )
+    builder.button(text="↩️ بازگشت", callback_data=f"service_routing_menu:{service_id}")
+    builder.adjust(2)
+
+    await callback.message.edit_text(
+        f"🗺 تنظیم لوکیشن برای <b>{service_display}</b>\n\n"
+        f"لطفاً کشوری که می‌خواهید ترافیک {service_display} از طریق آن عبور کند انتخاب کنید:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("apply_srv_route:"), StateFilter("*"))
+async def apply_service_route(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+    """Executes the PUT API call to redirect the service on Control D [1]."""
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    parts = callback.data.split(":")
+    service_id = int(parts[1])
+    service_pk = parts[2]
+    pop_code = parts[3]
+    pop_name = parts[4]
 
     service = await ServicesRepository(session).get(service_id)
     if service is None or not service.controld_device_id:
         await callback.message.answer("❌ سرویس یا شناسه دستگاه معتبر یافت نشد.")
         return
 
-    await callback.message.edit_text("⚙️ در حال تغییر لوکیشن سرور شما...")
-
-    # Instantly update device's linked Profile/Location inside Control D backend [1]
+    # Find the dynamic profile_id linked to this device
     controld_service = ControlDService(settings)
-    success = await controld_service.update_device_profile(service.controld_device_id, profile_id)
+    device_data = await controld_service.fetch_controld_profiles()
+    
+    # Simple fallback check to extract profile_id from device details
+    device_url = f"https://api.controld.com/devices/{service.controld_device_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json"
+    }
+    profile_id = None
+    async with httpx.AsyncClient() as client:
+        try:
+            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
+            if device_resp.status_code == 200:
+                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
+        except Exception:
+            pass
+
+    if not profile_id:
+        profile_id = settings.controld_profile_id
+
+    if not profile_id:
+        await callback.message.answer("❌ شناسه پروفایل این دستگاه یافت نشد.")
+        return
+
+    await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن سرویس شما به {pop_name}...")
+
+    # Execute the PUT routing command using the dynamic profile_id [1]
+    success = await controld_service.update_service_route(profile_id, service_pk, pop_code)
+
+    service_display = next((s["name"] for s in POPULAR_SERVICES if s["pk"] == service_pk), service_pk)
 
     if success:
         await callback.message.answer(
-            f"✅ سرور دستگاه <code>{escape(service.username)}</code> با موفقیت به <b>{escape(profile_name)}</b> تغییر یافت!\n\n"
-            f"تغییرات به صورت آنی روی دی‌ان‌اس اختصاصی شما اعمال شد.",
+            f"✅ ترافیک سرویس {service_display} شما با موفقیت به سرور <b>{escape(pop_name)}</b> هدایت شد!\n\n"
+            f"تغییرات به صورت آنی و بدون نیاز به تغییر لینک دی‌ان‌اس روی دستگاه شما اعمال شد.",
             reply_markup=main_menu_keyboard(),
             parse_mode="HTML"
         )
     else:
-        await callback.message.answer("❌ خطا در ارتباط با سرورهای Control D. تغییر لوکیشن انجام نشد.")
+        await callback.message.answer("❌ خطا در ثبت لوکیشن در پنل Control D. مجدداً تلاش کنید.")
 
 
 async def _safe_answer(callback: CallbackQuery, text: str) -> None:
