@@ -3263,7 +3263,6 @@ def _approved_message(
     duration_text = f"{calculated_days} {unit}"
 
     return f"""🔹 تاریخ انقضاء پلن : {expire_str}
-🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{ipv4_primary}</code>

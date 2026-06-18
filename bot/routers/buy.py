@@ -297,7 +297,6 @@ async def handle_apply_test_loc(
         expire_str = expire_at.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
-🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{device_data['ipv4_primary']}</code>
@@ -566,7 +565,6 @@ async def handle_pay_instant_wallet(
 
     # Success Card Message
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
-🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{ipv4_primary}</code>
