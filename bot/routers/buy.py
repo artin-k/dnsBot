@@ -42,7 +42,6 @@ from app.utils.formatting import format_money
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
 from bot.keyboards.buy import PlanCallback  # Native filter
-from bot.notifications import notify_admins_order_payment
 from bot.states.buy import BuyStates
 
 router = Router(name="buy")
