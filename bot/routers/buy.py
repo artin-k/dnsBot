@@ -1,4 +1,4 @@
-# Open bot/routers/buy.py
+# bot/routers/buy.py
 from __future__ import annotations
 
 import os
@@ -53,9 +53,7 @@ WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
-    """
-    Generates the inline keyboard matching your design screenshot [1].
-    """
+    """Generates the inline keyboard matching your design screenshot [1]."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
@@ -65,20 +63,37 @@ def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
 
 
 def format_duration_fa(hours: int) -> str:
-    """
-    Formats hours dynamically into a readable Persian duration string [1].
-    """
+    """Formats hours dynamically into a readable Persian duration string [1]."""
     if hours >= 24 and hours % 24 == 0:
         days = hours // 24
-        return f"{days}  روز"
+        return f"{days} روز"
     return f"{hours} ساعت"
 
 
+def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
+    """Dynamically calculates remaining days/hours from expire_at [1]."""
+    if not expire_at:
+        return "۳۰ روز"
+    now = datetime.now(timezone.utc)
+    if expire_at.tzinfo is None:
+        expire_at = expire_at.replace(tzinfo=timezone.utc)
+    
+    delta = expire_at - now
+    total_seconds = delta.total_seconds()
+    if total_seconds <= 0:
+        return "پایان یافته"
+    
+    total_hours = int(total_seconds // 3600)
+    if total_hours >= 24:
+        return f"{total_hours // 24} روز"
+    if total_hours > 0:
+        return f"{total_hours} ساعت"
+    total_minutes = int(total_seconds // 60)
+    return f"{total_minutes} دقیقه"
+
+
 async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
-    """
-    Real-time API fallback: Queries Control D on approval to fetch the exact 
-    legacy IPv4 addresses mapped to this device.
-    """
+    """Queries Control D on approval to fetch the exact legacy IPv4 addresses."""
     url = f"https://api.controld.com/devices/{device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
@@ -141,7 +156,6 @@ async def show_plans(event: Message | CallbackQuery, state: FSMContext, session:
             await event.answer(msg, reply_markup=main_menu_keyboard())
         return
 
-    # Build the inline plans keyboard
     builder = InlineKeyboardBuilder()
     for plan in plans:
         formatted_price = f"{plan.price:,}"
@@ -175,7 +189,7 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT (FREE TRIAL) FLOW WITH DYNAMIC LOCATION SELECTION [1]
+# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES [1]
 # ============================================================================
 
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
@@ -208,26 +222,27 @@ async def handle_get_test_account(
 
     await callback.answer()
 
-    # Fetch available profiles dynamically from Control D API [1]
+    # Fetch worldwide countries (proxies) from Control D API [1]
     controld_service = ControlDService(settings)
-    profiles = await controld_service.fetch_controld_profiles()
+    proxies = await controld_service.fetch_controld_proxies()
     
-    if not profiles:
+    if not proxies:
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
     builder = InlineKeyboardBuilder()
-    for p in profiles:
+    for p in proxies[:12]:  # Show top 12 popular locations [1]
+        p_name = f"{p['country']} ({p['code']})"
         builder.button(
-            text=f"📍 {p['name']}",
-            callback_data=f"apply_test_loc:{p['id']}"  # Routes to creation with chosen profile [1]
+            text=f"📍 {p_name}",
+            callback_data=f"apply_test_loc:{p['code']}"  # Selected POP code [1]
         )
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
-    builder.adjust(1)
+    builder.adjust(2)
 
     await callback.message.edit_text(
         "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
-        "🗺 لطفاً سرور (لوکیشن) مورد نظر خود را برای اکانت تست انتخاب کنید:",
+        "🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای اکانت تست انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -244,12 +259,17 @@ async def handle_apply_test_loc(
     if callback.message is None or callback.from_user is None:
         return
 
-    profile_id = callback.data.split(":")[1]
+    pop_code = callback.data.split(":")[1]  # The chosen POP code (e.g., FRA, JFK) [1]
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
     if user is None:
         return
 
     await callback.message.edit_text("⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...")
+
+    profile_id = settings.controld_profile_id
+    if not profile_id:
+        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
+        return
 
     random_hex = secrets.token_hex(4)
     unique_device_name = f"tg_test_{user.telegram_id}_{random_hex}"
@@ -257,14 +277,20 @@ async def handle_apply_test_loc(
     controld_service = ControlDService(settings)
     device_data = await controld_service.create_dns_device(
         tg_user_id=user.telegram_id,
-        profile_id=profile_id,  # Uses the user's selected location [1]
+        profile_id=profile_id,
         duration_hours=2,
         device_name=unique_device_name
     )
 
     if device_data is None:
-        await callback.message.answer("❌ خطا در برقراری ارتباط با سرورهای Control D. لطفاً مجدداً تلاش کنید.")
+        await callback.message.answer("❌ خطا در برقراری ارتباط با سرورهای Control D.")
         return
+
+    device_id = device_data["device_id"]
+    
+    # --- REDIRECT DEFAULT PROFILE ROUTE VIA SELECTED COUNTRY ---
+    # Sets the entire overall proxy location of this profile to the selected POP code [1]
+    await controld_service.update_service_route(profile_id, "default", pop_code) [1]
 
     now = datetime.now(timezone.utc)
     expire_at = now + timedelta(hours=2)
@@ -272,7 +298,7 @@ async def handle_apply_test_loc(
     new_test_sub = VPNService(
         user_id=user.id,
         plan_id=None,
-        controld_device_id=device_data["device_id"],
+        controld_device_id=device_id,
         config_link=device_data["doh"],
         subscription_link=device_data["dot"],
         username=unique_device_name,
@@ -297,6 +323,7 @@ async def handle_apply_test_loc(
         expire_str = expire_at.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
+🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{device_data['ipv4_primary']}</code>
@@ -312,13 +339,13 @@ async def handle_apply_test_loc(
 
     await callback.message.answer(
         success_text, 
-        reply_markup=_get_ip_registration_keyboard(device_data["device_id"]), 
+        reply_markup=_get_ip_registration_keyboard(device_id), 
         parse_mode="HTML"
     )
 
 
 # ============================================================================
-# 3. CHOOSE PLAN & CUSTOM LOCATION SELECTION FLOW [1]
+# 3. CHOOSE PLAN & WORLDWIDE LOCATION SELECTION FLOW [1]
 # ============================================================================
 
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
@@ -341,26 +368,27 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Fetch profiles/locations dynamically from Control D API [1]
+    # Fetch actual worldwide proxy locations from Control D [1]
     controld_service = ControlDService(settings)
-    profiles = await controld_service.fetch_controld_profiles()
+    proxies = await controld_service.fetch_controld_proxies()
     
-    if not profiles:
+    if not proxies:
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
     builder = InlineKeyboardBuilder()
-    for p in profiles:
+    for p in proxies[:12]:  # Show top 12 popular worldwide locations [1]
+        p_name = f"{p['country']} ({p['code']})"
         builder.button(
-            text=f"📍 {p['name']}",
-            callback_data=f"buy_plan_loc:{plan.id}:{p['id']}"  # Appends selected profile_id [1]
+            text=f"📍 {p_name}",
+            callback_data=f"buy_plan_loc:{plan.id}:{p['code']}"  # Appends selected POP code [1]
         )
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
-    builder.adjust(1)
+    builder.adjust(2)
 
     await callback.message.edit_text(
         f"⚡ پلن انتخاب شده: <b>{escape(plan.title)}</b>\n\n"
-        f"🗺 لطفاً سرور (لوکیشن) مورد نظر خود را برای این اشتراک انتخاب کنید:",
+        f"🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای این اشتراک انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -377,7 +405,7 @@ async def handle_buy_plan_loc(
 
     parts = callback.data.split(":")
     plan_id = int(parts[1])
-    profile_id = parts[2]  # Selected location Profile ID [1]
+    pop_code = parts[2]  # Selected location POP code [1]
 
     stmt = select(Plan).where(Plan.id == plan_id)
     result = await session.execute(stmt)
@@ -417,8 +445,8 @@ async def handle_buy_plan_loc(
 آیا مایل هستید این طرح را خریداری کنید؟"""
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="🏦 پرداخت از کیف پول (آنی)", callback_data=f"pay_instant_wallet:{plan.id}:{profile_id}")
-    builder.button(text="💳 کارت به کارت (دستی)", callback_data=f"pay_manual_card:{plan.id}:{profile_id}")
+    builder.button(text="🏦 پرداخت از کیف پول (آنی)", callback_data=f"pay_instant_wallet:{plan.id}:{pop_code}")
+    builder.button(text="💳 کارت به کارت (دستی)", callback_data=f"pay_manual_card:{plan.id}:{pop_code}")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -426,7 +454,7 @@ async def handle_buy_plan_loc(
 
 
 # ============================================================================
-# 4. INSTANT PAYMENT FROM WALLET USING SELECTED LOCATION [1]
+# 4. INSTANT PAYMENT FROM WALLET WITH GLOBAL LOCATION ROUTING [1]
 # ============================================================================
 
 @router.callback_query(F.data.startswith("pay_instant_wallet:"), StateFilter("*"))
@@ -442,7 +470,7 @@ async def handle_pay_instant_wallet(
 
     parts = callback.data.split(":")
     plan_id = int(parts[1])
-    profile_id = parts[2]  # Selected location Profile ID [1]
+    pop_code = parts[2]  # Selected location POP code [1]
 
     stmt = select(Plan).where(Plan.id == plan_id)
     result = await session.execute(stmt)
@@ -480,6 +508,7 @@ async def handle_pay_instant_wallet(
     await callback.message.answer("⚙️ در حال پردازش تراکنش و فعال‌سازی اشتراک دی‌ان‌اس...")
 
     now = datetime.now(timezone.utc)
+    profile_id = plan.controld_profile_id or settings.controld_profile_id
 
     if current_sub is None:
         # Create new device
@@ -487,10 +516,10 @@ async def handle_pay_instant_wallet(
         random_hex = secrets.token_hex(4)
         unique_device_name = f"tg_user_{user.telegram_id}_{random_hex}"
 
-        # Provision device on Control D using the user's selected profile ID [1]
+        # Provision device on Control D
         device_data = await create_dns_device(
             tg_user_id=user.telegram_id,
-            profile_id=profile_id,  # Custom location [1]
+            profile_id=profile_id,
             duration_hours=plan.duration_hours,
             device_type="mobile",
             device_name=unique_device_name
@@ -503,6 +532,11 @@ async def handle_pay_instant_wallet(
         device_id = device_data["device_id"]
         ipv4_primary = device_data["ipv4_primary"]
         ipv4_secondary = device_data["ipv4_secondary"]
+
+        # --- REDIRECT DEFAULT PROFILE ROUTE VIA SELECTED COUNTRY ---
+        # Sets the entire overall proxy location of this profile to the selected POP code [1]
+        controld_service = ControlDService(settings)
+        await controld_service.update_service_route(profile_id, "default", pop_code) [1]
 
         new_subscription = VPNService(
             user_id=user.id,
@@ -540,6 +574,9 @@ async def handle_pay_instant_wallet(
 
         device_id = current_sub.controld_device_id
         
+        # --- REDIRECT DEFAULT PROFILE ROUTE VIA SELECTED COUNTRY ON RENEWAL ---
+        await controld_service.update_service_route(profile_id, "default", pop_code) [1]
+
         # Use our real-time IP fallback getter to fetch dynamic IPs [1]
         ips = await get_controld_device_ips(device_id, settings)
         ipv4_primary = ips["ipv4_primary"]
@@ -550,9 +587,8 @@ async def handle_pay_instant_wallet(
     await session.commit()
     await state.clear()
 
-    # Format Shamsi Expiration
-    duration_hours = plan.duration_hours or 720
-    duration_text = format_duration_fa(duration_hours)
+    # Format Expiration
+    duration_text = calculate_remaining_time_fa(expire_at) [1]
 
     try:
         tehran_tz = ZoneInfo("Asia/Tehran")
@@ -565,6 +601,7 @@ async def handle_pay_instant_wallet(
 
     # Success Card Message
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
+🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{ipv4_primary}</code>
@@ -602,7 +639,7 @@ async def handle_pay_manual_card(
 
     parts = callback.data.split(":")
     plan_id = int(parts[1])
-    profile_id = parts[2]  # Selected location Profile ID [1]
+    pop_code = parts[2]  # Selected location POP code [1]
 
     plan = await PlansRepository(session).get(plan_id)
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
@@ -622,9 +659,9 @@ async def handle_pay_manual_card(
     if current_sub is not None:
         final_price = plan.price - int(plan.price * 0.1)
 
-    # --- GENIUS WORKAROUND: Append chosen profile_id directly into order custom_username ---
+    # --- GENIUS WORKAROUND: Append chosen location (POP code) directly into order custom_username ---
     # Bypasses SQL schema constraints cleanly, saving chosen location for Admin approval [1]
-    custom_username = f"dns_user_{user.telegram_id}|{profile_id}"
+    custom_username = f"dns_user_{user.telegram_id}|{pop_code}"
 
     # Build database order & payment records
     order_service = OrderService(session, settings)
@@ -662,8 +699,6 @@ async def handle_pay_manual_card(
 بعد از پرداخت، تصویر رسید را همینجا ارسال کنید تا ادمین‌ها حساب شما را شارژ و اشتراک را فعال کنند."""
     )
 
-
-# Inside bot/routers/buy.py -> receive_receipt_photo()
 
 @router.message(BuyStates.waiting_receipt, F.photo)
 async def receive_receipt_photo(
@@ -765,3 +800,33 @@ async def process_manual_ip(
                 await message.answer(f"❌ خطا در ثبت آی‌پی در سیستم Control D:\n<code>{response.text}</code>", parse_mode="HTML")
         except Exception as e:
             await message.answer(f"❌ خطا در ارتباط با پنل Control D: {str(e)}")
+
+
+# ============================================================================
+# REAL-TIME IP FETCHING FALLBACK HELPER [1]
+# ============================================================================
+
+async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
+    url = f"https://api.controld.com/devices/{device_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json"
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                body = data.get("body", {})
+                resolver_info = body.get("resolvers") or body.get("resolver") or {}
+                v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
+                return {
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                }
+        except Exception:
+            pass
+    return {
+        "ipv4_primary": "94.183.166.203",
+        "ipv4_secondary": "94.183.166.208"
+    }

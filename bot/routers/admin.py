@@ -373,7 +373,7 @@ async def admin_order_callback(
         await _show_recent_orders(callback, session)
         return
 
-# Inside bot/routers/admin.py
+# Inside bot/routers/admin.py -> admin_manual_activate_order()
 
 @router.callback_query(F.data.startswith("admin_manual_activate:"))
 async def admin_manual_activate_order(
@@ -415,14 +415,15 @@ async def admin_manual_activate_order(
         return
 
     # --- METADATA LOCATION PARSER ---
-    # Parse the dynamically appended profile_id from custom_username securely [1]
+    # Parse the dynamically appended profile_id (POP code) from custom_username securely [1]
     raw_username = order.custom_username or ""
     if "|" in raw_username:
-        username, profile_id = raw_username.split("|", 1)
+        username, pop_code = raw_username.split("|", 1)
     else:
         username = raw_username
-        profile_id = (order.plan.controld_profile_id or settings.controld_profile_id or "").strip()
+        pop_code = None
 
+    profile_id = (order.plan.controld_profile_id or settings.controld_profile_id or "").strip()
     if not profile_id:
         await callback.message.answer("❌ پروفایل Control D برای این پلن یا تنظیمات ربات ثبت نشده است.")
         return
@@ -434,7 +435,7 @@ async def admin_manual_activate_order(
     try:
         device_data = await ControlDService(settings).create_dns_device(
             tg_user_id=order.user.telegram_id,
-            profile_id=profile_id,  # Uses the user's custom chosen profile_id! [1]
+            profile_id=profile_id,
             duration_hours=duration_hours,
             device_name=device_name,
         )
@@ -453,13 +454,16 @@ async def admin_manual_activate_order(
         )
         return
 
-    now = datetime.now(timezone.utc)
-    expire_at = now + timedelta(hours=duration_hours)
     device_id = str(device_data["device_id"])
     doh_link = str(device_data["doh"])
     dot_link = str(device_data.get("dot") or "")
     ipv4_primary = str(device_data.get("ipv4_primary") or "94.183.166.203")
     ipv4_secondary = str(device_data.get("ipv4_secondary") or "94.183.166.208")
+
+    # --- REDIRECT DEFAULT PROFILE ROUTE VIA SELECTED COUNTRY ON ADMIN APPROVAL ---
+    if pop_code:
+        controld_service = ControlDService(settings)
+        await controld_service.update_service_route(profile_id, "default", pop_code) [1]
 
     await SubscriptionsRepository(session).create(
         user_id=order.user.telegram_id,
@@ -532,7 +536,7 @@ async def admin_manual_activate_order(
     refreshed_order = await OrdersRepository(session).get_with_details(order.id)
     if refreshed_order is not None:
         await _show_order_detail_panel(callback, refreshed_order)
-    
+        
 @router.message(Command("admin"))
 async def admin_panel(message: Message, session: AsyncSession, settings: Settings) -> None:
     if not await _is_admin(message.from_user.id if message.from_user else None, session, settings):
