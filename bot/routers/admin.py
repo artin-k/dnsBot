@@ -3405,3 +3405,4 @@ def format_duration_fa(hours: int) -> str:
         days = hours // 24
         return f"{days} روز"
     return f"{hours} ساعت"
+
