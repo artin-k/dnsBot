@@ -373,9 +373,7 @@ async def admin_order_callback(
         await _show_recent_orders(callback, session)
         return
 
-
 # Inside bot/routers/admin.py
-# Replace this function in bot/routers/admin.py
 
 @router.callback_query(F.data.startswith("admin_manual_activate:"))
 async def admin_manual_activate_order(
@@ -416,22 +414,27 @@ async def admin_manual_activate_order(
         await callback.message.answer("❌ اطلاعات کاربر یا پلن سفارش کامل نیست.")
         return
 
-    profile_id = (order.plan.controld_profile_id or settings.controld_profile_id or "").strip()
+    # --- METADATA LOCATION PARSER ---
+    # Parse the dynamically appended profile_id from custom_username securely [1]
+    raw_username = order.custom_username or ""
+    if "|" in raw_username:
+        username, profile_id = raw_username.split("|", 1)
+    else:
+        username = raw_username
+        profile_id = (order.plan.controld_profile_id or settings.controld_profile_id or "").strip()
+
     if not profile_id:
         await callback.message.answer("❌ پروفایل Control D برای این پلن یا تنظیمات ربات ثبت نشده است.")
         return
 
-    # --- FIXED: Use only duration_hours from order.plan and provide a 30-day fallback ---
     duration_hours = order.plan.duration_hours or 720
-    # Dynamically calculate days to save to the database column safely [1]
     duration_days = duration_hours // 24 if duration_hours >= 24 else 1
 
     device_name = f"tg_user_{order.user.telegram_id}_{order.tracking_code}"
     try:
-        # Use create_dns_device to parse full legacy IPs, dot, and stamps [1]
         device_data = await ControlDService(settings).create_dns_device(
             tg_user_id=order.user.telegram_id,
-            profile_id=profile_id,
+            profile_id=profile_id,  # Uses the user's custom chosen profile_id! [1]
             duration_hours=duration_hours,
             device_name=device_name,
         )
@@ -446,23 +449,17 @@ async def admin_manual_activate_order(
 
     if not device_data or not device_data.get("device_id") or not device_data.get("doh"):
         await callback.message.answer(
-            "❌ پاسخ Control D ناقص یا معتبر نبود.\n\n"
-            "لطفاً موارد زیر را چک کنید:\n"
-            "• اتصال به API Control D فعال است\n"
-            "• توکن API و Profile ID صحیح هستند\n"
-            "• لاگ‌های سرور را برای جزئیات بیشتر بررسی کنید\n\n"
-            "وضعیت سفارش تغییر نکرد."
+            "❌ پاسخ Control D ناقص یا معتبر نبود. وضعیت سفارش تغییر نکرد."
         )
         return
 
     now = datetime.now(timezone.utc)
-    expire_at = now + timedelta(hours=duration_hours)  # High-precision duration calculation
+    expire_at = now + timedelta(hours=duration_hours)
     device_id = str(device_data["device_id"])
     doh_link = str(device_data["doh"])
     dot_link = str(device_data.get("dot") or "")
     ipv4_primary = str(device_data.get("ipv4_primary") or "94.183.166.203")
     ipv4_secondary = str(device_data.get("ipv4_secondary") or "94.183.166.208")
-    username = order.custom_username or device_name
 
     await SubscriptionsRepository(session).create(
         user_id=order.user.telegram_id,
@@ -481,7 +478,7 @@ async def admin_manual_activate_order(
         config_link=doh_link,
         subscription_link=dot_link or None,
         volume_gb=order.plan.volume_gb,
-        duration_days=duration_days,  # --- FIXED: Use calculated duration_days ---
+        duration_days=duration_days,
         expire_at=expire_at,
         status=VPNServiceStatus.ACTIVE.value,
     )
@@ -497,7 +494,6 @@ async def admin_manual_activate_order(
 
     user_delivery_failed = False
     
-    # --- FIXED: Generate the target layout with correct arguments ---
     user_text = _manual_activation_user_message(
         plan_title=order.plan.title,
         duration_hours=duration_hours,
@@ -506,7 +502,6 @@ async def admin_manual_activate_order(
         ipv4_secondary=ipv4_secondary,
     )
     try:
-        # Notify the user with the success card and registration keyboard markup [1]
         await callback.bot.send_message(
             chat_id=order.user.telegram_id, 
             text=user_text,
@@ -537,7 +532,6 @@ async def admin_manual_activate_order(
     refreshed_order = await OrdersRepository(session).get_with_details(order.id)
     if refreshed_order is not None:
         await _show_order_detail_panel(callback, refreshed_order)
-
 @router.message(Command("admin"))
 async def admin_panel(message: Message, session: AsyncSession, settings: Settings) -> None:
     if not await _is_admin(message.from_user.id if message.from_user else None, session, settings):
