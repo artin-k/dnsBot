@@ -6,6 +6,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
