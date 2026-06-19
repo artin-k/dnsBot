@@ -315,36 +315,45 @@ async def update_dns_device_profile(device_id: str, profile_id: str) -> bool:
 
 # Replace this function in app/services/controld.py
 
+# Replace this function inside app/services/controld.py
+
 async def fetch_controld_proxies() -> list[dict] | None:
     """
-    Fetches all available proxy locations (POP codes) from Control D [1].
+    Fetches all available proxy locations (POP codes) from Control D with debug logging [1].
     """
     url = f"{BASE_URL}/proxies"
+    print(f"\n[DEBUG PROXIES] Querying Control D API: {url}")
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(url, headers=_get_headers(), timeout=10.0)
+            
+            # Print response details directly to your logs [1]
+            print(f"[DEBUG PROXIES] Status Code: {response.status_code}")
+            print(f"[DEBUG PROXIES] Raw Response: {response.text}")
+            
             if response.status_code == 200:
                 data = response.json()
-                body = data.get("body", {})
-                proxies = body.get("proxies", [])
+                body = data.get('body', {})
+                proxies = body.get('proxies', [])
                 
                 result = []
                 for p in proxies:
-                    country_code = p.get("country") or "US"
-                    # Safe key fallbacks to ensure the POP code is never None [1]
-                    pop_id = p.get("id") or p.get("code") or p.get("pop") or p.get("pk") or p.get("location_code")
+                    country_code = p.get('country') or 'US'
+                    pop_id = p.get('id') or p.get('code') or p.get('pop') or p.get('pk') or p.get('location_code')
                     if not pop_id:
                         continue 
                     
                     result.append({
-                        "code": pop_id,
-                        "country_code": country_code,
-                        "country_name": get_country_name_fa(country_code),  # Fully translated [1]
-                        "city": p.get("city") or ""
+                        'code': pop_id,
+                        'country_code': country_code,
+                        'country_name': get_country_name_fa(country_code),
+                        'city': p.get('city') or ''
                     })
+                print(f"[DEBUG PROXIES] Successfully parsed {len(result)} proxies!")
                 return result
             return None
         except Exception as e:
+            print(f"[DEBUG PROXIES] Exception occurred: {str(e)}")
             logger.error(f"Error fetching Control D proxies: {str(e)}")
             return None
 
