@@ -47,20 +47,52 @@ from bot.states.buy import BuyStates
 router = Router(name="buy")
 
 # ============================================================================
-# CONFIGURATION & HELPERS
+# CONFIGURATION & CATEGORIES DATA
 # ============================================================================
 WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
 
-# Target game/service identifiers supported by Control D [1]
-SUPPORTED_SERVICES = [
-    {"pk": "default", "name": "🌐 کل ترافیک اینترنت (Default)"},
-    {"pk": "callofduty", "name": "🎮 Call of Duty"},
-    {"pk": "apexlegends", "name": "🎮 Apex Legends"},
-    {"pk": "pubg", "name": "🎮 PUBG Mobile"},
-    {"pk": "fortnite", "name": "🎮 Fortnite"},
-    {"pk": "youtube", "name": "📹 YouTube"},
-    {"pk": "netflix", "name": "🎬 Netflix"}
-]
+CATEGORIES = {
+    "games": {
+        "name": "🎮 بازی‌ها (Games)",
+        "services": [
+            {"pk": "callofduty", "name": "🎮 Call of Duty"},
+            {"pk": "apexlegends", "name": "🎮 Apex Legends"},
+            {"pk": "pubg", "name": "🎮 PUBG Mobile"},
+            {"pk": "fortnite", "name": "🎮 Fortnite"},
+            {"pk": "valorant", "name": "🎮 Valorant"},
+            {"pk": "leagueoflegends", "name": "🎮 League of Legends"},
+            {"pk": "roblox", "name": "🎮 Roblox"},
+            {"pk": "minecraft", "name": "🎮 Minecraft"},
+            {"pk": "steam", "name": "🎮 Steam / Epic Games"},
+            {"pk": "playstation", "name": "🎮 PlayStation Network"},
+            {"pk": "xbox", "name": "🎮 Xbox Live"}
+        ]
+    },
+    "streaming": {
+        "name": "🎬 رسانه و استریم (Streaming)",
+        "services": [
+            {"pk": "netflix", "name": "🎬 Netflix"},
+            {"pk": "youtube", "name": "📹 YouTube"},
+            {"pk": "disney", "name": "🏰 Disney+"},
+            {"pk": "twitch", "name": "🎮 Twitch / Kick"},
+            {"pk": "spotify", "name": "🎵 Spotify / Deezer"},
+            {"pk": "primevideo", "name": "🎬 Amazon Prime Video"},
+            {"pk": "hulu", "name": "🎬 Hulu"},
+            {"pk": "hbomax", "name": "🎬 HBO Max"}
+        ]
+    },
+    "tools": {
+        "name": "🤖 ابزارها و هوش مصنوعی (AI & Tech)",
+        "services": [
+            {"pk": "chatgpt", "name": "🤖 ChatGPT / OpenAI"},
+            {"pk": "claude", "name": "🤖 Claude / Anthropic"},
+            {"pk": "gemini", "name": "🤖 Google Gemini"},
+            {"pk": "discord", "name": "💬 Discord"},
+            {"pk": "telegram", "name": "💬 Telegram"},
+            {"pk": "twitter", "name": "💬 Twitter / X"}
+        ]
+    }
+}
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
@@ -103,33 +135,6 @@ def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
     return f"{total_minutes} دقیقه"
 
 
-async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
-    """Queries Control D on approval to fetch the exact legacy IPv4 addresses."""
-    url = f"https://api.controld.com/devices/{device_id}"
-    headers = {
-        "Authorization": f"Bearer {settings.controld_api_token}",
-        "Content-Type": "application/json"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, timeout=10.0)
-            if response.status_code == 200:
-                data = response.json()
-                body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or {}
-                v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
-                return {
-                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
-                }
-        except Exception:
-            pass
-    return {
-        "ipv4_primary": "94.183.166.203",
-        "ipv4_secondary": "94.183.166.208"
-    }
-
-
 # ============================================================================
 # 1. MAIN DNS PLANS MENU
 # ============================================================================
@@ -140,14 +145,13 @@ async def show_plans(event: Message | CallbackQuery, state: FSMContext, session:
     user_id = event.from_user.id if event.from_user else 0
     user = await UsersRepository(session).get_by_telegram_id(user_id) if user_id else None
     
-    # Enforce Phone Verification
     if user is None or not user.is_phone_verified:
         from bot.keyboards.verification import phone_verification_keyboard
         from bot.states.wallet import VerificationStates
         await state.set_state(VerificationStates.waiting_contact)
         await state.update_data(next_section="buy")
         
-        prompt_text = "⚠️ برای خرید اشتراک DNS، ابتدا باید شماره موبایل خود را تایید کنید.\n\nلطفاً دکمه زیر را بزنید تا شماره تماس شما ارسال شود 👇"
+        prompt_text = "⚠️ برای خرید اشتراک DNS، ابتدا باید شماره موبایل خود را تایید کنید."
         if isinstance(event, CallbackQuery):
             await event.answer()
             await event.message.answer(prompt_text, reply_markup=phone_verification_keyboard())
@@ -200,7 +204,7 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES
+# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & CATEGORIES [1]
 # ============================================================================
 
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
@@ -219,7 +223,6 @@ async def handle_get_test_account(
         await callback.answer()
         return
 
-    # Anti-Abuse DB Check [1]
     stmt = select(VPNService).where(
         VPNService.user_id == user.id,
         VPNService.is_test_account == True
@@ -233,19 +236,44 @@ async def handle_get_test_account(
 
     await callback.answer()
 
-    # Step A: Select Game/Service for Trial first [1]
+    # Category Selection Menu [1]
     builder = InlineKeyboardBuilder()
-    for s in SUPPORTED_SERVICES:
-        builder.button(
-            text=s["name"],
-            callback_data=f"test_select_srv:{s['pk']}"  # Selected game [1]
-        )
+    builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
+    builder.button(text="🎮 بازی‌ها (Games)", callback_data="test_cat:games")
+    builder.button(text="🎬 رسانه و استریم (Streaming)", callback_data="test_cat:streaming")
+    builder.button(text="🤖 ابزارها و هوش مصنوعی (AI & Tech)", callback_data="test_cat:tools")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
     await callback.message.edit_text(
         "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
-        "🎮 ابتدا بازی یا برنامه‌ای که می‌خواهید ترافیک آن را هدایت کنید انتخاب کنید:",
+        "🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("test_cat:"), StateFilter("*"))
+async def handle_test_cat(callback: CallbackQuery) -> None:
+    await callback.answer()
+    category_key = callback.data.split(":")[1]
+    
+    category = CATEGORIES.get(category_key)
+    if not category:
+        return
+        
+    builder = InlineKeyboardBuilder()
+    for s in category["services"]:
+        builder.button(
+            text=s["name"],
+            callback_data=f"test_select_srv:{s['pk']}"
+        )
+    builder.button(text="🔙 بازگشت", callback_data="get_test_account")
+    builder.adjust(2)
+    
+    await callback.message.edit_text(
+        f"📂 دسته‌بندی انتخاب شده: <b>{category['name']}</b>\n\n"
+        f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -263,7 +291,6 @@ async def handle_test_select_srv(
 
     service_pk = callback.data.split(":")[1]
 
-    # Step B: Select Country/POP [1]
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -273,10 +300,10 @@ async def handle_test_select_srv(
 
     builder = InlineKeyboardBuilder()
     for p in proxies[:12]:
-        p_name = f"{p['country']} ({p['code']})"
+        p_name = f"{p['country_name']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
-            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"  # Passes both game and country [1]
+            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"
         )
     builder.button(text="🔙 بازگشت", callback_data="get_test_account")
     builder.adjust(2)
@@ -330,8 +357,6 @@ async def handle_apply_test_loc(
         return
 
     device_id = device_data["device_id"]
-    
-    # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
     await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
 
     now = datetime.now(timezone.utc)
@@ -354,7 +379,6 @@ async def handle_apply_test_loc(
 
     duration_text = "۲ ساعت"
 
-    # Shamsi translation
     try:
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
@@ -387,7 +411,7 @@ async def handle_apply_test_loc(
 
 
 # ============================================================================
-# 3. CHOOSE PLAN, GAME & LOCATION SELECTION FLOW [1]
+# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW [1]
 # ============================================================================
 
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
@@ -410,19 +434,46 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Step A: Select Game/Service first [1]
+    # Category Selection Menu [1]
     builder = InlineKeyboardBuilder()
-    for s in SUPPORTED_SERVICES:
-        builder.button(
-            text=s["name"],
-            callback_data=f"buy_plan_srv:{plan.id}:{s['pk']}"  # Passes plan_id and game_pk [1]
-        )
+    builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
+    builder.button(text="🎮 بازی‌ها (Games)", callback_data=f"srv_cat:{plan.id}:games")
+    builder.button(text="🎬 رسانه و استریم (Streaming)", callback_data=f"srv_cat:{plan.id}:streaming")
+    builder.button(text="🤖 ابزارها و هوش مصنوعی (AI & Tech)", callback_data=f"srv_cat:{plan.id}:tools")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
     await callback.message.edit_text(
         f"⚡ پلن انتخاب شده: <b>{escape(plan.title)}</b>\n\n"
-        f"🎮 ابتدا بازی یا برنامه‌ای که می‌خواهید ترافیک آن را هدایت کنید انتخاب کنید:",
+        f"🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("srv_cat:"), StateFilter("*"))
+async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    plan_id = int(parts[1])
+    category_key = parts[2]
+    
+    category = CATEGORIES.get(category_key)
+    if not category:
+        return
+        
+    builder = InlineKeyboardBuilder()
+    for s in category["services"]:
+        builder.button(
+            text=s["name"],
+            callback_data=f"buy_plan_srv:{plan_id}:{s['pk']}"  # Selected game [1]
+        )
+    builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
+    builder.adjust(2)
+    
+    await callback.message.edit_text(
+        f"📂 دسته‌بندی انتخاب شده: <b>{category['name']}</b>\n\n"
+        f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -442,7 +493,7 @@ async def handle_buy_plan_srv(
     plan_id = int(parts[1])
     service_pk = parts[2]
 
-    # Step B: Select Country/POP [1]
+    # Select Country/POP [1]
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -452,11 +503,11 @@ async def handle_buy_plan_srv(
 
     builder = InlineKeyboardBuilder()
     for p in proxies[:12]:
-            p_name = f"{p['country_name']} ({p['code']})"  # <-- Ensure 'country_name' is used [1]
-            builder.button(
-                text=f"📍 {p_name}",
-                callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
-            )
+        p_name = f"{p['country_name']} ({p['code']})"
+        builder.button(
+            text=f"📍 {p_name}",
+            callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"  # Appends selected POP code [1]
+        )
     builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
     builder.adjust(2)
 
@@ -735,7 +786,6 @@ async def handle_pay_manual_card(
         final_price = plan.price - int(plan.price * 0.1)
 
     # --- GENIUS WORKAROUND: Append chosen location (POP code) and game_pk directly into order custom_username ---
-    # Bypasses SQL schema constraints cleanly, saving chosen location for Admin approval [1]
     custom_username = f"dns_user_{user.telegram_id}|{service_pk}|{pop_code}"
 
     # Build database order & payment records
@@ -806,7 +856,7 @@ async def receive_receipt_photo(
     await message.answer("✅ رسید شما دریافت شد و در انتظار تایید ادمین است.")
 
     # --- FIXED: Local import to bypass circular dependency name-error ---
-    from bot.notifications import notify_admins_order_payment
+    from bot.notifications import notify_admins_order_payment 
 
     sent_count = await notify_admins_order_payment(
         bot=message.bot,

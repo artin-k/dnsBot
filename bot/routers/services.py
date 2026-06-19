@@ -7,7 +7,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -21,6 +20,18 @@ from bot.keyboards.main_menu import main_menu_keyboard
 from bot.keyboards.services import ServiceActionCallback
 
 router = Router(name="services")
+
+
+# List popular services supported by Control D [1]
+POPULAR_SERVICES = [
+    {"pk": "default", "name": "🌐 کل ترافیک اینترنت (Default)"},
+    {"pk": "callofduty", "name": "🎮 Call of Duty"},
+    {"pk": "apexlegends", "name": "🎮 Apex Legends"},
+    {"pk": "pubg", "name": "🎮 PUBG Mobile"},
+    {"pk": "fortnite", "name": "🎮 Fortnite"},
+    {"pk": "youtube", "name": "📹 YouTube"},
+    {"pk": "netflix", "name": "🎬 Netflix"}
+]
 
 
 def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
@@ -96,17 +107,6 @@ async def service_action(
 # SERVICE ROUTING CONTROLLER (Interactive Redirection Menu) [1]
 # ============================================================================
 
-# Define popular services supported by Control D
-POPULAR_SERVICES = [
-    {"pk": "netflix", "name": "🎬 Netflix"},
-    {"pk": "youtube", "name": "📹 YouTube"},
-    {"pk": "spotify", "name": "🎵 Spotify"},
-    {"pk": "disney", "name": "🏰 Disney+"},
-    {"pk": "twitch", "name": "🎮 Twitch"},
-    {"pk": "chatgpt", "name": "🤖 ChatGPT / OpenAI"}
-]
-
-
 @router.callback_query(F.data.startswith("service_routing_menu:"), StateFilter("*"))
 async def service_routing_menu(callback: CallbackQuery, session: AsyncSession) -> None:
     """Lists popular web services the user can customize [1]."""
@@ -139,7 +139,7 @@ async def service_routing_menu(callback: CallbackQuery, session: AsyncSession) -
 
 @router.callback_query(F.data.startswith("select_srv_loc:"), StateFilter("*"))
 async def select_service_location(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Fetches and displays available Control D proxies as buttons [1]."""
+    """Fetches and displays available Control D proxies as buttons."""
     await callback.answer()
     if callback.message is None:
         return
@@ -156,17 +156,15 @@ async def select_service_location(callback: CallbackQuery, session: AsyncSession
         await callback.message.answer("❌ خطایی در بارگذاری لوکیشن‌های معتبر رخ داد.")
         return
 
-    # Map target service display name
     service_display = next((s["name"] for s in POPULAR_SERVICES if s["pk"] == service_pk), service_pk)
 
     builder = InlineKeyboardBuilder()
-    # Present popular proxy nodes (filter/limit if needed to keep buttons manageable)
-    for p in proxies[:12]:
-            p_name = f"{p['country_name']} ({p['code']})"  # <-- Ensure 'country_name' is used [1]
-            builder.button(
-                text=f"📍 {p_name}",
-                callback_data=f"apply_loc_change:{service_id}:{service_pk}:{p['code']}:{p_name}"
-            )
+    for p in proxies[:12]:  # Show first 12 popular worldwide locations [1]
+        p_name = f"{p['country_name']} ({p['code']})"  # <-- FIXED: Fully translated [1]
+        builder.button(
+            text=f"📍 {p_name}",
+            callback_data=f"apply_srv_route:{service_id}:{service_pk}:{p['code']}:{p_name}"  # Apply routing [1]
+        )
     builder.button(text="↩️ بازگشت", callback_data=f"service_routing_menu:{service_id}")
     builder.adjust(2)
 
@@ -198,9 +196,7 @@ async def apply_service_route(callback: CallbackQuery, session: AsyncSession, se
 
     # Find the dynamic profile_id linked to this device
     controld_service = ControlDService(settings)
-    device_data = await controld_service.fetch_controld_profiles()
     
-    # Simple fallback check to extract profile_id from device details
     device_url = f"https://api.controld.com/devices/{service.controld_device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
