@@ -160,12 +160,12 @@ async def select_service_location(callback: CallbackQuery, session: AsyncSession
 
     builder = InlineKeyboardBuilder()
     # Present popular proxy nodes (filter/limit if needed to keep buttons manageable)
-    for p in proxies[:12]:  # Show first 12 popular worldwide locations [1]
-        p_name = f"{p['country']} ({p['code']})"
-        builder.button(
-            text=f"📍 {p_name}",
-            callback_data=f"apply_srv_route:{service_id}:{service_pk}:{p['code']}:{p_name}"  # Apply routing [1]
-        )
+    for p in proxies[:12]:
+            p_name = f"{p['country_name']} ({p['code']})"  # <-- Ensure 'country_name' is used [1]
+            builder.button(
+                text=f"📍 {p_name}",
+                callback_data=f"apply_loc_change:{service_id}:{service_pk}:{p['code']}:{p_name}"
+            )
     builder.button(text="↩️ بازگشت", callback_data=f"service_routing_menu:{service_id}")
     builder.adjust(2)
 

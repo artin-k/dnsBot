@@ -12,6 +12,44 @@ settings = get_settings()
 
 BASE_URL = "https://api.controld.com"
 
+# app/services/controld.py (Paste below your imports)
+
+# Persian Country Translator Map [1]
+COUNTRY_MAP_FA = {
+    "AL": "آلبانی",
+    "AQ": "قطب جنوب",
+    "AR": "آرژانتین",
+    "AU": "استرالیا",
+    "AT": "اتریش",
+    "BE": "بلژیک",
+    "BA": "بوسنی",
+    "BR": "برزیل",
+    "US": "ایالات متحده",
+    "DE": "آلمان",
+    "TR": "ترکیه",
+    "GB": "انگلستان",
+    "FR": "فرانسه",
+    "NL": "هلند",
+    "FI": "فنلاند",
+    "AE": "امارات متحده",
+    "IR": "ایران",
+    "CA": "کانادا",
+    "SG": "سنگاپور",
+    "UA": "اوکراین",
+    "RU": "روسیه",
+    "SE": "سوئد",
+    "CH": "سوئیس",
+    "IT": "ایتالیا",
+    "PL": "لهستان",
+    "ES": "اسپانیا",
+    "IN": "هند",
+    "JP": "ژاپن"
+}
+
+def get_country_name_fa(country_code: str) -> str:
+    """Translates ISO country codes into full Persian names [1]."""
+    return COUNTRY_MAP_FA.get(country_code.upper(), country_code.upper())
+
 
 def _get_headers() -> dict:
     return {
@@ -275,6 +313,8 @@ async def update_dns_device_profile(device_id: str, profile_id: str) -> bool:
     
 # app/services/controld.py
 
+# Replace this function in app/services/controld.py
+
 async def fetch_controld_proxies() -> list[dict] | None:
     """
     Fetches all available proxy locations (POP codes) from Control D [1].
@@ -290,10 +330,17 @@ async def fetch_controld_proxies() -> list[dict] | None:
                 
                 result = []
                 for p in proxies:
+                    country_code = p.get("country") or "US"
+                    # Safe key fallbacks to ensure the POP code is never None [1]
+                    pop_id = p.get("id") or p.get("code") or p.get("pop") or p.get("pk") or p.get("location_code")
+                    if not pop_id:
+                        continue 
+                    
                     result.append({
-                        "code": p.get("code") or p.get("pk"),  # e.g., 'JFK', 'FRA' [1]
-                        "country": p.get("country"),
-                        "city": p.get("city")
+                        "code": pop_id,
+                        "country_code": country_code,
+                        "country_name": get_country_name_fa(country_code),  # Fully translated [1]
+                        "city": p.get("city") or ""
                     })
                 return result
             return None
