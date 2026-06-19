@@ -414,13 +414,17 @@ async def admin_manual_activate_order(
         await callback.message.answer("❌ اطلاعات کاربر یا پلن سفارش کامل نیست.")
         return
 
-    # --- METADATA LOCATION PARSER ---
+    # --- METADATA LOCATION & SERVICE PARSER ---
     # Parse the dynamically appended profile_id (POP code) from custom_username securely [1]
     raw_username = order.custom_username or ""
     if "|" in raw_username:
-        username, pop_code = raw_username.split("|", 1)
+        parts = raw_username.split("|")
+        username = parts[0]
+        service_pk = parts[1] if len(parts) > 1 else "default"
+        pop_code = parts[2] if len(parts) > 2 else None
     else:
         username = raw_username
+        service_pk = "default"
         pop_code = None
 
     profile_id = (order.plan.controld_profile_id or settings.controld_profile_id or "").strip()
@@ -457,13 +461,16 @@ async def admin_manual_activate_order(
     device_id = str(device_data["device_id"])
     doh_link = str(device_data["doh"])
     dot_link = str(device_data.get("dot") or "")
-    ipv4_primary = str(device_data.get("ipv4_primary") or "94.183.166.203")
-    ipv4_secondary = str(device_data.get("ipv4_secondary") or "94.183.166.208")
+    ipv4_primary = str(device_data["ipv4_primary"])
+    ipv4_secondary = str(device_data["ipv4_secondary"])
 
-    # --- REDIRECT DEFAULT PROFILE ROUTE VIA SELECTED COUNTRY ON ADMIN APPROVAL ---
+    # --- REDIRECT THE SELECTED SERVICE ROUTE VIA SELECTED COUNTRY ON ADMIN APPROVAL ---
     if pop_code:
         controld_service = ControlDService(settings)
-        await controld_service.update_service_route(profile_id, "default", pop_code) [1]
+        await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
+
+    now = datetime.now(timezone.utc)
+    expire_at = now + timedelta(hours=duration_hours)
 
     await SubscriptionsRepository(session).create(
         user_id=order.user.telegram_id,

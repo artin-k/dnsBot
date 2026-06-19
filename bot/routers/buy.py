@@ -47,9 +47,20 @@ from bot.states.buy import BuyStates
 router = Router(name="buy")
 
 # ============================================================================
-# CONFIGURATION
+# CONFIGURATION & HELPERS
 # ============================================================================
 WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
+
+# Target game/service identifiers supported by Control D [1]
+SUPPORTED_SERVICES = [
+    {"pk": "default", "name": "🌐 کل ترافیک اینترنت (Default)"},
+    {"pk": "callofduty", "name": "🎮 Call of Duty"},
+    {"pk": "apexlegends", "name": "🎮 Apex Legends"},
+    {"pk": "pubg", "name": "🎮 PUBG Mobile"},
+    {"pk": "fortnite", "name": "🎮 Fortnite"},
+    {"pk": "youtube", "name": "📹 YouTube"},
+    {"pk": "netflix", "name": "🎬 Netflix"}
+]
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
@@ -189,7 +200,7 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES [1]
+# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES
 # ============================================================================
 
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
@@ -222,7 +233,37 @@ async def handle_get_test_account(
 
     await callback.answer()
 
-    # Fetch worldwide countries (proxies) from Control D API [1]
+    # Step A: Select Game/Service for Trial first [1]
+    builder = InlineKeyboardBuilder()
+    for s in SUPPORTED_SERVICES:
+        builder.button(
+            text=s["name"],
+            callback_data=f"test_select_srv:{s['pk']}"  # Selected game [1]
+        )
+    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
+        "🎮 ابتدا بازی یا برنامه‌ای که می‌خواهید ترافیک آن را هدایت کنید انتخاب کنید:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("test_select_srv:"), StateFilter("*"))
+async def handle_test_select_srv(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    service_pk = callback.data.split(":")[1]
+
+    # Step B: Select Country/POP [1]
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -231,18 +272,17 @@ async def handle_get_test_account(
         return
 
     builder = InlineKeyboardBuilder()
-    for p in proxies[:12]:  # Show top 12 popular locations [1]
+    for p in proxies[:12]:
         p_name = f"{p['country']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
-            callback_data=f"apply_test_loc:{p['code']}"  # Selected POP code [1]
+            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"  # Passes both game and country [1]
         )
-    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
+    builder.button(text="🔙 بازگشت", callback_data="get_test_account")
     builder.adjust(2)
 
     await callback.message.edit_text(
-        "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
-        "🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای اکانت تست انتخاب کنید:",
+        "🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -259,7 +299,10 @@ async def handle_apply_test_loc(
     if callback.message is None or callback.from_user is None:
         return
 
-    pop_code = callback.data.split(":")[1]  # The chosen POP code (e.g., FRA, JFK) [1]
+    parts = callback.data.split(":")
+    service_pk = parts[1]
+    pop_code = parts[2]
+
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
     if user is None:
         return
@@ -288,9 +331,8 @@ async def handle_apply_test_loc(
 
     device_id = device_data["device_id"]
     
-    # --- REDIRECT DEFAULT PROFILE ROUTE VIA SELECTED COUNTRY ---
-    # Sets the entire overall proxy location of this profile to the selected POP code [1]
-    await controld_service.update_service_route(profile_id, "default", pop_code) [1]
+    # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
+    await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
 
     now = datetime.now(timezone.utc)
     expire_at = now + timedelta(hours=2)
@@ -345,7 +387,7 @@ async def handle_apply_test_loc(
 
 
 # ============================================================================
-# 3. CHOOSE PLAN & WORLDWIDE LOCATION SELECTION FLOW [1]
+# 3. CHOOSE PLAN, GAME & LOCATION SELECTION FLOW [1]
 # ============================================================================
 
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
@@ -368,7 +410,39 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Fetch actual worldwide proxy locations from Control D [1]
+    # Step A: Select Game/Service first [1]
+    builder = InlineKeyboardBuilder()
+    for s in SUPPORTED_SERVICES:
+        builder.button(
+            text=s["name"],
+            callback_data=f"buy_plan_srv:{plan.id}:{s['pk']}"  # Passes plan_id and game_pk [1]
+        )
+    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"⚡ پلن انتخاب شده: <b>{escape(plan.title)}</b>\n\n"
+        f"🎮 ابتدا بازی یا برنامه‌ای که می‌خواهید ترافیک آن را هدایت کنید انتخاب کنید:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("buy_plan_srv:"), StateFilter("*"))
+async def handle_buy_plan_srv(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    parts = callback.data.split(":")
+    plan_id = int(parts[1])
+    service_pk = parts[2]
+
+    # Step B: Select Country/POP [1]
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -377,18 +451,17 @@ async def handle_buy_plan_select(
         return
 
     builder = InlineKeyboardBuilder()
-    for p in proxies[:12]:  # Show top 12 popular worldwide locations [1]
+    for p in proxies[:12]:
         p_name = f"{p['country']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
-            callback_data=f"buy_plan_loc:{plan.id}:{p['code']}"  # Appends selected POP code [1]
+            callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"  # Appends selected POP code [1]
         )
-    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
+    builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
     builder.adjust(2)
 
     await callback.message.edit_text(
-        f"⚡ پلن انتخاب شده: <b>{escape(plan.title)}</b>\n\n"
-        f"🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای این اشتراک انتخاب کنید:",
+        "🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -405,7 +478,8 @@ async def handle_buy_plan_loc(
 
     parts = callback.data.split(":")
     plan_id = int(parts[1])
-    pop_code = parts[2]  # Selected location POP code [1]
+    service_pk = parts[2]
+    pop_code = parts[3]  # Selected location POP code [1]
 
     stmt = select(Plan).where(Plan.id == plan_id)
     result = await session.execute(stmt)
@@ -445,8 +519,8 @@ async def handle_buy_plan_loc(
 آیا مایل هستید این طرح را خریداری کنید؟"""
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="🏦 پرداخت از کیف پول (آنی)", callback_data=f"pay_instant_wallet:{plan.id}:{pop_code}")
-    builder.button(text="💳 کارت به کارت (دستی)", callback_data=f"pay_manual_card:{plan.id}:{pop_code}")
+    builder.button(text="🏦 پرداخت از کیف پول (آنی)", callback_data=f"pay_instant_wallet:{plan.id}:{service_pk}:{pop_code}")
+    builder.button(text="💳 کارت به کارت (دستی)", callback_data=f"pay_manual_card:{plan.id}:{service_pk}:{pop_code}")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -470,7 +544,8 @@ async def handle_pay_instant_wallet(
 
     parts = callback.data.split(":")
     plan_id = int(parts[1])
-    pop_code = parts[2]  # Selected location POP code [1]
+    service_pk = parts[2]
+    pop_code = parts[3]  # Selected location POP code [1]
 
     stmt = select(Plan).where(Plan.id == plan_id)
     result = await session.execute(stmt)
@@ -533,10 +608,9 @@ async def handle_pay_instant_wallet(
         ipv4_primary = device_data["ipv4_primary"]
         ipv4_secondary = device_data["ipv4_secondary"]
 
-        # --- REDIRECT DEFAULT PROFILE ROUTE VIA SELECTED COUNTRY ---
-        # Sets the entire overall proxy location of this profile to the selected POP code [1]
+        # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
         controld_service = ControlDService(settings)
-        await controld_service.update_service_route(profile_id, "default", pop_code) [1]
+        await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
 
         new_subscription = VPNService(
             user_id=user.id,
@@ -574,8 +648,8 @@ async def handle_pay_instant_wallet(
 
         device_id = current_sub.controld_device_id
         
-        # --- REDIRECT DEFAULT PROFILE ROUTE VIA SELECTED COUNTRY ON RENEWAL ---
-        await controld_service.update_service_route(profile_id, "default", pop_code) [1]
+        # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ON RENEWAL ---
+        await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
 
         # Use our real-time IP fallback getter to fetch dynamic IPs [1]
         ips = await get_controld_device_ips(device_id, settings)
@@ -639,7 +713,8 @@ async def handle_pay_manual_card(
 
     parts = callback.data.split(":")
     plan_id = int(parts[1])
-    pop_code = parts[2]  # Selected location POP code [1]
+    service_pk = parts[2]
+    pop_code = parts[3]  # Selected location POP code [1]
 
     plan = await PlansRepository(session).get(plan_id)
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
@@ -659,9 +734,9 @@ async def handle_pay_manual_card(
     if current_sub is not None:
         final_price = plan.price - int(plan.price * 0.1)
 
-    # --- GENIUS WORKAROUND: Append chosen location (POP code) directly into order custom_username ---
+    # --- GENIUS WORKAROUND: Append chosen location (POP code) and game_pk directly into order custom_username ---
     # Bypasses SQL schema constraints cleanly, saving chosen location for Admin approval [1]
-    custom_username = f"dns_user_{user.telegram_id}|{pop_code}"
+    custom_username = f"dns_user_{user.telegram_id}|{service_pk}|{pop_code}"
 
     # Build database order & payment records
     order_service = OrderService(session, settings)
@@ -743,6 +818,7 @@ async def receive_receipt_photo(
     )
     if sent_count == 0:
         await message.answer("رسید دریافت شد، اما ادمینی برای بررسی تنظیم نشده است. لطفاً با پشتیبانی تماس بگیرید.")
+
 
 # ============================================================================
 # 6. MANUAL IP REGISTRATION FSM FLOW
