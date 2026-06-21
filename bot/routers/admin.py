@@ -191,7 +191,33 @@ import httpx  # Ensure httpx is imported at the top
 # Match this with your buy.py base URL (No trailing slash)
 WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
 
+# Inside bot/routers/admin.py (At the top, below imports/configurations)
 
+def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
+    """
+    Dynamically calculates and formats the remaining time from expire_at.
+    Shows days if >= 24 hours, otherwise shows remaining hours [cite: 1].
+    """
+    if not expire_at:
+        return "۳۰ روز"
+    now = datetime.now(timezone.utc)
+    if expire_at.tzinfo is None:
+        expire_at = expire_at.replace(tzinfo=timezone.utc)
+    
+    delta = expire_at - now
+    total_seconds = delta.total_seconds()
+    if total_seconds <= 0:
+        return "پایان یافته"
+    
+    total_hours = int(total_seconds // 3600)
+    if total_hours >= 24:
+        return f"{total_hours // 24} روز"
+    
+    if total_hours > 0:
+        return f"{total_hours} ساعت"
+    
+    total_minutes = int(total_seconds // 60)
+    return f"{total_minutes} دقیقه"
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
     """
