@@ -105,7 +105,7 @@ CATEGORIES = {
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
-    """Generates the inline keyboard matching your design screenshot  ."""
+    """Generates the inline keyboard matching your design screenshot."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
@@ -115,7 +115,7 @@ def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
 
 
 def format_duration_fa(hours: int) -> str:
-    """Formats hours dynamically into a readable Persian duration string  ."""
+    """Formats hours dynamically into a readable Persian duration string."""
     if hours >= 24 and hours % 24 == 0:
         days = hours // 24
         return f"{days} روز"
@@ -123,7 +123,7 @@ def format_duration_fa(hours: int) -> str:
 
 
 def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
-    """Dynamically calculates remaining days/hours from expire_at  ."""
+    """Dynamically calculates remaining days/hours from expire_at."""
     if not expire_at:
         return "۳۰ روز"
     now = datetime.now(timezone.utc)
@@ -161,7 +161,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list  if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
                 }
         except Exception:
             pass
@@ -240,7 +240,7 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES  
+# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES
 # ============================================================================
 
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
@@ -272,7 +272,7 @@ async def handle_get_test_account(
 
     await callback.answer()
 
-    # Dynamic Category Selector Menu  
+    # Dynamic Category Selector Menu
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
     
@@ -296,7 +296,7 @@ async def handle_get_test_account(
 async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     await callback.answer()
     parts = callback.data.split(":")
-    category_key = parts 
+    category_key = parts[1]
     page = int(parts[2])
     
     controld = ControlDService(settings)
@@ -351,7 +351,7 @@ async def handle_test_select_srv(
     if callback.message is None:
         return
 
-    service_pk = callback.data.split(":") 
+    service_pk = callback.data.split(":")[1]
 
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
@@ -362,10 +362,10 @@ async def handle_test_select_srv(
 
     builder = InlineKeyboardBuilder()
     for p in proxies[:12]:
-        p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"  # <-- Display City Name cleanly [1]
+        p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"  # <-- Display City Name cleanly
         builder.button(
             text=f"📍 {p_name}",
-            callback_data=f"buy_plan_loc:{p['clearplan_id']}:{service_pk}:{p['code']}"
+            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"
         )
     builder.button(text="🔙 بازگشت", callback_data="get_test_account")
     builder.adjust(2)
@@ -389,7 +389,7 @@ async def handle_apply_test_loc(
         return
 
     parts = callback.data.split(":")
-    service_pk = parts 
+    service_pk = parts[1]
     pop_code = parts[2]
 
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
@@ -476,10 +476,8 @@ async def handle_apply_test_loc(
 
 
 # ============================================================================
-# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW WITH PAGINATION  
+# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW WITH PAGINATION
 # ============================================================================
-
-# Replace these inside bot/routers/buy.py
 
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
 async def handle_buy_plan_select(
@@ -501,7 +499,6 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # 1. Fetch all services dynamically to build active categories list [1]
     profile_id = settings.controld_profile_id or "default"
     controld_service = ControlDService(settings)
     services = await controld_service.fetch_controld_services(profile_id)
@@ -510,15 +507,13 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
-    # Extract all unique categories present in the current Control D payload [1]
     unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
 
-    from app.services.controld import get_category_label_fa  # Helper import [1]
+    from app.services.controld import get_category_label_fa
 
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
     
-    # Generate buttons dynamically for each active category returned by the API [1]
     for cat_key in unique_categories:
         label = get_category_label_fa(cat_key)
         builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{cat_key}:0")
@@ -549,7 +544,6 @@ async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, setting
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
         
-    # Filter services based on the dynamically selected category key [1]
     filtered = [s for s in services if s["category"] == category_key]
     filtered.sort(key=lambda x: (x["name"] or "").lower())
     
@@ -598,7 +592,7 @@ async def handle_buy_plan_srv(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [1]
+    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1
     service_pk = parts[2]
 
     controld_service = ControlDService(settings)
@@ -610,12 +604,12 @@ async def handle_buy_plan_srv(
 
     builder = InlineKeyboardBuilder()
     for p in proxies[:12]:
-        p_name = f"{p['country_name']} ({p['code']})"
+        p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
             callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
         )
-    builder.button(text="🔙 بازگشت", callback_data="get_test_account")
+    builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
     builder.adjust(2)
 
     await callback.message.edit_text(
@@ -635,7 +629,7 @@ async def handle_buy_plan_loc(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts )
+    plan_id = int(parts[1])
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -701,7 +695,7 @@ async def handle_pay_instant_wallet(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts )
+    plan_id = int(parts[1])
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -876,7 +870,7 @@ async def handle_pay_manual_card(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts )
+    plan_id = int(parts[1])
     service_pk = parts[2]
     pop_code = parts[3]  # Selected location POP code  
 
@@ -990,7 +984,7 @@ async def receive_receipt_photo(
 @router.callback_query(F.data.startswith("manual_ip_reg:"), StateFilter("*"))
 async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    device_id = callback.data.split(":") 
+    device_id = callback.data.split(":")[1] 
     
     await state.set_state(BuyStates.waiting_manual_ip)
     await state.update_data(device_id=device_id)
@@ -1057,11 +1051,11 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or {}
+                resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list  if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "94.183.166.208"
                 }
         except Exception:
             pass
@@ -1069,3 +1063,4 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
         "ipv4_primary": "94.183.166.203",
         "ipv4_secondary": "94.183.166.208"
     }
+
