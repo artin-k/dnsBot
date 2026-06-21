@@ -391,6 +391,8 @@ async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
 
 # app/services/controld.py
 
+# Add this function inside app/services/controld.py (above class ControlDService)
+
 async def fetch_controld_services() -> list[dict] | None:
     """
     Queries the complete, unfiltered catalog of services and games directly from Control D [1].
@@ -460,3 +462,7 @@ class ControlDService:
     
     async def update_profile_default(self, profile_id: str, pop_code: str) -> bool:
         return await update_profile_default_route(profile_id, pop_code)
+    
+    async def fetch_controld_services(self) -> list[dict] | None:
+        """Exposes the full services catalog finder inside the class [1]."""
+        return await fetch_controld_services()
