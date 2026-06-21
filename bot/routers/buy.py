@@ -47,7 +47,7 @@ from bot.states.buy import BuyStates
 router = Router(name="buy")
 
 # ============================================================================
-# CONFIGURATION & CATEGORY TRANSLATIONS [1]
+# CONFIGURATION & CATEGORIES DATA
 # ============================================================================
 WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
 
@@ -58,6 +58,49 @@ CATEGORY_MAP_FA = {
     "ai": "🤖 هوش مصنوعی (AI & Tech)",
     "music": "🎵 موسیقی (Music)",
     "other": "🧩 سایر سرویس‌ها (Other)"
+}
+
+CATEGORIES = {
+    "games": {
+        "name": "🎮 بازی‌ها (Games)",
+        "services": [
+            {"pk": "callofduty", "name": "🎮 Call of Duty"},
+            {"pk": "apexlegends", "name": "🎮 Apex Legends"},
+            {"pk": "pubg", "name": "🎮 PUBG Mobile"},
+            {"pk": "fortnite", "name": "🎮 Fortnite"},
+            {"pk": "valorant", "name": "🎮 Valorant"},
+            {"pk": "leagueoflegends", "name": "🎮 League of Legends"},
+            {"pk": "roblox", "name": "🎮 Roblox"},
+            {"pk": "minecraft", "name": "🎮 Minecraft"},
+            {"pk": "steam", "name": "🎮 Steam / Epic Games"},
+            {"pk": "playstation", "name": "🎮 PlayStation Network"},
+            {"pk": "xbox", "name": "🎮 Xbox Live"}
+        ]
+    },
+    "streaming": {
+        "name": "🎬 رسانه و استریم (Streaming)",
+        "services": [
+            {"pk": "netflix", "name": "🎬 Netflix"},
+            {"pk": "youtube", "name": "📹 YouTube"},
+            {"pk": "disney", "name": "🏰 Disney+"},
+            {"pk": "twitch", "name": "🎮 Twitch / Kick"},
+            {"pk": "spotify", "name": "🎵 Spotify / Deezer"},
+            {"pk": "primevideo", "name": "🎬 Amazon Prime Video"},
+            {"pk": "hulu", "name": "🎬 Hulu"},
+            {"pk": "hbomax", "name": "🎬 HBO Max"}
+        ]
+    },
+    "tools": {
+        "name": "🤖 ابزارها و هوش مصنوعی (AI & Tech)",
+        "services": [
+            {"pk": "chatgpt", "name": "🤖 ChatGPT / OpenAI"},
+            {"pk": "claude", "name": "🤖 Claude / Anthropic"},
+            {"pk": "gemini", "name": "🤖 Google Gemini"},
+            {"pk": "discord", "name": "💬 Discord"},
+            {"pk": "telegram", "name": "💬 Telegram"},
+            {"pk": "twitter", "name": "💬 Twitter / X"}
+        ]
+    }
 }
 
 
@@ -114,7 +157,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or []
+                resolver_info = body.get("resolvers") or body.get("resolver") or {}
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
@@ -138,7 +181,6 @@ async def show_plans(event: Message | CallbackQuery, state: FSMContext, session:
     user_id = event.from_user.id if event.from_user else 0
     user = await UsersRepository(session).get_by_telegram_id(user_id) if user_id else None
     
-    # Enforce Phone Verification
     if user is None or not user.is_phone_verified:
         from bot.keyboards.verification import phone_verification_keyboard
         from bot.states.wallet import VerificationStates
@@ -165,7 +207,6 @@ async def show_plans(event: Message | CallbackQuery, state: FSMContext, session:
             await event.answer(msg, reply_markup=main_menu_keyboard())
         return
 
-    # Build the inline plans keyboard
     builder = InlineKeyboardBuilder()
     for plan in plans:
         formatted_price = f"{plan.price:,}"
@@ -235,7 +276,6 @@ async def handle_get_test_account(
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
     
-    # Generate static categories linking to dynamic Control D APIs [1]
     for key, label in CATEGORY_MAP_FA.items():
         if key == "other":
             continue
@@ -259,11 +299,8 @@ async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     category_key = parts[1]
     page = int(parts[2])
     
-    # Query all services dynamically from Control D [1]
-# Inside handle_test_cat:
-    profile_id = settings.controld_profile_id
     controld = ControlDService(settings)
-    services = await controld.fetch_controld_services(profile_id)  # <-- Pass profile_id [1]
+    services = await controld.fetch_controld_services(settings.controld_profile_id)
     if not services:
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
@@ -271,7 +308,6 @@ async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     filtered = [s for s in services if s["category"] == category_key]
     filtered.sort(key=lambda x: (x["name"] or "").lower())
     
-    # Apply clean pagination (10 items per page) [1]
     limit = 10
     start_idx = page * limit
     end_idx = start_idx + limit
@@ -285,7 +321,6 @@ async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
             callback_data=f"test_select_srv:{s['pk']}"
         )
     
-    # Navigation Buttons [1]
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_cat:{category_key}:{page - 1}"))
@@ -384,8 +419,6 @@ async def handle_apply_test_loc(
         return
 
     device_id = device_data["device_id"]
-    
-    # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
     if service_pk == "default":
         await controld_service.update_profile_default(profile_id, pop_code) [1]
     else:
@@ -411,7 +444,6 @@ async def handle_apply_test_loc(
 
     duration_text = "۲ ساعت"
 
-    # Shamsi translation
     try:
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
@@ -467,16 +499,14 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Category Selection Menu [1]
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
     
-    # Generate category buttons
     for key, label in CATEGORY_MAP_FA.items():
         if key == "other":
             continue
-        builder.button(text=label, callback_data=f"buy_cat:{plan.id}:{key}:0")
-    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data=f"buy_cat:{plan.id}:other:0")
+        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{key}:0")
+    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data=f"srv_cat:{plan.id}:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -488,20 +518,16 @@ async def handle_buy_plan_select(
     )
 
 
-@router.callback_query(F.data.startswith("buy_cat:"), StateFilter("*"))
-async def handle_buy_cat(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+@router.callback_query(F.data.startswith("srv_cat:"), StateFilter("*"))
+async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     await callback.answer()
     parts = callback.data.split(":")
     plan_id = int(parts[1])
     category_key = parts[2]
     page = int(parts[3])
     
-    # Query all services dynamically from Control D [1]
-# Fetch available profiles dynamically from Control D API [1]
-# Inside handle_srv_cat:
-    profile_id = settings.controld_profile_id
     controld = ControlDService(settings)
-    services = await controld.fetch_controld_services(profile_id)  # <-- Pass profile_id [1]
+    services = await controld.fetch_controld_services(settings.controld_profile_id)
     if not services:
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
@@ -509,7 +535,6 @@ async def handle_buy_cat(callback: CallbackQuery, session: AsyncSession, setting
     filtered = [s for s in services if s["category"] == category_key]
     filtered.sort(key=lambda x: (x["name"] or "").lower())
     
-    # Apply clean pagination (10 items per page) [1]
     limit = 10
     start_idx = page * limit
     end_idx = start_idx + limit
@@ -520,19 +545,19 @@ async def handle_buy_cat(callback: CallbackQuery, session: AsyncSession, setting
     for s in page_items:
         builder.button(
             text=s["name"] or s["pk"],
-            callback_data=f"buy_plan_srv:{plan_id}:{s['pk']}"  # Selected game [1]
+            callback_data=f"buy_plan_srv:{plan_id}:{s['pk']}"
         )
     
-    # Navigation Buttons [1]
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"buy_cat:{plan_id}:{category_key}:{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"srv_cat:{plan_id}:{category_key}:{page - 1}"))
     if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"buy_cat:{plan_id}:{category_key}:{page + 1}"))
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"srv_cat:{plan_id}:{category_key}:{page + 1}"))
     if nav_buttons:
         builder.row(*nav_buttons)
         
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=PlanCallback(plan_id=plan_id)))
+    # --- FIXED: Use Pydantic .pack() method inside raw InlineKeyboardButton ---
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=PlanCallback(plan_id=plan_id).pack())) [1]
     builder.adjust(2)
     
     category_label = CATEGORY_MAP_FA.get(category_key, "سایر")
@@ -558,7 +583,6 @@ async def handle_buy_plan_srv(
     plan_id = int(parts[1])
     service_pk = parts[2]
 
-    # Select Country/POP [1]
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -571,7 +595,7 @@ async def handle_buy_plan_srv(
         p_name = f"{p['country_name']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
-            callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"  # Appends selected POP code [1]
+            callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
         )
     builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
     builder.adjust(2)
@@ -595,7 +619,7 @@ async def handle_buy_plan_loc(
     parts = callback.data.split(":")
     plan_id = int(parts[1])
     service_pk = parts[2]
-    pop_code = parts[3]  # Selected location POP code [1]
+    pop_code = parts[3]
 
     stmt = select(Plan).where(Plan.id == plan_id)
     result = await session.execute(stmt)
@@ -661,7 +685,7 @@ async def handle_pay_instant_wallet(
     parts = callback.data.split(":")
     plan_id = int(parts[1])
     service_pk = parts[2]
-    pop_code = parts[3]  # Selected location POP code [1]
+    pop_code = parts[3]
 
     stmt = select(Plan).where(Plan.id == plan_id)
     result = await session.execute(stmt)
@@ -927,7 +951,7 @@ async def receive_receipt_photo(
     await message.answer("✅ رسید شما دریافت شد و در انتظار تایید ادمین است.")
 
     # --- FIXED: Local import to bypass circular dependency name-error ---
-    from bot.notifications import notify_admins_order_payment
+    from bot.notifications import notify_admins_order_payment [1]
 
     sent_count = await notify_admins_order_payment(
         bot=message.bot,
@@ -1015,7 +1039,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or []
+                resolver_info = body.get("resolvers") or body.get("resolver") or {}
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
