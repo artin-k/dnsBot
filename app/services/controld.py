@@ -12,6 +12,8 @@ settings = get_settings()
 
 BASE_URL = "https://api.controld.com"
 
+
+
 # Define categories here so routers can import them cleanly (No router imports!) [1]
 CATEGORY_MAP_FA = {
     "gaming": "🎮 بازی‌ها (Gaming)",
@@ -63,6 +65,53 @@ COUNTRY_MAP_FA = {
     "IN": "هند",
     "JP": "ژاپن"
 }
+
+# app/services/controld.py (Paste below get_country_name_fa)
+
+# Persian City Translator Map [1]
+CITY_MAP_FA = {
+    "Adelaide": "آدلاید",
+    "Brisbane": "بریزبن",
+    "Melbourne": "ملبورن",
+    "Perth": "پرت",
+    "Sydney": "سیدنی",
+    "New York": "نیویورک",
+    "Los Angeles": "لس آنجلس",
+    "London": "لندن",
+    "Paris": "پاریس",
+    "Frankfurt": "فرانکفورت",
+    "Amsterdam": "آمستردام",
+    "Helsinki": "هلسینکی",
+    "Toronto": "تورنتو",
+    "Montreal": "مونترال",
+    "Vancouver": "ونکوور",
+    "Atlanta": "آتلانتا",
+    "Chicago": "شیکاگو",
+    "Dallas": "دالاس",
+    "Denver": "دنور",
+    "Miami": "میامی",
+    "Seattle": "سیاتل",
+    "Istanbul": "استانبول",
+    "Vienna": "وین",
+    "Brussels": "بروکسل",
+    "Sarajevo": "سارایوو",
+    "Sao Paulo": "سائو پائولو",
+    "Dubai": "دبی",
+    "Singapore": "سنگاپور",
+    "Warsaw": "ورشو",
+    "Stockholm": "استکهلم",
+    "Geneva": "ژنو",
+    "Zurich": "زوریخ",
+    "Milan": "میلان",
+    "Rome": "رم",
+    "Madrid": "مادرید",
+    "Tokyo": "توکیو",
+    "Seoul": "سئول"
+}
+
+def get_city_name_fa(city_name: str) -> str:
+    """Translates the city name to Persian [1]."""
+    return CITY_MAP_FA.get(city_name, city_name)
 
 def get_country_name_fa(country_code: str) -> str:
     return COUNTRY_MAP_FA.get(country_code.upper(), country_code.upper())
@@ -315,12 +364,16 @@ async def fetch_controld_proxies() -> list[dict] | None:
                     if not pop_id:
                         continue 
                     
+# Update this part inside fetch_controld_proxies() in app/services/controld.py
+
                     result.append({
                         "code": pop_id,
                         "country_code": country_code,
                         "country_name": get_country_name_fa(country_code),
+                        "city_name": get_city_name_fa(p.get("city") or ""),  # <-- Added translated city name [1]
                         "city": p.get("city") or ""
                     })
+                    
                 return result
             return None
         except Exception as e:

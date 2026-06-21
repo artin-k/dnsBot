@@ -362,10 +362,10 @@ async def handle_test_select_srv(
 
     builder = InlineKeyboardBuilder()
     for p in proxies[:12]:
-        p_name = f"{p['country_name']} ({p['code']})"
+        p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"  # <-- Display City Name cleanly [1]
         builder.button(
             text=f"📍 {p_name}",
-            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"
+            callback_data=f"buy_plan_loc:{p['clearplan_id']}:{service_pk}:{p['code']}"
         )
     builder.button(text="🔙 بازگشت", callback_data="get_test_account")
     builder.adjust(2)
@@ -615,7 +615,7 @@ async def handle_buy_plan_srv(
             text=f"📍 {p_name}",
             callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
         )
-    builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
+    builder.button(text="🔙 بازگشت", callback_data="get_test_account")
     builder.adjust(2)
 
     await callback.message.edit_text(
