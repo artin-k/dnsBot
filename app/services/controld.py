@@ -6,14 +6,31 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from app.config import get_settings
-from bot.routers.services import CATEGORY_MAP_FA
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 BASE_URL = "https://api.controld.com"
 
-# app/services/controld.py (Paste below your imports)
+# Define categories here so routers can import them cleanly (No router imports!) [1]
+CATEGORY_MAP_FA = {
+    "gaming": "🎮 بازی‌ها (Gaming)",
+    "video": "🎬 رسانه و استریم (Video/Streaming)",
+    "social": "💬 شبکه‌های اجتماعی (Social)",
+    "ai": "🤖 هوش مصنوعی (AI & Tech)",
+    "music": "🎵 موسیقی (Music)",
+    "news": "📰 اخبار (News)",
+    "shopping": "🛒 خرید (Shopping)",
+    "business": "💼 کسب و کار (Business)",
+    "productivity": "🛠 ابزارها (Productivity)",
+    "other": "🧩 سایر سرویس‌ها (Other)"
+}
+
+def get_category_label_fa(category_key: str) -> str:
+    """Cleans and translates category keys dynamically."""
+    clean_key = category_key.lower().replace("native_", "").strip()
+    return CATEGORY_MAP_FA.get(clean_key, f"🧩 {clean_key.capitalize()}")
+
 
 # Persian Country Translator Map [1]
 COUNTRY_MAP_FA = {
@@ -44,33 +61,10 @@ COUNTRY_MAP_FA = {
     "PL": "لهستان",
     "ES": "اسپانیا",
     "IN": "هند",
-    "JP": "ژاپن",
-    # app/services/controld.py
-
-# Adaptive Category Map supporting both raw and prefixed category names [1]
-
-    "gaming": "🎮 بازی‌ها (Gaming)",
-    "video": "🎬 رسانه و استریم (Video/Streaming)",
-    "social": "💬 شبکه‌های اجتماعی (Social)",
-    "ai": "🤖 هوش مصنوعی (AI & Tech)",
-    "music": "🎵 موسیقی (Music)",
-    "news": "📰 اخبار (News)",
-    "shopping": "🛒 خرید (Shopping)",
-    "business": "💼 کسب و کار (Business)",
-    "productivity": "🛠 ابزارها (Productivity)",
-    "other": "🧩 سایر سرویس‌ها (Other)"
+    "JP": "ژاپن"
 }
 
-def get_category_label_fa(category_key: str) -> str:
-    """
-    Cleans and translates category keys dynamically (handles prefixes like 'native_') [1].
-    """
-    clean_key = category_key.lower().replace("native_", "").strip()
-    return CATEGORY_MAP_FA.get(clean_key, f"🧩 {clean_key.capitalize()}")
-
-
 def get_country_name_fa(country_code: str) -> str:
-    """Translates ISO country codes into full Persian names [1]."""
     return COUNTRY_MAP_FA.get(country_code.upper(), country_code.upper())
 
 
@@ -83,17 +77,13 @@ def _get_headers() -> dict:
 
 
 def generate_dns_stamp(resolver_id: str) -> str:
-    """
-    Generates a valid DNS Stamp (sdns://) locally for a Control D DoH resolver.
-    Bypasses any API delivery issues to guarantee the stamp is always available.
-    """
     import struct
     import base64
     
-    protocol = b'\x02'  # DoH protocol byte
-    properties = struct.pack('<Q', 1)  # DNSSEC enabled (8-byte little-endian)
-    ip_addr_len = b'\x00'  # No hardcoded IP address
-    hashes_len = b'\x00'  # Empty hashes list
+    protocol = b'\x02' 
+    properties = struct.pack('<Q', 1) 
+    ip_addr_len = b'\x00' 
+    hashes_len = b'\x00' 
     
     host = b"dns.controld.com"
     host_len = bytes([len(host)])
@@ -101,7 +91,6 @@ def generate_dns_stamp(resolver_id: str) -> str:
     path = f"/{resolver_id}".encode('utf-8')
     path_len = bytes([len(path)])
     
-    # Assemble the binary DNS stamp payload
     payload = protocol + properties + ip_addr_len + hashes_len + host_len + host + path_len + path
     encoded = base64.urlsafe_b64encode(payload).decode('utf-8').rstrip('=')
     return f"sdns://{encoded}"
@@ -113,11 +102,7 @@ async def create_dns_device(
     duration_hours: int, 
     device_type: str = "mobile", 
     device_name: str | None = None
-) -> dict | None:
-    """
-    Creates a new secure DNS endpoint on Control D with a specific profile.
-    Extracts both Primary and Secondary legacy IPv4 addresses, resolver details, and Stamps.
-    """
+) -> dict | None: 
     url = f"{BASE_URL}/devices"
     name = device_name or f"tg_user_{tg_user_id}"
     disable_ttl = int((datetime.now(timezone.utc) + timedelta(hours=duration_hours)).timestamp())
@@ -131,7 +116,7 @@ async def create_dns_device(
     }
 
     async with httpx.AsyncClient() as client:
-        try:
+        try: 
             response = await client.post(url, json=payload, headers=_get_headers(), timeout=10.0)
             if response.status_code in (200, 201):
                 data = response.json()
@@ -144,7 +129,6 @@ async def create_dns_device(
                 doh = resolver_info.get("doh") or resolver_info.get("dns_over_https")
                 dot = resolver_info.get("dot") or resolver_info.get("dns_over_tls")
                 
-                # Parse Legacy IPs (Primary and Secondary)
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 v6_list = resolver_info.get("v6") or resolver_info.get("legacy", {}).get("ipv6") or []
                 
@@ -152,7 +136,6 @@ async def create_dns_device(
                 ipv4_secondary = v4_list[1] if len(v4_list) > 1 else "ثبت نشده"
                 ipv6 = v6_list[0] if v6_list else "ثبت نشده"
                 
-                # Extract Resolver ID and DNS Stamp
                 resolver_id = resolver_info.get("uid") or resolver_info.get("id") or device_pk
                 stamp = resolver_info.get("stamp") or resolver_info.get("dns_stamp")
                 if not stamp and resolver_id:
@@ -180,9 +163,6 @@ async def create_dns_device(
 
 
 async def delete_dns_device(device_id: str) -> bool:
-    """
-    Removes a device configuration from Control D on subscription expiry.
-    """
     url = f"{BASE_URL}/devices/{device_id}"
     async with httpx.AsyncClient() as client:
         try:
@@ -198,9 +178,6 @@ async def delete_dns_device(device_id: str) -> bool:
 
 
 async def update_dns_device(device_id: str, disable_ttl: int) -> bool:
-    """
-    Updates an existing device configuration's automatic disable timestamp (disable_ttl).
-    """
     url = f"{BASE_URL}/devices/{device_id}"
     payload = {
         "disable_ttl": disable_ttl
@@ -220,9 +197,6 @@ async def update_dns_device(device_id: str, disable_ttl: int) -> bool:
 
 
 async def fetch_controld_profiles() -> list[dict] | None:
-    """
-    Fetches all profiles associated with your Control D account.
-    """
     url = f"{BASE_URL}/profiles"
     async with httpx.AsyncClient() as client:
         try:
@@ -247,9 +221,6 @@ async def fetch_controld_profiles() -> list[dict] | None:
 
 
 async def create_device(profile_id: str, device_name: str, duration_hours: int) -> dict | None:
-    """
-    Create a device using aiohttp and return {'device_id': ..., 'doh': '...'} or None on error.
-    """
     url = f"{BASE_URL}/devices"
     disable_ttl = int((datetime.now(timezone.utc) + timedelta(hours=duration_hours)).timestamp())
     
@@ -290,9 +261,6 @@ async def create_device(profile_id: str, device_name: str, duration_hours: int) 
 
 
 async def delete_device(device_id: str) -> bool:
-    """
-    Delete a device using aiohttp.
-    """
     url = f"{BASE_URL}/devices/{device_id}"
     timeout = aiohttp.ClientTimeout(total=10)
     try:
@@ -310,12 +278,8 @@ async def delete_device(device_id: str) -> bool:
         logger.error(f"Error during deleting Control D device {device_id}: {str(e)}")
         return False
 
-# app/services/controld.py
 
 async def update_dns_device_profile(device_id: str, profile_id: str) -> bool:
-    """
-    Updates the profile (location/blocking rules) of an existing device in Control D.
-    """
     url = f"{BASE_URL}/devices/{device_id}"
     payload = {
         "profile_id": profile_id
@@ -332,31 +296,22 @@ async def update_dns_device_profile(device_id: str, profile_id: str) -> bool:
         except Exception as e:
             logger.error(f"Error during updating Control D device profile {device_id}: {str(e)}")
             return False
- # Replace this function in app/services/controld.py
+
 
 async def fetch_controld_proxies() -> list[dict] | None:
-    """
-    Fetches all available proxy locations (POP codes) from Control D with debug logging.
-    Checks for capitalized 'PK' to prevent None values [1].
-    """
     url = f"{BASE_URL}/proxies"
-    print(f"\n[DEBUG PROXIES] Querying Control D API: {url}")
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(url, headers=_get_headers(), timeout=10.0)
-            
-            print(f"[DEBUG PROXIES] Status Code: {response.status_code}")
-            
             if response.status_code == 200:
                 data = response.json()
-                body = data.get('body', {})
-                proxies = body.get('proxies', [])
+                body = data.get("body", {})
+                proxies = body.get("proxies", [])
                 
                 result = []
                 for p in proxies:
                     country_code = p.get("country") or "US"
-                    # Safe key fallbacks: Added uppercase 'PK' used by Control D [1]
-                    pop_id = p.get("PK") or p.get("id") or p.get("code") or p.get("pop") or p.get("pk") or p.get("location_code")
+                    pop_id = p.get("id") or p.get("code") or p.get("pop") or p.get("pk") or p.get("location_code") or p.get("PK")
                     if not pop_id:
                         continue 
                     
@@ -366,23 +321,18 @@ async def fetch_controld_proxies() -> list[dict] | None:
                         "country_name": get_country_name_fa(country_code),
                         "city": p.get("city") or ""
                     })
-                print(f"[DEBUG PROXIES] Successfully parsed {len(result)} proxies!")
                 return result
             return None
         except Exception as e:
-            print(f"[DEBUG PROXIES] Exception occurred: {str(e)}")
             logger.error(f"Error fetching Control D proxies: {str(e)}")
             return None
 
+
 async def update_service_route(profile_id: str, service_name: str, pop_code: str) -> bool:
-    """
-    Sets a redirection route for a specific service (like netflix, youtube) 
-    via a specific proxy POP code [1].
-    """
     url = f"{BASE_URL}/profiles/{profile_id}/services/{service_name}"
     payload = {
-        "do": 3,      # 3 represents Proxy / Redirect [1]
-        "status": 1,  # 1 represents Enabled [1]
+        "do": 3,      
+        "status": 1,  
         "via": pop_code
     }
     async with httpx.AsyncClient() as client:
@@ -392,33 +342,9 @@ async def update_service_route(profile_id: str, service_name: str, pop_code: str
         except Exception as e:
             logger.error(f"Error updating service route for {service_name}: {str(e)}")
             return False
-        
-async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
-    """
-    Updates the overall default routing rule of a profile to go via a specific POP code [1].
-    """
-    url = f"{BASE_URL}/profiles/{profile_id}/default"
-    payload = {
-        "do": 3,      # 3 represents Proxy / Redirect [1]
-        "status": 1,  # 1 represents Enabled [1]
-        "via": pop_code
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
-            return response.status_code in (200, 201)
-        except Exception as e:
-            logger.error(f"Error updating default profile route for {profile_id}: {str(e)}")
-            return False
-        
 
-# Replace this function inside app/services/controld.py
 
 async def fetch_controld_services(profile_id: str) -> list[dict] | None:
-    """
-    Queries the complete, unfiltered catalog of services and games directly 
-    from the target Control D Profile [1].
-    """
     url = f"{BASE_URL}/profiles/{profile_id}/services"
     async with httpx.AsyncClient() as client:
         try:
@@ -427,7 +353,6 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
                 data = response.json()
                 body = data.get("body", [])
                 
-                # Defensively handle both list and nested dictionary structures [1]
                 services = []
                 if isinstance(body, dict):
                     services = body.get("services") or body.get("apps") or []
@@ -436,7 +361,6 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
                 
                 result = []
                 for s in services:
-                    # Parse uppercase PK or standard pk safely
                     pk_val = s.get("PK") or s.get("pk") or s.get("id")
                     if not pk_val:
                         continue
@@ -452,11 +376,9 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
         except Exception as e:
             logger.error(f"Error fetching Control D services: {str(e)}")
             return None
-        
+
+
 class ControlDService:
-    """
-    Class-based wrapper around Control D async functions.
-    """
     def __init__(self, settings_obj=None) -> None:
         self.settings = settings_obj or settings
 
@@ -483,20 +405,15 @@ class ControlDService:
 
     async def delete_device(self, device_id: str) -> bool:
         return await delete_device(device_id=device_id)
-    
+
     async def update_device_profile(self, device_id: str, profile_id: str) -> bool:
-        """Exposes the profile updater function inside the class."""
         return await update_dns_device_profile(device_id=device_id, profile_id=profile_id)
-    
+
     async def fetch_controld_proxies(self) -> list[dict] | None:
         return await fetch_controld_proxies()
 
     async def update_service_route(self, profile_id: str, service_name: str, pop_code: str) -> bool:
-        return await update_service_route(profile_id, service_name, pop_code)
-    
-    async def update_profile_default(self, profile_id: str, pop_code: str) -> bool:
-        return await update_profile_default_route(profile_id, pop_code)
-    
+        return await update_service_route(profile_id=profile_id, service_name=service_name, pop_code=pop_code)
+
     async def fetch_controld_services(self, profile_id: str) -> list[dict] | None:
-        """Exposes the profile services catalog inside the class."""
         return await fetch_controld_services(profile_id=profile_id)
