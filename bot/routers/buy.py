@@ -620,17 +620,20 @@ async def handle_buy_plan_srv(
     )
 
 
+# Replace this function inside bot/routers/buy.py
+
 @router.callback_query(F.data.startswith("buy_plan_loc:"), StateFilter("*"))
 async def handle_buy_plan_loc(
     callback: CallbackQuery,
     session: AsyncSession,
+    settings: Settings,  # <-- Added settings parameter for ControlD queries [1]
 ) -> None:
     await callback.answer()
     if callback.message is None or callback.from_user is None:
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
+    plan_id = int(parts[1])
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -646,7 +649,33 @@ async def handle_buy_plan_loc(
     if user is None:
         return
 
-    # Check renewal
+    # 1. Resolve Game/Service display name [1]
+    def get_service_name_display(pk: str) -> str:
+        if pk == "default":
+            return "🌐 کل ترافیک اینترنت"
+        for cat in CATEGORIES.values():
+            for s in cat["services"]:
+                if s["pk"] == pk:
+                    return s["name"]
+        return pk.capitalize()
+
+    service_display = get_service_name_display(service_pk)
+
+    # 2. Resolve Country display name [1]
+    controld_service = ControlDService(settings)
+    proxies = await controld_service.fetch_controld_proxies()
+    country_display = pop_code
+    if proxies:
+        for p in proxies:
+            if p["code"] == pop_code:
+                country_display = f"{p['country_name']} ({p['code']})"
+                break
+
+    # 3. Safe remaining duration formatting to prevent '0 ساعت' [1]
+    duration_hours = plan.duration_hours or 720
+    duration_text = format_duration_fa(duration_hours)
+
+    # 4. Check renewal discount
     active_stmt = select(VPNService).where(
         VPNService.user_id == user.id,
         VPNService.status == "active"
@@ -661,10 +690,13 @@ async def handle_buy_plan_loc(
         final_price = plan.price - discount_amount
         discount_msg = f"🎁 تخفیف تمدید فعال: {discount_amount:,} تومان\n"
 
+    # Pre-invoice text summarizing the selected configurations [1]
     invoice_text = f"""🧾 پیش‌فاکتور خرید اشتراک DNS
 
 ⚡ نام سرویس: {escape(plan.title)}
-🗓 مدت اعتبار: {plan.duration_hours} ساعت
+🗓 مدت اعتبار: {duration_text}
+🎮 برنامه/بازی: <b>{escape(service_display)}</b>
+🗺 سرور (کشور): <b>{escape(country_display)}</b>
 💵 قیمت طرح: {plan.price:,} تومان
 {discount_msg}💵 قیمت نهایی شما: {final_price:,} تومان
 🏦 موجودی فعلی شما: {user.wallet_balance:,} تومان
@@ -677,8 +709,7 @@ async def handle_buy_plan_loc(
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
-    await callback.message.edit_text(invoice_text, reply_markup=builder.as_markup())
-
+    await callback.message.edit_text(invoice_text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 # ============================================================================
 # 4. INSTANT PAYMENT FROM WALLET WITH GLOBAL LOCATION ROUTING  
