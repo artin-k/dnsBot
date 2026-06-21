@@ -145,13 +145,14 @@ async def show_plans(event: Message | CallbackQuery, state: FSMContext, session:
     user_id = event.from_user.id if event.from_user else 0
     user = await UsersRepository(session).get_by_telegram_id(user_id) if user_id else None
     
+    # Enforce Phone Verification
     if user is None or not user.is_phone_verified:
         from bot.keyboards.verification import phone_verification_keyboard
         from bot.states.wallet import VerificationStates
         await state.set_state(VerificationStates.waiting_contact)
         await state.update_data(next_section="buy")
         
-        prompt_text = "⚠️ برای خرید اشتراک DNS، ابتدا باید شماره موبایل خود را تایید کنید."
+        prompt_text = "⚠️ برای خرید اشتراک DNS، ابتدا باید شماره موبایل خود را تایید کنید.\n\nلطفاً دکمه زیر را بزنید تا شماره تماس شما ارسال شود 👇"
         if isinstance(event, CallbackQuery):
             await event.answer()
             await event.message.answer(prompt_text, reply_markup=phone_verification_keyboard())
@@ -171,6 +172,7 @@ async def show_plans(event: Message | CallbackQuery, state: FSMContext, session:
             await event.answer(msg, reply_markup=main_menu_keyboard())
         return
 
+    # Build the inline plans keyboard
     builder = InlineKeyboardBuilder()
     for plan in plans:
         formatted_price = f"{plan.price:,}"
@@ -204,7 +206,7 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & CATEGORIES [1]
+# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & CATEGORIES
 # ============================================================================
 
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
@@ -223,6 +225,7 @@ async def handle_get_test_account(
         await callback.answer()
         return
 
+    # Anti-Abuse DB Check [1]
     stmt = select(VPNService).where(
         VPNService.user_id == user.id,
         VPNService.is_test_account == True
@@ -357,7 +360,13 @@ async def handle_apply_test_loc(
         return
 
     device_id = device_data["device_id"]
-    await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
+    
+    # --- REDIRECT VIA SELECTED ROUTE ---
+    # Call overall default route or specific service route cleanly [1]
+    if service_pk == "default":
+        await controld_service.update_profile_default(profile_id, pop_code) [1]
+    else:
+        await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
 
     now = datetime.now(timezone.utc)
     expire_at = now + timedelta(hours=2)
@@ -379,6 +388,7 @@ async def handle_apply_test_loc(
 
     duration_text = "۲ ساعت"
 
+    # Shamsi translation
     try:
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
@@ -659,9 +669,12 @@ async def handle_pay_instant_wallet(
         ipv4_primary = device_data["ipv4_primary"]
         ipv4_secondary = device_data["ipv4_secondary"]
 
-        # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
+        # --- REDIRECT VIA SELECTED ROUTE ---
         controld_service = ControlDService(settings)
-        await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
+        if service_pk == "default":
+            await controld_service.update_profile_default(profile_id, pop_code) [1]
+        else:
+            await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
 
         new_subscription = VPNService(
             user_id=user.id,
@@ -699,8 +712,11 @@ async def handle_pay_instant_wallet(
 
         device_id = current_sub.controld_device_id
         
-        # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ON RENEWAL ---
-        await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
+        # --- REDIRECT VIA SELECTED ROUTE ON RENEWAL ---
+        if service_pk == "default":
+            await controld_service.update_profile_default(profile_id, pop_code) [1]
+        else:
+            await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
 
         # Use our real-time IP fallback getter to fetch dynamic IPs [1]
         ips = await get_controld_device_ips(device_id, settings)
@@ -856,7 +872,7 @@ async def receive_receipt_photo(
     await message.answer("✅ رسید شما دریافت شد و در انتظار تایید ادمین است.")
 
     # --- FIXED: Local import to bypass circular dependency name-error ---
-    from bot.notifications import notify_admins_order_payment 
+    from bot.notifications import notify_admins_order_payment
 
     sent_count = await notify_admins_order_payment(
         bot=message.bot,

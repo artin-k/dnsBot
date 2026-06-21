@@ -370,6 +370,24 @@ async def update_service_route(profile_id: str, service_name: str, pop_code: str
             logger.error(f"Error updating service route for {service_name}: {str(e)}")
             return False
         
+async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
+    """
+    Updates the overall default routing rule of a profile to go via a specific POP code [1].
+    """
+    url = f"{BASE_URL}/profiles/{profile_id}/default"
+    payload = {
+        "do": 3,      # 3 represents Proxy / Redirect [1]
+        "status": 1,  # 1 represents Enabled [1]
+        "via": pop_code
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
+            return response.status_code in (200, 201)
+        except Exception as e:
+            logger.error(f"Error updating default profile route for {profile_id}: {str(e)}")
+            return False
+        
 class ControlDService:
     """
     Class-based wrapper around Control D async functions.
@@ -410,3 +428,6 @@ class ControlDService:
 
     async def update_service_route(self, profile_id: str, service_name: str, pop_code: str) -> bool:
         return await update_service_route(profile_id, service_name, pop_code)
+    
+    async def update_profile_default(self, profile_id: str, pop_code: str) -> bool:
+        return await update_profile_default_route(profile_id, pop_code)
