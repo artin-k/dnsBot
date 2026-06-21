@@ -38,7 +38,7 @@
 
 # def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
 #     """
-#     Generates inline keyboard matching your target design [1].
+#     Generates inline keyboard matching your target design  .
 #     """
 #     builder = InlineKeyboardBuilder()
 #     builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
@@ -134,7 +134,7 @@
 #         return
 
 #     try:
-#         plan_id = int(callback.data.split(":")[1])
+#         plan_id = int(callback.data.split(":") )
 #     except (ValueError, IndexError):
 #         await callback.message.answer("❌ اطلاعات درخواست معتبر نیست.")
 #         return
@@ -167,7 +167,7 @@
 #         discount_amount = int(plan.price * 0.1)
 #         final_price = plan.price - discount_amount
 
-#     # Actual database wallet balance verification [1]
+#     # Actual database wallet balance verification  
 #     if user.wallet_balance < final_price:
 #         await callback.message.answer(
 #             f"❌ موجودی کیف پول شما کافی نیست.\n\n"
@@ -246,7 +246,7 @@
 #         ipv4_primary = getattr(current_sub, "ipv4_primary", "ثبت شده")
 #         ipv4_secondary = getattr(current_sub, "ipv4_secondary", "ثبت شده")
 
-#     # Atomic database balance deduction [1]
+#     # Atomic database balance deduction  
 #     user.wallet_balance -= final_price
 #     await session.commit()
 #     await state.clear()
@@ -264,7 +264,7 @@
 #         tehran_tz = ZoneInfo("Asia/Tehran")
 #         expire_str = expire_at.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-#     # Success Card Message Matching your design target [1]
+#     # Success Card Message Matching your design target  
 #     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
 # 🔷 زمان باقی‌مانده: {plan.duration_hours} ساعت
 # دی ان اس اختصاصی شما :
@@ -312,7 +312,7 @@
 #         await callback.answer()
 #         return
 
-#     # 2. Strict Anti-Abuse DB Check [1]
+#     # 2. Strict Anti-Abuse DB Check  
 #     stmt = select(VPNService).where(
 #         VPNService.user_id == user.id,
 #         VPNService.is_test_account == True
@@ -334,7 +334,7 @@
 
 #     await callback.message.answer("⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...")
 
-#     # Generate unique device identifier [1]
+#     # Generate unique device identifier  
 #     random_hex = secrets.token_hex(4)
 #     unique_device_name = f"tg_test_{user.telegram_id}_{random_hex}"
 
@@ -354,7 +354,7 @@
 #     now = datetime.now(timezone.utc)
 #     expire_at = now + timedelta(hours=2)
 
-#     # 5. Save the test Subscription to PostgreSQL [1]
+#     # 5. Save the test Subscription to PostgreSQL  
 #     new_test_sub = VPNService(
 #         user_id=user.id,
 #         plan_id=None,
@@ -420,7 +420,7 @@
 #     Enters the FSM state asking for manual IP input.
 #     """
 #     await callback.answer()
-#     device_id = callback.data.split(":")[1]
+#     device_id = callback.data.split(":") 
     
 #     await state.set_state(BuyStates.waiting_manual_ip)
 #     await state.update_data(device_id=device_id)

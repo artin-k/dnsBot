@@ -105,7 +105,7 @@ CATEGORIES = {
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
-    """Generates the inline keyboard matching your design screenshot [1]."""
+    """Generates the inline keyboard matching your design screenshot  ."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
@@ -115,7 +115,7 @@ def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
 
 
 def format_duration_fa(hours: int) -> str:
-    """Formats hours dynamically into a readable Persian duration string [1]."""
+    """Formats hours dynamically into a readable Persian duration string  ."""
     if hours >= 24 and hours % 24 == 0:
         days = hours // 24
         return f"{days} روز"
@@ -123,7 +123,7 @@ def format_duration_fa(hours: int) -> str:
 
 
 def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
-    """Dynamically calculates remaining days/hours from expire_at [1]."""
+    """Dynamically calculates remaining days/hours from expire_at  ."""
     if not expire_at:
         return "۳۰ روز"
     now = datetime.now(timezone.utc)
@@ -161,7 +161,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_secondary": v4_list  if len(v4_list) > 1 else "94.183.166.208"
                 }
         except Exception:
             pass
@@ -240,7 +240,7 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES [1]
+# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES  
 # ============================================================================
 
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
@@ -272,7 +272,7 @@ async def handle_get_test_account(
 
     await callback.answer()
 
-    # Dynamic Category Selector Menu [1]
+    # Dynamic Category Selector Menu  
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
     
@@ -296,7 +296,7 @@ async def handle_get_test_account(
 async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     await callback.answer()
     parts = callback.data.split(":")
-    category_key = parts[1]
+    category_key = parts 
     page = int(parts[2])
     
     controld = ControlDService(settings)
@@ -351,7 +351,7 @@ async def handle_test_select_srv(
     if callback.message is None:
         return
 
-    service_pk = callback.data.split(":")[1]
+    service_pk = callback.data.split(":") 
 
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
@@ -389,7 +389,7 @@ async def handle_apply_test_loc(
         return
 
     parts = callback.data.split(":")
-    service_pk = parts[1]
+    service_pk = parts 
     pop_code = parts[2]
 
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
@@ -420,9 +420,9 @@ async def handle_apply_test_loc(
 
     device_id = device_data["device_id"]
     if service_pk == "default":
-        await controld_service.update_profile_default(profile_id, pop_code) [1]
+        await controld_service.update_profile_default(profile_id, pop_code)  
     else:
-        await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
+        await controld_service.update_service_route(profile_id, service_pk, pop_code)  
 
     now = datetime.now(timezone.utc)
     expire_at = now + timedelta(hours=2)
@@ -476,8 +476,10 @@ async def handle_apply_test_loc(
 
 
 # ============================================================================
-# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW WITH PAGINATION [1]
+# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW WITH PAGINATION  
 # ============================================================================
+
+# Replace these inside bot/routers/buy.py
 
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
 async def handle_buy_plan_select(
@@ -499,14 +501,28 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
+    # 1. Fetch all services dynamically to build active categories list [1]
+    profile_id = settings.controld_profile_id or "default"
+    controld_service = ControlDService(settings)
+    services = await controld_service.fetch_controld_services(profile_id)
+    
+    if not services:
+        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+        return
+
+    # Extract all unique categories present in the current Control D payload [1]
+    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
+
+    from app.services.controld import get_category_label_fa  # Helper import [1]
+
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
     
-    for key, label in CATEGORY_MAP_FA.items():
-        if key == "other":
-            continue
-        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{key}:0")
-    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data=f"srv_cat:{plan.id}:other:0")
+    # Generate buttons dynamically for each active category returned by the API [1]
+    for cat_key in unique_categories:
+        label = get_category_label_fa(cat_key)
+        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{cat_key}:0")
+        
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -526,12 +542,14 @@ async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, setting
     category_key = parts[2]
     page = int(parts[3])
     
+    profile_id = settings.controld_profile_id or "default"
     controld = ControlDService(settings)
-    services = await controld.fetch_controld_services(settings.controld_profile_id)
+    services = await controld.fetch_controld_services(profile_id)
     if not services:
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
         
+    # Filter services based on the dynamically selected category key [1]
     filtered = [s for s in services if s["category"] == category_key]
     filtered.sort(key=lambda x: (x["name"] or "").lower())
     
@@ -556,11 +574,11 @@ async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, setting
     if nav_buttons:
         builder.row(*nav_buttons)
         
-    # --- FIXED: Use Pydantic .pack() method inside raw InlineKeyboardButton ---
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=PlanCallback(plan_id=plan_id).pack())) [1]
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=PlanCallback(plan_id=plan_id).pack()))
     builder.adjust(2)
     
-    category_label = CATEGORY_MAP_FA.get(category_key, "سایر")
+    from app.services.controld import get_category_label_fa
+    category_label = get_category_label_fa(category_key)
     await callback.message.edit_text(
         f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
@@ -580,7 +598,7 @@ async def handle_buy_plan_srv(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts )
     service_pk = parts[2]
 
     controld_service = ControlDService(settings)
@@ -617,7 +635,7 @@ async def handle_buy_plan_loc(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts )
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -668,7 +686,7 @@ async def handle_buy_plan_loc(
 
 
 # ============================================================================
-# 4. INSTANT PAYMENT FROM WALLET WITH GLOBAL LOCATION ROUTING [1]
+# 4. INSTANT PAYMENT FROM WALLET WITH GLOBAL LOCATION ROUTING  
 # ============================================================================
 
 @router.callback_query(F.data.startswith("pay_instant_wallet:"), StateFilter("*"))
@@ -683,7 +701,7 @@ async def handle_pay_instant_wallet(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts )
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -710,7 +728,7 @@ async def handle_pay_instant_wallet(
     if current_sub is not None:
         final_price = plan.price - int(plan.price * 0.1)
 
-    # Validate wallet balance [1]
+    # Validate wallet balance  
     if user.wallet_balance < final_price:
         await callback.message.answer(
             f"❌ موجودی کیف پول کافی نیست.\n"
@@ -751,9 +769,9 @@ async def handle_pay_instant_wallet(
         # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
         controld_service = ControlDService(settings)
         if service_pk == "default":
-            await controld_service.update_profile_default(profile_id, pop_code) [1]
+            await controld_service.update_profile_default(profile_id, pop_code)  
         else:
-            await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
+            await controld_service.update_service_route(profile_id, service_pk, pop_code)  
 
         new_subscription = VPNService(
             user_id=user.id,
@@ -793,22 +811,22 @@ async def handle_pay_instant_wallet(
         
         # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ON RENEWAL ---
         if service_pk == "default":
-            await controld_service.update_profile_default(profile_id, pop_code) [1]
+            await controld_service.update_profile_default(profile_id, pop_code)  
         else:
-            await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
+            await controld_service.update_service_route(profile_id, service_pk, pop_code)  
 
-        # Use our real-time IP fallback getter to fetch dynamic IPs [1]
+        # Use our real-time IP fallback getter to fetch dynamic IPs  
         ips = await get_controld_device_ips(device_id, settings)
         ipv4_primary = ips["ipv4_primary"]
         ipv4_secondary = ips["ipv4_secondary"]
 
-    # Atomic balance deduction [1]
+    # Atomic balance deduction  
     user.wallet_balance -= final_price
     await session.commit()
     await state.clear()
 
     # Format Expiration
-    duration_text = calculate_remaining_time_fa(expire_at) [1]
+    duration_text = calculate_remaining_time_fa(expire_at)  
 
     try:
         tehran_tz = ZoneInfo("Asia/Tehran")
@@ -843,7 +861,7 @@ async def handle_pay_instant_wallet(
 
 
 # ============================================================================
-# 5. CARD-TO-CARD MANUAL BILLING FLOW WITH LOCATION PASSING [1]
+# 5. CARD-TO-CARD MANUAL BILLING FLOW WITH LOCATION PASSING  
 # ============================================================================
 
 @router.callback_query(F.data.startswith("pay_manual_card:"), StateFilter("*"))
@@ -858,9 +876,9 @@ async def handle_pay_manual_card(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts )
     service_pk = parts[2]
-    pop_code = parts[3]  # Selected location POP code [1]
+    pop_code = parts[3]  # Selected location POP code  
 
     plan = await PlansRepository(session).get(plan_id)
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
@@ -972,7 +990,7 @@ async def receive_receipt_photo(
 @router.callback_query(F.data.startswith("manual_ip_reg:"), StateFilter("*"))
 async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    device_id = callback.data.split(":")[1]
+    device_id = callback.data.split(":") 
     
     await state.set_state(BuyStates.waiting_manual_ip)
     await state.update_data(device_id=device_id)
@@ -1024,7 +1042,7 @@ async def process_manual_ip(
 
 
 # ============================================================================
-# REAL-TIME IP FETCHING FALLBACK HELPER [1]
+# REAL-TIME IP FETCHING FALLBACK HELPER  
 # ============================================================================
 
 async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
@@ -1043,7 +1061,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_secondary": v4_list  if len(v4_list) > 1 else "94.183.166.208"
                 }
         except Exception:
             pass

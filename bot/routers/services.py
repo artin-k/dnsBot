@@ -105,9 +105,10 @@ async def service_action(
 # SERVICE ROUTING CONTROLLER (Interactive Redirection Menu) [1]
 # ============================================================================
 
+# Replace these inside bot/routers/services.py
+
 @router.callback_query(F.data.startswith("service_routing_menu:"), StateFilter("*"))
-async def service_routing_menu(callback: CallbackQuery, session: AsyncSession) -> None:
-    """Displays Category Selector for location management [1]."""
+async def service_routing_menu(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     await callback.answer()
     if callback.message is None:
         return
@@ -118,15 +119,42 @@ async def service_routing_menu(callback: CallbackQuery, session: AsyncSession) -
         await callback.message.answer("❌ سرویس پیدا نشد.")
         return
 
+    # Fetch device profile
+    profile_id = settings.controld_profile_id
+    device_url = f"https://api.controld.com/devices/{service.controld_device_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json"
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
+            if device_resp.status_code == 200:
+                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
+        except Exception:
+            pass
+
+    if not profile_id:
+        profile_id = settings.controld_profile_id
+
+    # Fetch active categories dynamically [1]
+    controld = ControlDService(settings)
+    services = await controld.fetch_controld_services(profile_id)
+    if not services:
+        await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
+        return
+
+    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
+
+    from app.services.controld import get_category_label_fa
+
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"select_srv_loc:{service_id}:default")
     
-    # Generate Category selections
-    for key, label in CATEGORY_MAP_FA.items():
-        if key == "other":
-            continue
-        builder.button(text=label, callback_data=f"srv_manage_cat:{service_id}:{key}:0")
-    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data=f"srv_manage_cat:{service_id}:other:0")
+    for cat_key in unique_categories:
+        label = get_category_label_fa(cat_key)
+        builder.button(text=label, callback_data=f"srv_manage_cat:{service_id}:{cat_key}:0")
+        
     builder.button(text="↩️ بازگشت", callback_data=ServiceActionCallback(action="status", service_id=service_id))
     builder.adjust(1)
 
@@ -146,18 +174,18 @@ async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, 
     category_key = parts[2]
     page = int(parts[3])
     
-    # Query all services dynamically from Control D [1]
-    # Inside bot/routers/services.py -> handle_srv_manage_cat()
+    service = await ServicesRepository(session).get(service_id)
+    if service is None or not service.controld_device_id:
+        await callback.message.answer("❌ سرویس معتبر یافت نشد.")
+        return
 
-    # Find the dynamic profile_id linked to this device
-    controld = ControlDService(settings)
-    
-    device_url = f"https://api.controld.com/devices/{services.controld_device_id}"
+    # Find profile_id
+    profile_id = settings.controld_profile_id
+    device_url = f"https://api.controld.com/devices/{service.controld_device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
         "Content-Type": "application/json"
     }
-    profile_id = None
     async with httpx.AsyncClient() as client:
         try:
             device_resp = await client.get(device_url, headers=headers, timeout=5.0)
@@ -169,12 +197,8 @@ async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, 
     if not profile_id:
         profile_id = settings.controld_profile_id
 
-    if not profile_id:
-        await callback.message.answer("❌ شناسه پروفایل این دستگاه یافت نشد.")
-        return
-
-    # Query all services dynamically from Control D [1]
-    services = await controld.fetch_controld_services(profile_id)  # <-- Pass profile_id [1]
+    controld = ControlDService(settings)
+    services = await controld.fetch_controld_services(profile_id)
     if not services:
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
@@ -182,7 +206,6 @@ async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, 
     filtered = [s for s in services if s["category"] == category_key]
     filtered.sort(key=lambda x: (x["name"] or "").lower())
     
-    # Apply clean pagination (10 items per page) [1]
     limit = 10
     start_idx = page * limit
     end_idx = start_idx + limit
@@ -193,10 +216,9 @@ async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, 
     for s in page_items:
         builder.button(
             text=s["name"] or s["pk"],
-            callback_data=f"select_srv_loc:{service_id}:{s['pk']}"  # Selected game [1]
+            callback_data=f"select_srv_loc:{service_id}:{s['pk']}"
         )
     
-    # Navigation Buttons [1]
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"srv_manage_cat:{service_id}:{category_key}:{page - 1}"))
@@ -208,7 +230,8 @@ async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, 
     builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=f"service_routing_menu:{service_id}"))
     builder.adjust(2)
     
-    category_label = CATEGORY_MAP_FA.get(category_key, "سایر")
+    from app.services.controld import get_category_label_fa
+    category_label = get_category_label_fa(category_key)
     await callback.message.edit_text(
         f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",

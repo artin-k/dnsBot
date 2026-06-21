@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from app.config import get_settings
+from bot.routers.services import CATEGORY_MAP_FA
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -43,8 +44,30 @@ COUNTRY_MAP_FA = {
     "PL": "لهستان",
     "ES": "اسپانیا",
     "IN": "هند",
-    "JP": "ژاپن"
+    "JP": "ژاپن",
+    # app/services/controld.py
+
+# Adaptive Category Map supporting both raw and prefixed category names [1]
+
+    "gaming": "🎮 بازی‌ها (Gaming)",
+    "video": "🎬 رسانه و استریم (Video/Streaming)",
+    "social": "💬 شبکه‌های اجتماعی (Social)",
+    "ai": "🤖 هوش مصنوعی (AI & Tech)",
+    "music": "🎵 موسیقی (Music)",
+    "news": "📰 اخبار (News)",
+    "shopping": "🛒 خرید (Shopping)",
+    "business": "💼 کسب و کار (Business)",
+    "productivity": "🛠 ابزارها (Productivity)",
+    "other": "🧩 سایر سرویس‌ها (Other)"
 }
+
+def get_category_label_fa(category_key: str) -> str:
+    """
+    Cleans and translates category keys dynamically (handles prefixes like 'native_') [1].
+    """
+    clean_key = category_key.lower().replace("native_", "").strip()
+    return CATEGORY_MAP_FA.get(clean_key, f"🧩 {clean_key.capitalize()}")
+
 
 def get_country_name_fa(country_code: str) -> str:
     """Translates ISO country codes into full Persian names [1]."""
