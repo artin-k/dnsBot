@@ -260,8 +260,10 @@ async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     page = int(parts[2])
     
     # Query all services dynamically from Control D [1]
+# Inside handle_test_cat:
+    profile_id = settings.controld_profile_id
     controld = ControlDService(settings)
-    services = await controld.fetch_controld_services()
+    services = await controld.fetch_controld_services(profile_id)  # <-- Pass profile_id [1]
     if not services:
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
@@ -495,8 +497,11 @@ async def handle_buy_cat(callback: CallbackQuery, session: AsyncSession, setting
     page = int(parts[3])
     
     # Query all services dynamically from Control D [1]
+# Fetch available profiles dynamically from Control D API [1]
+# Inside handle_srv_cat:
+    profile_id = settings.controld_profile_id
     controld = ControlDService(settings)
-    services = await controld.fetch_controld_services()
+    services = await controld.fetch_controld_services(profile_id)  # <-- Pass profile_id [1]
     if not services:
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return

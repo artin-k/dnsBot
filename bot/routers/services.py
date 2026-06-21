@@ -147,8 +147,34 @@ async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, 
     page = int(parts[3])
     
     # Query all services dynamically from Control D [1]
+    # Inside bot/routers/services.py -> handle_srv_manage_cat()
+
+    # Find the dynamic profile_id linked to this device
     controld = ControlDService(settings)
-    services = await controld.fetch_controld_services()
+    
+    device_url = f"https://api.controld.com/devices/{services.controld_device_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json"
+    }
+    profile_id = None
+    async with httpx.AsyncClient() as client:
+        try:
+            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
+            if device_resp.status_code == 200:
+                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
+        except Exception:
+            pass
+
+    if not profile_id:
+        profile_id = settings.controld_profile_id
+
+    if not profile_id:
+        await callback.message.answer("❌ شناسه پروفایل این دستگاه یافت نشد.")
+        return
+
+    # Query all services dynamically from Control D [1]
+    services = await controld.fetch_controld_services(profile_id)  # <-- Pass profile_id [1]
     if not services:
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return

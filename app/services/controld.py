@@ -389,32 +389,43 @@ async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
             return False
         
 
-# app/services/controld.py
+# Replace this function inside app/services/controld.py
 
-# Add this function inside app/services/controld.py (above class ControlDService)
-
-async def fetch_controld_services() -> list[dict] | None:
+async def fetch_controld_services(profile_id: str) -> list[dict] | None:
     """
-    Queries the complete, unfiltered catalog of services and games directly from Control D [1].
+    Queries the complete, unfiltered catalog of services and games directly 
+    from the target Control D Profile [1].
     """
-    url = f"{BASE_URL}/services"
+    url = f"{BASE_URL}/profiles/{profile_id}/services"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(url, headers=_get_headers(), timeout=10.0)
             if response.status_code == 200:
                 data = response.json()
-                body = data.get("body", {})
-                services = body.get("services", [])
+                body = data.get("body", [])
+                
+                # Defensively handle both list and nested dictionary structures [1]
+                services = []
+                if isinstance(body, dict):
+                    services = body.get("services") or body.get("apps") or []
+                elif isinstance(body, list):
+                    services = body
                 
                 result = []
                 for s in services:
+                    # Parse uppercase PK or standard pk safely
+                    pk_val = s.get("PK") or s.get("pk") or s.get("id")
+                    if not pk_val:
+                        continue
                     result.append({
-                        "pk": s.get("pk"),
+                        "pk": pk_val,
                         "name": s.get("name"),
                         "category": s.get("category") or "other"
                     })
                 return result
-            return None
+            else:
+                logger.error(f"Failed to fetch Control D services (Status {response.status_code}): {response.text}")
+                return None
         except Exception as e:
             logger.error(f"Error fetching Control D services: {str(e)}")
             return None
@@ -463,6 +474,6 @@ class ControlDService:
     async def update_profile_default(self, profile_id: str, pop_code: str) -> bool:
         return await update_profile_default_route(profile_id, pop_code)
     
-    async def fetch_controld_services(self) -> list[dict] | None:
-        """Exposes the full services catalog finder inside the class [1]."""
-        return await fetch_controld_services()
+    async def fetch_controld_services(self, profile_id: str) -> list[dict] | None:
+        """Exposes the profile services catalog inside the class."""
+        return await fetch_controld_services(profile_id=profile_id)
