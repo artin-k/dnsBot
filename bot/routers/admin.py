@@ -310,13 +310,16 @@ async def admin_order_callback(
                     ips = await get_controld_device_ips(device_id, settings)
 
                 # Notify the user on Telegram with the new style and registration keyboard
+                # Inside bot/routers/admin.py -> admin_order_callback() action == "complete"
+
                 await callback.bot.send_message(
                     chat_id=result.user_telegram_id,
                     text=_approved_message(
                         result, 
                         expire_at=service_record.expire_at if service_record else None,
                         ipv4_primary=ips["ipv4_primary"],
-                        ipv4_secondary=ips["ipv4_secondary"]
+                        ipv4_secondary=ips["ipv4_secondary"],
+                        custom_username=order.custom_username if order else None  # <-- Added [1]
                     ),
                     reply_markup=_get_ip_registration_keyboard(device_id) if service_record else None,
                     parse_mode="HTML"
@@ -1126,13 +1129,16 @@ async def admin_payment_action(
                     # Query Control D in real-time to fetch the exact assigned legacy IPs [1]
                     ips = await get_controld_device_ips(device_id, settings)
 
+            # Inside bot/routers/admin.py -> admin_payment_action() action == "approve"
+
             await callback.bot.send_message(
                 chat_id=result.user_telegram_id,
                 text=_approved_message(
                     result, 
                     expire_at=service_record.expire_at if service_record else None,
                     ipv4_primary=ips["ipv4_primary"],
-                    ipv4_secondary=ips["ipv4_secondary"]
+                    ipv4_secondary=ips["ipv4_secondary"],
+                    custom_username=payment_record.order.custom_username if payment_record and payment_record.order else None  # <-- Added [1]
                 ),
                 reply_markup=_get_ip_registration_keyboard(device_id) if service_record else None,
                 parse_mode="HTML"
@@ -3250,11 +3256,14 @@ def _format_service_detail(service) -> str:
 {escape(service.subscription_link or "-")}"""
 
 
+# Replace this inside bot/routers/admin.py
+
 def _approved_message(
     result: ApprovedPaymentResult, 
     expire_at: datetime | None = None,
     ipv4_primary: str = "94.183.166.203",
-    ipv4_secondary: str = "94.183.166.208"
+    ipv4_secondary: str = "94.183.166.208",
+    custom_username: str | None = None  # <-- Added [1]
 ) -> str:
     if result.waiting_inventory:
         return "پرداخت شما تایید شد. پشتیبانی به‌زودی اطلاعات اشتراک شما را ارسال می‌کند."
@@ -3268,14 +3277,42 @@ def _approved_message(
     except Exception:
         expire_str = target_expire.strftime("%Y-%m-%d %H:%M:%S") if target_expire else "-"
 
-    hours = result.duration_days
-    calculated_days = hours // 24 if hours >= 24 and hours % 24 == 0 else hours
-    unit = "روز" if hours >= 24 and hours % 24 == 0 else "ساعت"
-    duration_text = f"{calculated_days} {unit}"
+    duration_text = calculate_remaining_time_fa(target_expire)
+
+    # --- METADATA LOCATION & SERVICE PARSER ---
+    raw_username = custom_username or ""
+    service_display = "کل ترافیک اینترنت (Default)"
+    country_display = "پیش‌فرض"
+    if "|" in raw_username:
+        parts = raw_username.split("|")
+        service_pk = parts[1] if len(parts) > 1 else "default"
+        pop_code = parts[2] if len(parts) > 2 else None
+        
+        # Format game display
+        if service_pk == "default":
+            service_display = "کل ترافیک اینترنت (Default)"
+        else:
+            try:
+                from bot.routers.buy import CATEGORIES
+                for cat in CATEGORIES.values():
+                    for s in cat["services"]:
+                        if s["pk"] == service_pk:
+                            service_display = s["name"]
+                            break
+            except Exception:
+                service_display = service_pk.capitalize()
+                
+        # Format country display [1]
+        if pop_code:
+            from app.services.controld import get_country_name_fa
+            country_display = f"{get_country_name_fa(pop_code)} ({pop_code})"
 
     return f"""🔹 تاریخ انقضاء پلن : {expire_str}
-دی ان اس اختصاصی شما :
+🔷 زمان باقی‌مانده: {duration_text}
+🎮 برنامه/بازی: <b>{escape(service_display)}</b>
+🗺 سرور (کشور): <b>{escape(country_display)}</b>
 
+دی ان اس اختصاصی شما :
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
@@ -3286,7 +3323,6 @@ def _approved_message(
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
-
 
 def _manual_activation_user_message(
     *,

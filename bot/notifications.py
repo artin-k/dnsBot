@@ -1,7 +1,7 @@
+# bot/notifications.py
 from __future__ import annotations
 
 from html import escape
-
 import structlog
 from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,21 @@ from bot.keyboards.admin import payment_review_keyboard, wallet_withdrawal_revie
 from bot.keyboards.wallet import wallet_topup_review_keyboard
 
 logger = structlog.get_logger(__name__)
+
+
+def get_service_name_display(pk: str) -> str:
+    """Helper to dynamically translate service keys to Persian titles [1]."""
+    if pk == "default":
+        return "کل ترافیک اینترنت (Default)"
+    try:
+        from bot.routers.buy import CATEGORIES
+        for cat in CATEGORIES.values():
+            for s in cat["services"]:
+                if s["pk"] == pk:
+                    return s["name"]
+    except Exception:
+        pass
+    return pk.capitalize()
 
 
 async def get_admin_ids(session: AsyncSession, settings: Settings) -> list[int]:
@@ -81,7 +96,7 @@ async def notify_admins_wallet_topup(
             )
             sent_count += 1
         except Exception as exc:
-            logger.warning("admin_wallet_receipt_photo_failed", admin_id=admin_id, error=str(exc))
+            logger.warning("admin_wallet_topup_photo_failed", admin_id=admin_id, error=str(exc))
             try:
                 await bot.send_message(
                     chat_id=admin_id,
@@ -90,7 +105,7 @@ async def notify_admins_wallet_topup(
                 )
                 sent_count += 1
             except Exception as send_exc:
-                logger.warning("admin_wallet_receipt_message_failed", admin_id=admin_id, error=str(send_exc))
+                logger.warning("admin_wallet_topup_message_failed", admin_id=admin_id, error=str(send_exc))
     if sent_count == 0:
         logger.warning("no_admin_notified_for_wallet_topup", transaction_id=transaction.id)
     return sent_count
@@ -123,13 +138,37 @@ async def notify_admins_wallet_withdrawal(
 def format_order_payment_admin_caption(order: Order, payment: Payment) -> str:
     user = order.user
     username = f"@{user.telegram_username}" if user.telegram_username else "-"
-    service_username = order.custom_username or "-"
+    
+    # --- FIXED: Parse custom metadata from custom_username cleanly ---
+    raw_username = order.custom_username or "-"
+    service_display = "-"
+    country_display = "-"
+    
+    if "|" in raw_username:
+        parts = raw_username.split("|")
+        username_part = parts[0]
+        service_pk = parts[1] if len(parts) > 1 else "default"
+        pop_code = parts[2] if len(parts) > 2 else None
+        
+        service_display = get_service_name_display(service_pk)
+        if pop_code:
+            from app.services.controld import get_country_name_fa
+            country_display = f"{get_country_name_fa(pop_code)} ({pop_code})"
+        else:
+            country_display = "پیش‌فرض"
+    else:
+        username_part = raw_username
+        service_display = "کل ترافیک اینترنت (Default)"
+        country_display = "پیش‌فرض"
+
     if order.renewal_service:
-        service_username = order.renewal_service.username
+        username_part = order.renewal_service.username
+        
     receipt_status = "رسید دریافت شده" if payment.receipt_file_id else "بدون رسید"
     inventory_line = ""
     if order.order_kind == OrderKind.PURCHASE.value:
         inventory_line = f"\n📦 کانفیگ رزرو شده: {'بله' if order.config_inventory_id else 'خیر'} | شناسه: {order.config_inventory_id or '-'}"
+        
     return f"""🧾 پرداخت جدید در انتظار تایید
 
 👤 کاربر: {escape(user.first_name or "-")}
@@ -140,7 +179,9 @@ def format_order_payment_admin_caption(order: Order, payment: Payment) -> str:
 ⚡ نوع سفارش: {format_order_type_fa(order.order_kind)}
 ⚡ پلن: {escape(order.plan.title if order.plan else "-")}
 💵 مبلغ: {format_money(order.amount)} تومان
-🔐 نام کاربری/سرویس: {escape(service_username)}
+🔐 نام کاربری دستگاه: <code>{escape(username_part)}</code>
+🎮 برنامه/بازی: <b>{escape(service_display)}</b>
+🗺 سرور (کشور): <b>{escape(country_display)}</b>
 📎 وضعیت رسید: {receipt_status}{inventory_line}"""
 
 
