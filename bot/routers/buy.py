@@ -951,7 +951,7 @@ async def receive_receipt_photo(
     await message.answer("✅ رسید شما دریافت شد و در انتظار تایید ادمین است.")
 
     # --- FIXED: Local import to bypass circular dependency name-error ---
-    from bot.notifications import notify_admins_order_payment [1]
+    from bot.notifications import notify_admins_order_payment 
 
     sent_count = await notify_admins_order_payment(
         bot=message.bot,
