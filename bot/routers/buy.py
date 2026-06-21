@@ -598,7 +598,7 @@ async def handle_buy_plan_srv(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts )
+    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [1]
     service_pk = parts[2]
 
     controld_service = ControlDService(settings)
