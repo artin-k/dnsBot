@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,51 +47,17 @@ from bot.states.buy import BuyStates
 router = Router(name="buy")
 
 # ============================================================================
-# CONFIGURATION & CATEGORIES DATA
+# CONFIGURATION & CATEGORY TRANSLATIONS [1]
 # ============================================================================
 WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
 
-CATEGORIES = {
-    "games": {
-        "name": "🎮 بازی‌ها (Games)",
-        "services": [
-            {"pk": "callofduty", "name": "🎮 Call of Duty"},
-            {"pk": "apexlegends", "name": "🎮 Apex Legends"},
-            {"pk": "pubg", "name": "🎮 PUBG Mobile"},
-            {"pk": "fortnite", "name": "🎮 Fortnite"},
-            {"pk": "valorant", "name": "🎮 Valorant"},
-            {"pk": "leagueoflegends", "name": "🎮 League of Legends"},
-            {"pk": "roblox", "name": "🎮 Roblox"},
-            {"pk": "minecraft", "name": "🎮 Minecraft"},
-            {"pk": "steam", "name": "🎮 Steam / Epic Games"},
-            {"pk": "playstation", "name": "🎮 PlayStation Network"},
-            {"pk": "xbox", "name": "🎮 Xbox Live"}
-        ]
-    },
-    "streaming": {
-        "name": "🎬 رسانه و استریم (Streaming)",
-        "services": [
-            {"pk": "netflix", "name": "🎬 Netflix"},
-            {"pk": "youtube", "name": "📹 YouTube"},
-            {"pk": "disney", "name": "🏰 Disney+"},
-            {"pk": "twitch", "name": "🎮 Twitch / Kick"},
-            {"pk": "spotify", "name": "🎵 Spotify / Deezer"},
-            {"pk": "primevideo", "name": "🎬 Amazon Prime Video"},
-            {"pk": "hulu", "name": "🎬 Hulu"},
-            {"pk": "hbomax", "name": "🎬 HBO Max"}
-        ]
-    },
-    "tools": {
-        "name": "🤖 ابزارها و هوش مصنوعی (AI & Tech)",
-        "services": [
-            {"pk": "chatgpt", "name": "🤖 ChatGPT / OpenAI"},
-            {"pk": "claude", "name": "🤖 Claude / Anthropic"},
-            {"pk": "gemini", "name": "🤖 Google Gemini"},
-            {"pk": "discord", "name": "💬 Discord"},
-            {"pk": "telegram", "name": "💬 Telegram"},
-            {"pk": "twitter", "name": "💬 Twitter / X"}
-        ]
-    }
+CATEGORY_MAP_FA = {
+    "gaming": "🎮 بازی‌ها (Gaming)",
+    "video": "🎬 رسانه و استریم (Video/Streaming)",
+    "social": "💬 شبکه‌های اجتماعی (Social)",
+    "ai": "🤖 هوش مصنوعی (AI & Tech)",
+    "music": "🎵 موسیقی (Music)",
+    "other": "🧩 سایر سرویس‌ها (Other)"
 }
 
 
@@ -133,6 +99,33 @@ def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
         return f"{total_hours} ساعت"
     total_minutes = int(total_seconds // 60)
     return f"{total_minutes} دقیقه"
+
+
+async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
+    """Queries Control D on approval to fetch the exact legacy IPv4 addresses."""
+    url = f"https://api.controld.com/devices/{device_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json"
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                body = data.get("body", {})
+                resolver_info = body.get("resolvers") or body.get("resolver") or []
+                v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
+                return {
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                }
+        except Exception:
+            pass
+    return {
+        "ipv4_primary": "94.183.166.203",
+        "ipv4_secondary": "94.183.166.208"
+    }
 
 
 # ============================================================================
@@ -206,7 +199,7 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & CATEGORIES
+# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES [1]
 # ============================================================================
 
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
@@ -225,7 +218,6 @@ async def handle_get_test_account(
         await callback.answer()
         return
 
-    # Anti-Abuse DB Check [1]
     stmt = select(VPNService).where(
         VPNService.user_id == user.id,
         VPNService.is_test_account == True
@@ -239,12 +231,16 @@ async def handle_get_test_account(
 
     await callback.answer()
 
-    # Category Selection Menu [1]
+    # Dynamic Category Selector Menu [1]
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
-    builder.button(text="🎮 بازی‌ها (Games)", callback_data="test_cat:games")
-    builder.button(text="🎬 رسانه و استریم (Streaming)", callback_data="test_cat:streaming")
-    builder.button(text="🤖 ابزارها و هوش مصنوعی (AI & Tech)", callback_data="test_cat:tools")
+    
+    # Generate static categories linking to dynamic Control D APIs [1]
+    for key, label in CATEGORY_MAP_FA.items():
+        if key == "other":
+            continue
+        builder.button(text=label, callback_data=f"test_cat:{key}:0")
+    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -257,25 +253,51 @@ async def handle_get_test_account(
 
 
 @router.callback_query(F.data.startswith("test_cat:"), StateFilter("*"))
-async def handle_test_cat(callback: CallbackQuery) -> None:
+async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     await callback.answer()
-    category_key = callback.data.split(":")[1]
+    parts = callback.data.split(":")
+    category_key = parts[1]
+    page = int(parts[2])
     
-    category = CATEGORIES.get(category_key)
-    if not category:
+    # Query all services dynamically from Control D [1]
+    controld = ControlDService(settings)
+    services = await controld.fetch_controld_services()
+    if not services:
+        await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
         
+    filtered = [s for s in services if s["category"] == category_key]
+    filtered.sort(key=lambda x: (x["name"] or "").lower())
+    
+    # Apply clean pagination (10 items per page) [1]
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_items = filtered[start_idx:end_idx]
+    has_next = len(filtered) > end_idx
+
     builder = InlineKeyboardBuilder()
-    for s in category["services"]:
+    for s in page_items:
         builder.button(
-            text=s["name"],
+            text=s["name"] or s["pk"],
             callback_data=f"test_select_srv:{s['pk']}"
         )
-    builder.button(text="🔙 بازگشت", callback_data="get_test_account")
+    
+    # Navigation Buttons [1]
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_cat:{category_key}:{page - 1}"))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"test_cat:{category_key}:{page + 1}"))
+    if nav_buttons:
+        builder.row(*nav_buttons)
+        
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data="get_test_account"))
     builder.adjust(2)
     
+    category_label = CATEGORY_MAP_FA.get(category_key, "سایر")
     await callback.message.edit_text(
-        f"📂 دسته‌بندی انتخاب شده: <b>{category['name']}</b>\n\n"
+        f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
@@ -361,8 +383,7 @@ async def handle_apply_test_loc(
 
     device_id = device_data["device_id"]
     
-    # --- REDIRECT VIA SELECTED ROUTE ---
-    # Call overall default route or specific service route cleanly [1]
+    # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
     if service_pk == "default":
         await controld_service.update_profile_default(profile_id, pop_code) [1]
     else:
@@ -421,7 +442,7 @@ async def handle_apply_test_loc(
 
 
 # ============================================================================
-# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW [1]
+# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW WITH PAGINATION [1]
 # ============================================================================
 
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
@@ -447,9 +468,13 @@ async def handle_buy_plan_select(
     # Category Selection Menu [1]
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
-    builder.button(text="🎮 بازی‌ها (Games)", callback_data=f"srv_cat:{plan.id}:games")
-    builder.button(text="🎬 رسانه و استریم (Streaming)", callback_data=f"srv_cat:{plan.id}:streaming")
-    builder.button(text="🤖 ابزارها و هوش مصنوعی (AI & Tech)", callback_data=f"srv_cat:{plan.id}:tools")
+    
+    # Generate category buttons
+    for key, label in CATEGORY_MAP_FA.items():
+        if key == "other":
+            continue
+        builder.button(text=label, callback_data=f"buy_cat:{plan.id}:{key}:0")
+    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data=f"buy_cat:{plan.id}:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -461,28 +486,53 @@ async def handle_buy_plan_select(
     )
 
 
-@router.callback_query(F.data.startswith("srv_cat:"), StateFilter("*"))
-async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession) -> None:
+@router.callback_query(F.data.startswith("buy_cat:"), StateFilter("*"))
+async def handle_buy_cat(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     await callback.answer()
     parts = callback.data.split(":")
     plan_id = int(parts[1])
     category_key = parts[2]
+    page = int(parts[3])
     
-    category = CATEGORIES.get(category_key)
-    if not category:
+    # Query all services dynamically from Control D [1]
+    controld = ControlDService(settings)
+    services = await controld.fetch_controld_services()
+    if not services:
+        await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
         
+    filtered = [s for s in services if s["category"] == category_key]
+    filtered.sort(key=lambda x: (x["name"] or "").lower())
+    
+    # Apply clean pagination (10 items per page) [1]
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_items = filtered[start_idx:end_idx]
+    has_next = len(filtered) > end_idx
+
     builder = InlineKeyboardBuilder()
-    for s in category["services"]:
+    for s in page_items:
         builder.button(
-            text=s["name"],
+            text=s["name"] or s["pk"],
             callback_data=f"buy_plan_srv:{plan_id}:{s['pk']}"  # Selected game [1]
         )
-    builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
+    
+    # Navigation Buttons [1]
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"buy_cat:{plan_id}:{category_key}:{page - 1}"))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"buy_cat:{plan_id}:{category_key}:{page + 1}"))
+    if nav_buttons:
+        builder.row(*nav_buttons)
+        
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=PlanCallback(plan_id=plan_id)))
     builder.adjust(2)
     
+    category_label = CATEGORY_MAP_FA.get(category_key, "سایر")
     await callback.message.edit_text(
-        f"📂 دسته‌بندی انتخاب شده: <b>{category['name']}</b>\n\n"
+        f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
@@ -669,7 +719,7 @@ async def handle_pay_instant_wallet(
         ipv4_primary = device_data["ipv4_primary"]
         ipv4_secondary = device_data["ipv4_secondary"]
 
-        # --- REDIRECT VIA SELECTED ROUTE ---
+        # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
         controld_service = ControlDService(settings)
         if service_pk == "default":
             await controld_service.update_profile_default(profile_id, pop_code) [1]
@@ -692,7 +742,7 @@ async def handle_pay_instant_wallet(
         # Renewal - accumulate time
         current_expire = current_sub.expire_at
         if current_expire.tzinfo is None:
-            current_expire = current_expire.replace(tzinfo=timezone.utc)
+            current_expire = current_expire.replace(timezone.utc)
 
         expire_at = current_expire + timedelta(hours=plan.duration_hours)
         current_sub.expire_at = expire_at
@@ -712,7 +762,7 @@ async def handle_pay_instant_wallet(
 
         device_id = current_sub.controld_device_id
         
-        # --- REDIRECT VIA SELECTED ROUTE ON RENEWAL ---
+        # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ON RENEWAL ---
         if service_pk == "default":
             await controld_service.update_profile_default(profile_id, pop_code) [1]
         else:
@@ -960,7 +1010,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or {}
+                resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",

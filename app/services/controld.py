@@ -388,6 +388,35 @@ async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
             logger.error(f"Error updating default profile route for {profile_id}: {str(e)}")
             return False
         
+
+# app/services/controld.py
+
+async def fetch_controld_services() -> list[dict] | None:
+    """
+    Queries the complete, unfiltered catalog of services and games directly from Control D [1].
+    """
+    url = f"{BASE_URL}/services"
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, headers=_get_headers(), timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                body = data.get("body", {})
+                services = body.get("services", [])
+                
+                result = []
+                for s in services:
+                    result.append({
+                        "pk": s.get("pk"),
+                        "name": s.get("name"),
+                        "category": s.get("category") or "other"
+                    })
+                return result
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching Control D services: {str(e)}")
+            return None
+        
 class ControlDService:
     """
     Class-based wrapper around Control D async functions.

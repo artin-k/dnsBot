@@ -4,7 +4,7 @@ from html import escape
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,17 +21,15 @@ from bot.keyboards.services import ServiceActionCallback
 
 router = Router(name="services")
 
-
-# List popular services supported by Control D [1]
-POPULAR_SERVICES = [
-    {"pk": "default", "name": "🌐 کل ترافیک اینترنت (Default)"},
-    {"pk": "callofduty", "name": "🎮 Call of Duty"},
-    {"pk": "apexlegends", "name": "🎮 Apex Legends"},
-    {"pk": "pubg", "name": "🎮 PUBG Mobile"},
-    {"pk": "fortnite", "name": "🎮 Fortnite"},
-    {"pk": "youtube", "name": "📹 YouTube"},
-    {"pk": "netflix", "name": "🎬 Netflix"}
-]
+# Dynamic Category Labels [1]
+CATEGORY_MAP_FA = {
+    "gaming": "🎮 بازی‌ها (Gaming)",
+    "video": "🎬 رسانه و استریم (Video/Streaming)",
+    "social": "💬 شبکه‌های اجتماعی (Social)",
+    "ai": "🤖 هوش مصنوعی (AI & Tech)",
+    "music": "🎵 موسیقی (Music)",
+    "other": "🧩 سایر سرویس‌ها (Other)"
+}
 
 
 def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
@@ -47,7 +45,7 @@ def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
     )
     builder.button(
         text="🗺 تنظیم لوکیشن سرویس‌ها",
-        callback_data=f"service_routing_menu:{service_id}"  # Triggers service selection [1]
+        callback_data=f"service_routing_menu:{service_id}"  # Triggers category selection [1]
     )
     builder.adjust(1)
     return builder.as_markup()
@@ -109,7 +107,7 @@ async def service_action(
 
 @router.callback_query(F.data.startswith("service_routing_menu:"), StateFilter("*"))
 async def service_routing_menu(callback: CallbackQuery, session: AsyncSession) -> None:
-    """Lists popular web services the user can customize [1]."""
+    """Displays Category Selector for location management [1]."""
     await callback.answer()
     if callback.message is None:
         return
@@ -121,17 +119,73 @@ async def service_routing_menu(callback: CallbackQuery, session: AsyncSession) -
         return
 
     builder = InlineKeyboardBuilder()
-    for s in POPULAR_SERVICES:
-        builder.button(
-            text=s["name"],
-            callback_data=f"select_srv_loc:{service_id}:{s['pk']}"  # Selected service [1]
-        )
+    builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"select_srv_loc:{service_id}:default")
+    
+    # Generate Category selections
+    for key, label in CATEGORY_MAP_FA.items():
+        if key == "other":
+            continue
+        builder.button(text=label, callback_data=f"srv_manage_cat:{service_id}:{key}:0")
+    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data=f"srv_manage_cat:{service_id}:other:0")
     builder.button(text="↩️ بازگشت", callback_data=ServiceActionCallback(action="status", service_id=service_id))
-    builder.adjust(2)
+    builder.adjust(1)
 
     await callback.message.edit_text(
         f"🗺 <b>تنظیم لوکیشن سرویس‌ها</b> | دستگاه: <code>{escape(service.username)}</code>\n\n"
-        f"لطفاً برنامه‌ای که می‌خواهید لوکیشن آن را اختصاصی تغییر دهید انتخاب کنید:",
+        f"🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("srv_manage_cat:"), StateFilter("*"))
+async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    service_id = int(parts[1])
+    category_key = parts[2]
+    page = int(parts[3])
+    
+    # Query all services dynamically from Control D [1]
+    controld = ControlDService(settings)
+    services = await controld.fetch_controld_services()
+    if not services:
+        await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
+        return
+        
+    filtered = [s for s in services if s["category"] == category_key]
+    filtered.sort(key=lambda x: (x["name"] or "").lower())
+    
+    # Apply clean pagination (10 items per page) [1]
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_items = filtered[start_idx:end_idx]
+    has_next = len(filtered) > end_idx
+
+    builder = InlineKeyboardBuilder()
+    for s in page_items:
+        builder.button(
+            text=s["name"] or s["pk"],
+            callback_data=f"select_srv_loc:{service_id}:{s['pk']}"  # Selected game [1]
+        )
+    
+    # Navigation Buttons [1]
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"srv_manage_cat:{service_id}:{category_key}:{page - 1}"))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"srv_manage_cat:{service_id}:{category_key}:{page + 1}"))
+    if nav_buttons:
+        builder.row(*nav_buttons)
+        
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=f"service_routing_menu:{service_id}"))
+    builder.adjust(2)
+    
+    category_label = CATEGORY_MAP_FA.get(category_key, "سایر")
+    await callback.message.edit_text(
+        f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
+        f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -139,7 +193,7 @@ async def service_routing_menu(callback: CallbackQuery, session: AsyncSession) -
 
 @router.callback_query(F.data.startswith("select_srv_loc:"), StateFilter("*"))
 async def select_service_location(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Fetches and displays available Control D proxies as buttons."""
+    """Fetches and displays available Control D proxies as buttons [1]."""
     await callback.answer()
     if callback.message is None:
         return
@@ -156,27 +210,25 @@ async def select_service_location(callback: CallbackQuery, session: AsyncSession
         await callback.message.answer("❌ خطایی در بارگذاری لوکیشن‌های معتبر رخ داد.")
         return
 
-    service_display = next((s["name"] for s in POPULAR_SERVICES if s["pk"] == service_pk), service_pk)
-
     builder = InlineKeyboardBuilder()
     for p in proxies[:12]:  # Show first 12 popular worldwide locations [1]
-        p_name = f"{p['country_name']} ({p['code']})"  # <-- FIXED: Fully translated [1]
+        p_name = f"{p['country_name']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
-            callback_data=f"apply_srv_route:{service_id}:{service_pk}:{p['code']}:{p_name}"  # Apply routing [1]
+            callback_data=f"apply_loc_change:{service_id}:{service_pk}:{p['code']}:{p_name}"  # Apply routing [1]
         )
     builder.button(text="↩️ بازگشت", callback_data=f"service_routing_menu:{service_id}")
     builder.adjust(2)
 
     await callback.message.edit_text(
-        f"🗺 تنظیم لوکیشن برای <b>{service_display}</b>\n\n"
-        f"لطفاً کشوری که می‌خواهید ترافیک {service_display} از طریق آن عبور کند انتخاب کنید:",
+        f"🗺 تنظیم لوکیشن برای این سرویس\n\n"
+        f"لطفاً کشوری که می‌خواهید ترافیک این سرویس از طریق آن عبور کند انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data.startswith("apply_srv_route:"), StateFilter("*"))
+@router.callback_query(F.data.startswith("apply_loc_change:"), StateFilter("*"))
 async def apply_service_route(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     """Executes the PUT API call to redirect the service on Control D [1]."""
     await callback.answer()
@@ -221,13 +273,14 @@ async def apply_service_route(callback: CallbackQuery, session: AsyncSession, se
     await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن سرویس شما به {pop_name}...")
 
     # Execute the PUT routing command using the dynamic profile_id [1]
-    success = await controld_service.update_service_route(profile_id, service_pk, pop_code)
-
-    service_display = next((s["name"] for s in POPULAR_SERVICES if s["pk"] == service_pk), service_pk)
+    if service_pk == "default":
+        success = await controld_service.update_profile_default(profile_id, pop_code) [1]
+    else:
+        success = await controld_service.update_service_route(profile_id, service_pk, pop_code) [1]
 
     if success:
         await callback.message.answer(
-            f"✅ ترافیک سرویس {service_display} شما با موفقیت به سرور <b>{escape(pop_name)}</b> هدایت شد!\n\n"
+            f"✅ ترافیک سرویس شما با موفقیت به سرور <b>{escape(pop_name)}</b> هدایت شد!\n\n"
             f"تغییرات به صورت آنی و بدون نیاز به تغییر لینک دی‌ان‌اس روی دستگاه شما اعمال شد.",
             reply_markup=main_menu_keyboard(),
             parse_mode="HTML"
