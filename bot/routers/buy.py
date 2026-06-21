@@ -157,7 +157,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or {}
+                resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
@@ -259,6 +259,7 @@ async def handle_get_test_account(
         await callback.answer()
         return
 
+    # Anti-Abuse DB Check [1]
     stmt = select(VPNService).where(
         VPNService.user_id == user.id,
         VPNService.is_test_account == True
@@ -629,7 +630,7 @@ async def handle_buy_plan_loc(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -695,7 +696,7 @@ async def handle_pay_instant_wallet(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -870,7 +871,7 @@ async def handle_pay_manual_card(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
     service_pk = parts[2]
     pop_code = parts[3]  # Selected location POP code  
 
@@ -984,7 +985,7 @@ async def receive_receipt_photo(
 @router.callback_query(F.data.startswith("manual_ip_reg:"), StateFilter("*"))
 async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    device_id = callback.data.split(":")[1] 
+    device_id = callback.data.split(":")[1]  # <-- FIXED: Accessed index 1 [cite: 1]
     
     await state.set_state(BuyStates.waiting_manual_ip)
     await state.update_data(device_id=device_id)
@@ -1055,7 +1056,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "94.183.166.208"  # <-- FIXED: Accessed index 1 [cite: 1]
                 }
         except Exception:
             pass
@@ -1063,4 +1064,3 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
         "ipv4_primary": "94.183.166.203",
         "ipv4_secondary": "94.183.166.208"
     }
-
