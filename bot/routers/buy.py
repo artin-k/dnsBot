@@ -233,23 +233,9 @@ async def handle_get_test_account(
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
     
-    # Generate dynamic categories
-    profile_id = settings.controld_profile_id
-    if not profile_id:
-        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
-        return
-
-    controld_service = ControlDService(settings)
-    services = await controld_service.fetch_controld_services(profile_id)
-    
-    if not services:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
-
-    for key in unique_categories:
-        label = get_category_label_fa(key)
+    for key, label in CATEGORY_MAP_FA.items():
+        if key == "other":
+            continue
         builder.button(text=label, callback_data=f"test_cat:{key}:0")
     builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
@@ -326,7 +312,7 @@ async def handle_test_select_srv(
 
 
 async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the paginated test location selector dynamically."""
+    """Renders the paginated test location selector dynamically [cite: 1]."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -351,9 +337,10 @@ async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: in
             callback_data=f"apply_test_loc:{service_pk}:{p['code']}"  # Uses correct trial creation callback data
         )
 
-    # Navigation Controls
+    # 1. Adjust countries first
     builder.adjust(2)
 
+    # 2. Navigation Controls
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_loc_page:{service_pk}:{page - 1}"))
@@ -837,7 +824,7 @@ async def handle_pay_instant_wallet(
         )
 
         if device_data is None:
-            await callback.message.answer("❌ خطا در برقراری ارتباط با سرورهای دی‌ان‌اس.")
+            await callback.message.answer("❌ خطا در برقراری ارتباط با سرهمان دی‌ان‌اس.")
             return
 
         device_id = device_data["device_id"]
@@ -1147,3 +1134,8 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
         "ipv4_primary": "94.183.166.203",
         "ipv4_secondary": "94.183.166.208"
     }
+
+--- END OF FILE buy.py ---
+how can i change this files to write down the flag emoji and city name and POP code  and i can run it in vps without any problem 
+please give me the full fixed version because im afraid of missing indexes again 
+and please answer in english
