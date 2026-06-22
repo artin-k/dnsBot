@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+from sre_parse import CATEGORIES
 import httpx
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -645,16 +646,20 @@ async def handle_buy_plan_loc(
         return
 
     # Resolve Game/Service display name [1]
-    def get_service_name_display(pk: str) -> str:
-        if pk == "default":
-            return "🌐 کل ترافیک اینترنت"
-        for cat in CATEGORIES.values():
-            for s in cat["services"]:
-                if s["pk"] == pk:
-                    return s["name"]
-        return pk.capitalize()
-
-    service_display = get_service_name_display(service_pk)
+# Resolve Game/Service display name
+    # 1. Resolve Game/Service display name dynamically from Control D [1]
+    service_display = service_pk.capitalize()
+    if service_pk == "default":
+        service_display = "🌐 کل ترافیک اینترنت"
+    else:
+        # Query Control D dynamically to retrieve the correct, un-hardcoded display name [1]
+        controld_service = ControlDService(settings)
+        services = await controld_service.fetch_controld_services(settings.controld_profile_id or "default")
+        if services:
+            for s in services:
+                if s["pk"] == service_pk:
+                    service_display = s["name"] or service_pk.capitalize()
+                break
 
     # Resolve Country display name [1]
     controld_service = ControlDService(settings)
