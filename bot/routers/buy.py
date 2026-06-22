@@ -37,7 +37,7 @@ from app.services.payment_service import (
 from app.services.settings_service import AppSettingsService
 from app.services.username_validator import validate_username
 from app.services.vpn_panel import VPNPanelService
-from app.services.controld import create_dns_device, ControlDService  # ControlD direct integration
+from app.services.controld import create_dns_device, ControlDService, get_category_label_fa  # ControlD direct integration
 from app.utils.formatting import format_money
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
@@ -47,61 +47,9 @@ from bot.states.buy import BuyStates
 router = Router(name="buy")
 
 # ============================================================================
-# CONFIGURATION & CATEGORIES DATA
+# CONFIGURATION
 # ============================================================================
 WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
-
-CATEGORY_MAP_FA = {
-    "gaming": "🎮 بازی‌ها (Gaming)",
-    "video": "🎬 رسانه و استریم (Video/Streaming)",
-    "social": "💬 شبکه‌های اجتماعی (Social)",
-    "ai": "🤖 هوش مصنوعی (AI & Tech)",
-    "music": "🎵 موسیقی (Music)",
-    "other": "🧩 سایر سرویس‌ها (Other)"
-}
-
-CATEGORIES = {
-    "games": {
-        "name": "🎮 بازی‌ها (Games)",
-        "services": [
-            {"pk": "callofduty", "name": "🎮 Call of Duty"},
-            {"pk": "apexlegends", "name": "🎮 Apex Legends"},
-            {"pk": "pubg", "name": "🎮 PUBG Mobile"},
-            {"pk": "fortnite", "name": "🎮 Fortnite"},
-            {"pk": "valorant", "name": "🎮 Valorant"},
-            {"pk": "leagueoflegends", "name": "🎮 League of Legends"},
-            {"pk": "roblox", "name": "🎮 Roblox"},
-            {"pk": "minecraft", "name": "🎮 Minecraft"},
-            {"pk": "steam", "name": "🎮 Steam / Epic Games"},
-            {"pk": "playstation", "name": "🎮 PlayStation Network"},
-            {"pk": "xbox", "name": "🎮 Xbox Live"}
-        ]
-    },
-    "streaming": {
-        "name": "🎬 رسانه و استریم (Streaming)",
-        "services": [
-            {"pk": "netflix", "name": "🎬 Netflix"},
-            {"pk": "youtube", "name": "📹 YouTube"},
-            {"pk": "disney", "name": "🏰 Disney+"},
-            {"pk": "twitch", "name": "🎮 Twitch / Kick"},
-            {"pk": "spotify", "name": "🎵 Spotify / Deezer"},
-            {"pk": "primevideo", "name": "🎬 Amazon Prime Video"},
-            {"pk": "hulu", "name": "🎬 Hulu"},
-            {"pk": "hbomax", "name": "🎬 HBO Max"}
-        ]
-    },
-    "tools": {
-        "name": "🤖 ابزارها و هوش مصنوعی (AI & Tech)",
-        "services": [
-            {"pk": "chatgpt", "name": "🤖 ChatGPT / OpenAI"},
-            {"pk": "claude", "name": "🤖 Claude / Anthropic"},
-            {"pk": "gemini", "name": "🤖 Google Gemini"},
-            {"pk": "discord", "name": "💬 Discord"},
-            {"pk": "telegram", "name": "💬 Telegram"},
-            {"pk": "twitter", "name": "💬 Twitter / X"}
-        ]
-    }
-}
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
@@ -161,7 +109,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
                 }
         except Exception:
             pass
@@ -240,7 +188,7 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES
+# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & ADAPTIVE CATEGORIES [cite: 1]
 # ============================================================================
 
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
@@ -272,15 +220,29 @@ async def handle_get_test_account(
 
     await callback.answer()
 
-    # Category Selection Menu
+    # Query all active services from Control D to dynamically build categories [cite: 1]
+    profile_id = settings.controld_profile_id
+    if not profile_id:
+        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
+        return
+
+    controld_service = ControlDService(settings)
+    services = await controld_service.fetch_controld_services(profile_id)
+    
+    if not services:
+        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+        return
+
+    # Extract all unique categories present in the current Control D payload dynamically [cite: 1]
+    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
+
+    # Dynamic Category Selector Menu
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
     
-    for key, label in CATEGORY_MAP_FA.items():
-        if key == "other":
-            continue
+    for key in unique_categories:
+        label = get_category_label_fa(key)
         builder.button(text=label, callback_data=f"test_cat:{key}:0")
-    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -332,7 +294,8 @@ async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data="get_test_account"))
     builder.adjust(2)
     
-    category_label = CATEGORY_MAP_FA.get(category_key, "سایر")
+    from app.services.controld import get_category_label_fa
+    category_label = get_category_label_fa(category_key)
     await callback.message.edit_text(
         f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
@@ -347,14 +310,14 @@ async def handle_test_select_srv(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Redirects to page 0 of the test country selector [1]."""
+    """Redirects to page 0 of the test country selector."""
     await callback.answer()
     service_pk = callback.data.split(":")[1]
     await _show_test_loc_page(callback, service_pk, page=0, settings=settings)
 
 
 async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the paginated test location selector dynamically [1]."""
+    """Renders the paginated test location selector dynamically [cite: 1]."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -362,7 +325,7 @@ async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: in
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
-    # Sort countries alphabetically for professional UI [1]
+    # Sort countries alphabetically for professional UI
     proxies.sort(key=lambda x: x["country_name"].lower())
 
     limit = 10
@@ -530,15 +493,27 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Category Selection Menu
+    # Fetch all services dynamically from Control D first [cite: 1]
+    profile_id = settings.controld_profile_id or "default"
+    controld_service = ControlDService(settings)
+    services = await controld_service.fetch_controld_services(profile_id)
+    
+    if not services:
+        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+        return
+
+    # Extract all unique categories dynamically [cite: 1]
+    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
+
+    from app.services.controld import get_category_label_fa
+
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
     
-    for key, label in CATEGORY_MAP_FA.items():
-        if key == "other":
-            continue
-        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{key}:0")
-    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data=f"srv_cat:{plan.id}:other:0")
+    for cat_key in unique_categories:
+        label = get_category_label_fa(cat_key)
+        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{cat_key}:0")
+        
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -608,16 +583,14 @@ async def handle_buy_plan_srv(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Redirects to page 0 of the purchase country selector [1]."""
     await callback.answer()
+    if callback.message is None:
+        return
+
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1
     service_pk = parts[2]
-    await _show_buy_loc_page(callback, plan_id, service_pk, page=0, settings=settings)
 
-
-async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the paginated purchase location selector dynamically [1]."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -625,51 +598,21 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
-    # Sort countries alphabetically [1]
-    proxies.sort(key=lambda x: x["country_name"].lower())
-
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_proxies = proxies[start_idx:end_idx]
-    has_next = len(proxies) > end_idx
-
     builder = InlineKeyboardBuilder()
-    for p in page_proxies:
+    for p in proxies[:12]:
         p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
             callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
         )
-
-    # Navigation Controls [1]
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"buy_loc_page:{plan_id}:{service_pk}:{page - 1}"))
-    if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"buy_loc_page:{plan_id}:{service_pk}:{page + 1}"))
-    if nav_buttons:
-        builder.row(*nav_buttons)
-
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id).pack()))
+    builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
     builder.adjust(2)
 
     await callback.message.edit_text(
-        f"🗺 <b>انتخاب لوکیشن سرور</b> | صفحه {page + 1}\n\n"
-        f"لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
+        "🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
-
-
-@router.callback_query(F.data.startswith("buy_loc_page:"), StateFilter("*"))
-async def handle_buy_loc_page(callback: CallbackQuery, settings: Settings) -> None:
-    await callback.answer()
-    parts = callback.data.split(":")
-    plan_id = int(parts[1])
-    service_pk = parts[2]
-    page = int(parts[3])
-    await _show_buy_loc_page(callback, plan_id, service_pk, page, settings)
 
 
 @router.callback_query(F.data.startswith("buy_plan_loc:"), StateFilter("*"))
@@ -896,7 +839,7 @@ async def handle_pay_instant_wallet(
         ipv4_primary = ips["ipv4_primary"]
         ipv4_secondary = ips["ipv4_secondary"]
 
-    # Atomic balance deduction  
+    # Atomic balance deduction [1]
     user.wallet_balance -= final_price
     await session.commit()
     await state.clear()
@@ -937,7 +880,7 @@ async def handle_pay_instant_wallet(
 
 
 # ============================================================================
-# 5. CARD-TO-CARD MANUAL BILLING FLOW WITH LOCATION PASSING  
+# 5. CARD-TO-CARD MANUAL BILLING FLOW WITH LOCATION PASSING [1]
 # ============================================================================
 
 @router.callback_query(F.data.startswith("pay_manual_card:"), StateFilter("*"))
@@ -1145,3 +1088,4 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
         "ipv4_primary": "94.183.166.203",
         "ipv4_secondary": "94.183.166.208"
     }
+
