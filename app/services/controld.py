@@ -12,7 +12,29 @@ settings = get_settings()
 
 BASE_URL = "https://api.controld.com"
 
-# Expanded Persian Country Translator Map [cite: 1]
+# Dynamic Category Labels [1]
+CATEGORY_MAP_FA = {
+    "gaming": "🎮 بازی‌ها (Gaming)",
+    "video": "🎬 رسانه و استریم (Video/Streaming)",
+    "social": "💬 شبکه‌های اجتماعی (Social)",
+    "ai": "🤖 هوش مصنوعی (AI & Tech)",
+    "music": "🎵 موسیقی (Music)",
+    "news": "📰 اخبار (News)",
+    "shopping": "🛒 خرید (Shopping)",
+    "business": "💼 کسب و کار (Business)",
+    "productivity": "🛠 ابزارها (Productivity)",
+    "other": "🧩 سایر سرویس‌ها (Other)"
+}
+
+def get_category_label_fa(category_key: str) -> str:
+    """
+    Cleans and translates category keys dynamically (handles prefixes like 'native_') [1].
+    """
+    clean_key = category_key.lower().replace("native_", "").strip()
+    return CATEGORY_MAP_FA.get(clean_key, f"🧩 {clean_key.capitalize()}")
+
+
+# Persian Country Translator Map [1]
 COUNTRY_MAP_FA = {
     "AL": "آلبانی",
     "AQ": "قطب جنوب",
@@ -43,7 +65,7 @@ COUNTRY_MAP_FA = {
     "CA": "کانادا",
     "SG": "سنگاپور",
     "UA": "اوکراین",
-    "RU": "رویه",
+    "RU": "روسیه",
     "SE": "سوئد",
     "CH": "سوئیس",
     "IT": "ایتالیا",
@@ -81,7 +103,7 @@ COUNTRY_MAP_FA = {
 }
 
 
-# Persian City Translator Map [cite: 1]
+# Persian City Translator Map [1]
 CITY_MAP_FA = {
     "Adelaide": "آدلاید",
     "Brisbane": "بریزبن",
@@ -353,13 +375,13 @@ async def update_dns_device_profile(device_id: str, profile_id: str) -> bool:
         try:
             response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
             if response.status_code == 200:
-                logger.info("controld_device_updated", device_id=device_id, profile_id=profile_id)
+                logger.info("controld_device_profile_updated", device_id=device_id, profile_id=profile_id)
                 return True
             else:
-                logger.error(f"Failed to update Control D device {device_id} (Status {response.status_code}): {response.text}")
+                logger.error(f"Failed to update Control D device profile {device_id} (Status {response.status_code}): {response.text}")
                 return False
         except Exception as e:
-            logger.error(f"Error during updating Control D device {device_id}: {str(e)}")
+            logger.error(f"Error during updating Control D device profile {device_id}: {str(e)}")
             return False
 
 
@@ -384,7 +406,7 @@ async def fetch_controld_proxies() -> list[dict] | None:
                     result.append({
                         "code": pop_id,
                         "country_code": country_code,
-                        "country_name": get_country_name_fa(country_code, fallback_name),  # Fully translated or clean English name [cite: 1]
+                        "country_name": get_country_name_fa(country_code, fallback_name),
                         "city_name": get_city_name_fa(p.get("city") or ""),
                         "city": p.get("city") or ""
                     })
@@ -420,7 +442,7 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
                 data = response.json()
                 body = data.get("body", [])
                 
-                # --- FIXED: Meticulous dictionary-to-list converter [cite: 1] ---
+                # Defensive dictionary-to-list parser [cite: 1]
                 services_list = []
                 if isinstance(body, dict):
                     raw_services = body.get("services") or body.get("apps") or {}
@@ -492,3 +514,8 @@ class ControlDService:
 
     async def fetch_controld_services(self, profile_id: str) -> list[dict] | None:
         return await fetch_controld_services(profile_id=profile_id)
+
+    async def update_profile_default(self, profile_id: str, pop_code: str) -> bool:
+        """Exposes the overall profile default routing updater inside the class [cite: 1]."""
+        from app.services.controld import update_profile_default_route
+        return await update_profile_default_route(profile_id, pop_code)
