@@ -114,7 +114,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or {}
+                resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
@@ -233,7 +233,7 @@ async def handle_get_test_account(
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
     
-    # Extract unique categories
+    # Generate dynamic categories
     profile_id = settings.controld_profile_id
     if not profile_id:
         await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
@@ -251,6 +251,7 @@ async def handle_get_test_account(
     for key in unique_categories:
         label = get_category_label_fa(key)
         builder.button(text=label, callback_data=f"test_cat:{key}:0")
+    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -325,7 +326,7 @@ async def handle_test_select_srv(
 
 
 async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the paginated test location selector dynamically [cite: 1]."""
+    """Renders the paginated test location selector dynamically."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -346,14 +347,13 @@ async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: in
     for p in page_proxies:
         p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
         builder.button(
-            text=p_name,  # <-- FIXED: Clean Flag City POP layout [cite: 1]
-            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"  # <-- FIXED: Uses correct trial creation callback data [cite: 1]
+            text=p_name,  # Clean Flag City POP layout
+            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"  # Uses correct trial creation callback data
         )
 
-    # 1. Adjust countries first [cite: 1]
+    # Navigation Controls
     builder.adjust(2)
 
-    # 2. Navigation Controls [cite: 1]
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_loc_page:{service_pk}:{page - 1}"))
@@ -503,7 +503,7 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Fetch all services dynamically from Control D first [cite: 1]
+    # Fetch all services dynamically from Control D first
     profile_id = settings.controld_profile_id or "default"
     controld_service = ControlDService(settings)
     services = await controld_service.fetch_controld_services(profile_id)
@@ -512,7 +512,7 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
-    # Extract all unique categories dynamically [cite: 1]
+    # Extract all unique categories dynamically
     unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
 
     from app.services.controld import get_category_label_fa
@@ -550,7 +550,7 @@ async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, setting
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
         
-    # Filter services based on the dynamically selected category key [cite: 1]
+    # Filter services based on the dynamically selected category key
     filtered = [s for s in services if s["category"] == category_key]
     filtered.sort(key=lambda x: (x["name"] or "").lower())
     
@@ -602,12 +602,6 @@ async def handle_buy_plan_srv(
     plan_id = int(parts[1])  # <-- FIXED: Accessed index 1
     service_pk = parts[2]
 
-    # Redirect to page 0 of the purchase country selector [cite: 1]
-    await _show_buy_loc_page(callback, plan_id, service_pk, page=0, settings=settings)
-
-
-async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the paginated purchase location selector dynamically [cite: 1]."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -615,7 +609,20 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
-    # Sort countries alphabetically [cite: 1]
+    # Redirect to page 0 of the purchase country selector
+    await _show_buy_loc_page(callback, plan_id, service_pk, page=0, settings=settings)
+
+
+async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: str, page: int, settings: Settings) -> None:
+    """Renders the paginated purchase location selector dynamically."""
+    controld_service = ControlDService(settings)
+    proxies = await controld_service.fetch_controld_proxies()
+    
+    if not proxies:
+        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+        return
+
+    # Sort countries alphabetically
     proxies.sort(key=lambda x: x["country_name"].lower())
 
     limit = 10
@@ -628,14 +635,14 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
     for p in page_proxies:
         p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
         builder.button(
-            text=p_name,  # <-- FIXED: Clean Flag City POP layout [cite: 1]
+            text=p_name,  # Clean Flag City POP layout
             callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
         )
 
-    # 1. Adjust countries first [cite: 1]
+    # 1. Adjust countries first
     builder.adjust(2)
 
-    # 2. Navigation Controls [cite: 1]
+    # 2. Navigation Controls
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"buy_loc_page:{plan_id}:{service_pk}:{page - 1}"))
@@ -644,7 +651,7 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
     if nav_buttons:
         builder.row(*nav_buttons)
 
-    # 3. Append Back Button cleanly at the bottom [cite: 1]
+    # 3. Append Back Button cleanly at the bottom
     builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id).pack()))
 
     await callback.message.edit_text(
@@ -692,19 +699,21 @@ async def handle_buy_plan_loc(
     if user is None:
         return
 
-    # Resolve Game/Service display name [cite: 1]
-    def get_service_name_display(pk: str) -> str:
-        if pk == "default":
-            return "🌐 کل ترافیک اینترنت"
-        for cat in CATEGORIES.values():
-            for s in cat["services"]:
-                if s["pk"] == pk:
-                    return s["name"]
-        return pk.capitalize()
+    # 1. Resolve Game/Service display name dynamically from Control D [cite: 1]
+    service_display = service_pk.capitalize()
+    if service_pk == "default":
+        service_display = "🌐 کل ترافیک اینترنت"
+    else:
+        # Query Control D dynamically to retrieve the correct, un-hardcoded display name [cite: 1]
+        controld_service = ControlDService(settings)
+        services = await controld_service.fetch_controld_services(settings.controld_profile_id or "default")
+        if services:
+            for s in services:
+                if s["pk"] == service_pk:
+                    service_display = s["name"] or service_pk.capitalize()
+                    break
 
-    service_display = get_service_name_display(service_pk)
-
-    # Resolve Country display name [cite: 1]
+    # Resolve Country display name
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     country_display = pop_code
@@ -714,7 +723,7 @@ async def handle_buy_plan_loc(
                 country_display = f"{p['country_name']} - {p['city_name']} ({p['code']})"
                 break
 
-    # Safe duration formatting [cite: 1]
+    # Safe duration formatting
     duration_hours = plan.duration_hours or 720
     duration_text = format_duration_fa(duration_hours)
 
@@ -828,7 +837,7 @@ async def handle_pay_instant_wallet(
         )
 
         if device_data is None:
-            await callback.message.answer("❌ خطا در برقراری ارتباط با سرهمان دی‌ان‌اس.")
+            await callback.message.answer("❌ خطا در برقراری ارتباط با سرورهای دی‌ان‌اس.")
             return
 
         device_id = device_data["device_id"]
@@ -1138,4 +1147,3 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
         "ipv4_primary": "94.183.166.203",
         "ipv4_secondary": "94.183.166.208"
     }
-
