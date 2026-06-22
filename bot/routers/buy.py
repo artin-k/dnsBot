@@ -161,7 +161,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "94.183.166.208"
                 }
         except Exception:
             pass
@@ -259,7 +259,6 @@ async def handle_get_test_account(
         await callback.answer()
         return
 
-    # Anti-Abuse DB Check [1]
     stmt = select(VPNService).where(
         VPNService.user_id == user.id,
         VPNService.is_test_account == True
@@ -273,7 +272,7 @@ async def handle_get_test_account(
 
     await callback.answer()
 
-    # Dynamic Category Selector Menu
+    # Category Selection Menu
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
     
@@ -348,12 +347,14 @@ async def handle_test_select_srv(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
+    """Redirects to page 0 of the test country selector [1]."""
     await callback.answer()
-    if callback.message is None:
-        return
-
     service_pk = callback.data.split(":")[1]
+    await _show_test_loc_page(callback, service_pk, page=0, settings=settings)
 
+
+async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: int, settings: Settings) -> None:
+    """Renders the paginated test location selector dynamically [1]."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -361,21 +362,50 @@ async def handle_test_select_srv(
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
+    # Sort countries alphabetically for professional UI [1]
+    proxies.sort(key=lambda x: x["country_name"].lower())
+
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_proxies = proxies[start_idx:end_idx]
+    has_next = len(proxies) > end_idx
+
     builder = InlineKeyboardBuilder()
-    for p in proxies[:12]:
-        p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"  # <-- Display City Name cleanly
+    for p in page_proxies:
+        p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
             callback_data=f"apply_test_loc:{service_pk}:{p['code']}"
         )
-    builder.button(text="🔙 بازگشت", callback_data="get_test_account")
+
+    # Navigation Controls
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_loc_page:{service_pk}:{page - 1}"))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"test_loc_page:{service_pk}:{page + 1}"))
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="get_test_account"))
     builder.adjust(2)
 
     await callback.message.edit_text(
-        "🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
+        f"🗺 <b>انتخاب لوکیشن سرور تست</b> | صفحه {page + 1}\n\n"
+        f"لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
+
+
+@router.callback_query(F.data.startswith("test_loc_page:"), StateFilter("*"))
+async def handle_test_loc_page(callback: CallbackQuery, settings: Settings) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    service_pk = parts[1]
+    page = int(parts[2])
+    await _show_test_loc_page(callback, service_pk, page, settings)
 
 
 @router.callback_query(F.data.startswith("apply_test_loc:"), StateFilter("*"))
@@ -500,25 +530,15 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    profile_id = settings.controld_profile_id or "default"
-    controld_service = ControlDService(settings)
-    services = await controld_service.fetch_controld_services(profile_id)
-    
-    if not services:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
-
-    from app.services.controld import get_category_label_fa
-
+    # Category Selection Menu
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
     
-    for cat_key in unique_categories:
-        label = get_category_label_fa(cat_key)
-        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{cat_key}:0")
-        
+    for key, label in CATEGORY_MAP_FA.items():
+        if key == "other":
+            continue
+        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{key}:0")
+    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data=f"srv_cat:{plan.id}:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -588,14 +608,16 @@ async def handle_buy_plan_srv(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
+    """Redirects to page 0 of the purchase country selector [1]."""
     await callback.answer()
-    if callback.message is None:
-        return
-
     parts = callback.data.split(":")
-    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1
+    plan_id = int(parts[1])
     service_pk = parts[2]
+    await _show_buy_loc_page(callback, plan_id, service_pk, page=0, settings=settings)
 
+
+async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: str, page: int, settings: Settings) -> None:
+    """Renders the paginated purchase location selector dynamically [1]."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -603,37 +625,65 @@ async def handle_buy_plan_srv(
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
+    # Sort countries alphabetically [1]
+    proxies.sort(key=lambda x: x["country_name"].lower())
+
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_proxies = proxies[start_idx:end_idx]
+    has_next = len(proxies) > end_idx
+
     builder = InlineKeyboardBuilder()
-    for p in proxies[:12]:
+    for p in page_proxies:
         p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"
         builder.button(
             text=f"📍 {p_name}",
             callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
         )
-    builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))
+
+    # Navigation Controls [1]
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"buy_loc_page:{plan_id}:{service_pk}:{page - 1}"))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"buy_loc_page:{plan_id}:{service_pk}:{page + 1}"))
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id).pack()))
     builder.adjust(2)
 
     await callback.message.edit_text(
-        "🗺 لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
+        f"🗺 <b>انتخاب لوکیشن سرور</b> | صفحه {page + 1}\n\n"
+        f"لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
 
 
-# Replace this function inside bot/routers/buy.py
+@router.callback_query(F.data.startswith("buy_loc_page:"), StateFilter("*"))
+async def handle_buy_loc_page(callback: CallbackQuery, settings: Settings) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    plan_id = int(parts[1])
+    service_pk = parts[2]
+    page = int(parts[3])
+    await _show_buy_loc_page(callback, plan_id, service_pk, page, settings)
+
 
 @router.callback_query(F.data.startswith("buy_plan_loc:"), StateFilter("*"))
 async def handle_buy_plan_loc(
     callback: CallbackQuery,
     session: AsyncSession,
-    settings: Settings,  # <-- Added settings parameter for ControlD queries [1]
+    settings: Settings,
 ) -> None:
     await callback.answer()
     if callback.message is None or callback.from_user is None:
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])
+    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -649,7 +699,7 @@ async def handle_buy_plan_loc(
     if user is None:
         return
 
-    # 1. Resolve Game/Service display name [1]
+    # Resolve Game/Service display name [1]
     def get_service_name_display(pk: str) -> str:
         if pk == "default":
             return "🌐 کل ترافیک اینترنت"
@@ -661,21 +711,21 @@ async def handle_buy_plan_loc(
 
     service_display = get_service_name_display(service_pk)
 
-    # 2. Resolve Country display name [1]
+    # Resolve Country display name [1]
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     country_display = pop_code
     if proxies:
         for p in proxies:
             if p["code"] == pop_code:
-                country_display = f"{p['country_name']} ({p['code']})"
+                country_display = f"{p['country_name']} - {p['city_name']} ({p['code']})"
                 break
 
-    # 3. Safe remaining duration formatting to prevent '0 ساعت' [1]
+    # Safe duration formatting [1]
     duration_hours = plan.duration_hours or 720
     duration_text = format_duration_fa(duration_hours)
 
-    # 4. Check renewal discount
+    # Check renewal
     active_stmt = select(VPNService).where(
         VPNService.user_id == user.id,
         VPNService.status == "active"
@@ -690,7 +740,6 @@ async def handle_buy_plan_loc(
         final_price = plan.price - discount_amount
         discount_msg = f"🎁 تخفیف تمدید فعال: {discount_amount:,} تومان\n"
 
-    # Pre-invoice text summarizing the selected configurations [1]
     invoice_text = f"""🧾 پیش‌فاکتور خرید اشتراک DNS
 
 ⚡ نام سرویس: {escape(plan.title)}
@@ -710,6 +759,7 @@ async def handle_buy_plan_loc(
     builder.adjust(1)
 
     await callback.message.edit_text(invoice_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
 
 # ============================================================================
 # 4. INSTANT PAYMENT FROM WALLET WITH GLOBAL LOCATION ROUTING  
