@@ -232,6 +232,13 @@ async def show_plans(event: Message | CallbackQuery, state: FSMContext, session:
         await event.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
+@router.callback_query(F.data == "buy_back_to_menu")
+async def buy_back_to_menu(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(texts.MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
+
+
 # ============================================================================
 # 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES
 # ============================================================================
@@ -347,7 +354,7 @@ async def handle_test_select_srv(
 
 
 async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the paginated test location selector dynamically."""
+    """Renders the paginated test location selector dynamically [cite: 1]."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
@@ -366,10 +373,10 @@ async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: in
 
     builder = InlineKeyboardBuilder()
     for p in page_proxies:
-        p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"
+        p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
         builder.button(
-            text=f"📍 {p_name}",
-            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"
+            text=p_name,  # <-- FIXED: Clean Flag City POP layout [cite: 1]
+            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"  # <-- FIXED: Uses correct trial creation callback data [cite: 1]
         )
 
     # Navigation Controls
@@ -619,7 +626,7 @@ async def handle_buy_plan_srv(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1
+    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
     service_pk = parts[2]
 
     controld_service = ControlDService(settings)
@@ -655,7 +662,7 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
     for p in page_proxies:
         p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
         builder.button(
-            text=f"📍 {p_name}",
+            text=p_name,  # <-- FIXED: Clean Flag City POP layout [cite: 1]
             callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
         )
 
@@ -852,7 +859,7 @@ async def handle_pay_instant_wallet(
         )
 
         if device_data is None:
-            await callback.message.answer("❌ خطا در برقراری ارتباط با سرورهای دی‌ان‌اس.")
+            await callback.message.answer("❌ خطا در برقراری ارتباط با سرهمان دی‌ان‌اس.")
             return
 
         device_id = device_data["device_id"]
