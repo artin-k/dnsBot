@@ -12,29 +12,7 @@ settings = get_settings()
 
 BASE_URL = "https://api.controld.com"
 
-
-
-# Define categories here so routers can import them cleanly (No router imports!) [1]
-CATEGORY_MAP_FA = {
-    "gaming": "🎮 بازی‌ها (Gaming)",
-    "video": "🎬 رسانه و استریم (Video/Streaming)",
-    "social": "💬 شبکه‌های اجتماعی (Social)",
-    "ai": "🤖 هوش مصنوعی (AI & Tech)",
-    "music": "🎵 موسیقی (Music)",
-    "news": "📰 اخبار (News)",
-    "shopping": "🛒 خرید (Shopping)",
-    "business": "💼 کسب و کار (Business)",
-    "productivity": "🛠 ابزارها (Productivity)",
-    "other": "🧩 سایر سرویس‌ها (Other)"
-}
-
-def get_category_label_fa(category_key: str) -> str:
-    """Cleans and translates category keys dynamically."""
-    clean_key = category_key.lower().replace("native_", "").strip()
-    return CATEGORY_MAP_FA.get(clean_key, f"🧩 {clean_key.capitalize()}")
-
-
-# Persian Country Translator Map [1]
+# Expanded Persian Country Translator Map [cite: 1]
 COUNTRY_MAP_FA = {
     "AL": "آلبانی",
     "AQ": "قطب جنوب",
@@ -44,6 +22,15 @@ COUNTRY_MAP_FA = {
     "BE": "بلژیک",
     "BA": "بوسنی",
     "BR": "برزیل",
+    "BG": "بلغارستان",
+    "CL": "شیلی",
+    "CO": "کلمبیا",
+    "CY": "قبرس",
+    "CZ": "جمهوری چک",
+    "DK": "دانمارک",
+    "EC": "اکوادور",
+    "EE": "استونی",
+    "GE": "گرجستان",
     "US": "ایالات متحده",
     "DE": "آلمان",
     "TR": "ترکیه",
@@ -56,19 +43,45 @@ COUNTRY_MAP_FA = {
     "CA": "کانادا",
     "SG": "سنگاپور",
     "UA": "اوکراین",
-    "RU": "روسیه",
+    "RU": "رویه",
     "SE": "سوئد",
     "CH": "سوئیس",
     "IT": "ایتالیا",
     "PL": "لهستان",
     "ES": "اسپانیا",
     "IN": "هند",
-    "JP": "ژاپن"
+    "JP": "ژاپن",
+    "KR": "کره جنوبی",
+    "ZA": "آفریقای جنوبی",
+    "HK": "هنگ کنگ",
+    "HU": "مجارستان",
+    "IS": "ایسلند",
+    "IE": "ایرلند",
+    "IL": "اسرائیل",
+    "LV": "لتونی",
+    "LT": "لیتوانی",
+    "LU": "لوکزامبورگ",
+    "MK": "مقدونیه",
+    "MY": "مالزی",
+    "MX": "مکزیک",
+    "MD": "مولداوی",
+    "NZ": "نیوزیلند",
+    "NG": "نیجریه",
+    "NO": "نروژ",
+    "PA": "پاناما",
+    "PE": "پرو",
+    "PH": "فیلیپین",
+    "PT": "پرتغال",
+    "RO": "رومانی",
+    "RS": "صربستان",
+    "SK": "اسلواکی",
+    "TW": "تایوان",
+    "TH": "تایلند",
+    "VN": "ویتنام"
 }
 
-# app/services/controld.py (Paste below get_country_name_fa)
 
-# Persian City Translator Map [1]
+# Persian City Translator Map [cite: 1]
 CITY_MAP_FA = {
     "Adelaide": "آدلاید",
     "Brisbane": "بریزبن",
@@ -109,12 +122,15 @@ CITY_MAP_FA = {
     "Seoul": "سئول"
 }
 
-def get_city_name_fa(city_name: str) -> str:
-    """Translates the city name to Persian [1]."""
-    return CITY_MAP_FA.get(city_name, city_name)
 
-def get_country_name_fa(country_code: str) -> str:
-    return COUNTRY_MAP_FA.get(country_code.upper(), country_code.upper())
+def get_country_name_fa(country_code: str, fallback_name: str) -> str:
+    """Translates ISO country codes to Persian, falling back to full English name [cite: 1]."""
+    return COUNTRY_MAP_FA.get(country_code.upper(), fallback_name)
+
+
+def get_city_name_fa(city_name: str) -> str:
+    """Translates the city name to Persian."""
+    return CITY_MAP_FA.get(city_name, city_name)
 
 
 def _get_headers() -> dict:
@@ -337,13 +353,13 @@ async def update_dns_device_profile(device_id: str, profile_id: str) -> bool:
         try:
             response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
             if response.status_code == 200:
-                logger.info("controld_device_profile_updated", device_id=device_id, profile_id=profile_id)
+                logger.info("controld_device_updated", device_id=device_id, profile_id=profile_id)
                 return True
             else:
-                logger.error(f"Failed to update Control D device profile {device_id} (Status {response.status_code}): {response.text}")
+                logger.error(f"Failed to update Control D device {device_id} (Status {response.status_code}): {response.text}")
                 return False
         except Exception as e:
-            logger.error(f"Error during updating Control D device profile {device_id}: {str(e)}")
+            logger.error(f"Error during updating Control D device {device_id}: {str(e)}")
             return False
 
 
@@ -360,20 +376,18 @@ async def fetch_controld_proxies() -> list[dict] | None:
                 result = []
                 for p in proxies:
                     country_code = p.get("country") or "US"
-                    pop_id = p.get("id") or p.get("code") or p.get("pop") or p.get("pk") or p.get("location_code") or p.get("PK")
+                    fallback_name = p.get("country_name") or country_code
+                    pop_id = p.get("PK") or p.get("id") or p.get("code") or p.get("pop") or p.get("location_code")
                     if not pop_id:
                         continue 
                     
-# Update this part inside fetch_controld_proxies() in app/services/controld.py
-
                     result.append({
                         "code": pop_id,
                         "country_code": country_code,
-                        "country_name": get_country_name_fa(country_code),
-                        "city_name": get_city_name_fa(p.get("city") or ""),  # <-- Added translated city name [1]
+                        "country_name": get_country_name_fa(country_code, fallback_name),  # Fully translated or clean English name [cite: 1]
+                        "city_name": get_city_name_fa(p.get("city") or ""),
                         "city": p.get("city") or ""
                     })
-                    
                 return result
             return None
         except Exception as e:
@@ -406,20 +420,28 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
                 data = response.json()
                 body = data.get("body", [])
                 
-                services = []
+                # --- FIXED: Meticulous dictionary-to-list converter [cite: 1] ---
+                services_list = []
                 if isinstance(body, dict):
-                    services = body.get("services") or body.get("apps") or []
+                    raw_services = body.get("services") or body.get("apps") or {}
+                    if isinstance(raw_services, dict):
+                        for pk, s_data in raw_services.items():
+                            if isinstance(s_data, dict):
+                                s_data["pk"] = pk
+                                services_list.append(s_data)
+                    elif isinstance(raw_services, list):
+                        services_list = raw_services
                 elif isinstance(body, list):
-                    services = body
+                    services_list = body
                 
                 result = []
-                for s in services:
+                for s in services_list:
                     pk_val = s.get("PK") or s.get("pk") or s.get("id")
                     if not pk_val:
                         continue
                     result.append({
                         "pk": pk_val,
-                        "name": s.get("name"),
+                        "name": s.get("name") or pk_val,
                         "category": s.get("category") or "other"
                     })
                 return result
