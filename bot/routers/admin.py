@@ -1152,10 +1152,27 @@ async def admin_payment_action(
                 service_record = res.scalars().first()
                 if service_record:
                     device_id = service_record.controld_device_id
-                    # Query Control D in real-time to fetch the exact assigned legacy IPs [1]
+                    
+                    # Fetch dynamic legacy IPv4 addresses
                     ips = await get_controld_device_ips(device_id, settings)
-
-            # Inside bot/routers/admin.py -> admin_payment_action() action == "approve"
+                    
+                    # --- DYNAMIC ROUTING CONFIGURATION ON MANUAL APPROVAL [cite: 1] ---
+                    # Parse the selected game and country from custom_username
+                    raw_username = payment_record.order.custom_username or ""
+                    if "|" in raw_username:
+                        parts = raw_username.split("|")
+                        service_pk = parts[1] if len(parts) > 1 else "default"
+                        pop_code = parts[2] if len(parts) > 2 else None
+                        
+                        if pop_code:
+                            controld_service = ControlDService(settings)
+                            profile_id = service_record.plan.controld_profile_id or settings.controld_profile_id
+                            
+                            # Apply the routing rules dynamically on Control D backend [cite: 1]
+                            if service_pk == "default":
+                                await controld_service.update_profile_default(profile_id, pop_code) [cite: 1]
+                            else:
+                                await controld_service.update_service_route(profile_id, service_pk, pop_code) [cite: 1]
 
             await callback.bot.send_message(
                 chat_id=result.user_telegram_id,
@@ -1164,7 +1181,7 @@ async def admin_payment_action(
                     expire_at=service_record.expire_at if service_record else None,
                     ipv4_primary=ips["ipv4_primary"],
                     ipv4_secondary=ips["ipv4_secondary"],
-                    custom_username=payment_record.order.custom_username if payment_record and payment_record.order else None  # <-- Added [1]
+                    custom_username=payment_record.order.custom_username if payment_record and payment_record.order else None
                 ),
                 reply_markup=_get_ip_registration_keyboard(device_id) if service_record else None,
                 parse_mode="HTML"
@@ -1176,23 +1193,21 @@ async def admin_payment_action(
                 await callback.answer("پرداخت تایید شد.")
             await _remove_admin_buttons(callback)
             
-
         elif callback_data.action == "reject":
             result = await payment_service.reject_payment(callback_data.payment_id)
             await callback.bot.send_message(
                 chat_id=result.user_telegram_id,
-                text="""❌ پرداخت شما توسط مدیریت تایید نشد.
-در صورت وجود مشکل با پشتیبانی در ارتباط باشید.""",
+                text="❌ رسید شارژ کیف پول شما تایید نشد. در صورت وجود مشکل با پشتیبانی در ارتباط باشید.",
             )
-            await callback.answer("پرداخت رد شد.")
+            await callback.answer("شارژ کیف پول رد شد.")
             await _remove_admin_buttons(callback)
+            
     except PaymentExpiredError:
         await callback.answer(texts.EXPIRED_ORDER_TEXT, show_alert=True)
     except PaymentAlreadyProcessedError:
         await callback.answer("این پرداخت قبلاً بررسی شده است.", show_alert=True)
     except PaymentApprovalError:
         await callback.answer("این درخواست دیگر معتبر نیست.", show_alert=True)
-
 
 @router.callback_query(WalletTopupReviewCallback.filter())
 async def admin_wallet_topup_action(

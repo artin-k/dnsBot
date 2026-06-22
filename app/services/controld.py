@@ -192,8 +192,13 @@ async def create_dns_device(
 ) -> dict | None: 
     url = f"{BASE_URL}/devices"
     name = device_name or f"tg_user_{tg_user_id}"
-    disable_ttl = int((datetime.now(timezone.utc) + timedelta(hours=duration_hours)).timestamp())
+    
+    # --- FIXED: Strip any metadata from the device name to prevent Control D API crashes [cite: 1] ---
+    if name and "|" in name:
+        name = name.split("|")[0].strip()
+    # -------------------------------------------------------------------------------------------------
 
+    disable_ttl = int((datetime.now(timezone.utc) + timedelta(hours=duration_hours)).timestamp())
     payload = {
         "name": name,
         "profile_id": profile_id,
@@ -307,16 +312,24 @@ async def fetch_controld_profiles() -> list[dict] | None:
             return None
 
 
+# Inside app/services/controld.py -> create_device()
+
 async def create_device(profile_id: str, device_name: str, duration_hours: int) -> dict | None:
     url = f"{BASE_URL}/devices"
     disable_ttl = int((datetime.now(timezone.utc) + timedelta(hours=duration_hours)).timestamp())
     
+    # --- FIXED: Strip any metadata from the device name to prevent Control D API crashes [cite: 1] ---
+    if device_name and "|" in device_name:
+        device_name = device_name.split("|")[0].strip()
+    # -------------------------------------------------------------------------------------------------
+
     payload = {
         "name": device_name,
         "profile_id": profile_id,
         "analytics": 1,
         "disable_ttl": disable_ttl
     }
+    # ... rest of the function continues normally ...
     timeout = aiohttp.ClientTimeout(total=10)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
