@@ -599,10 +599,12 @@ async def handle_buy_plan_srv(
         return
 
     builder = InlineKeyboardBuilder()
+    # Inside bot/routers/buy.py (around lines 170 and 260)
+
     for p in proxies[:12]:
-        p_name = f"{p['country_name']} - {p['city_name']} ({p['code']})"
+        p_name = f"{p['flag']} {p['city_name']} ({p['code']})"  # <-- Formatted as: 🇩🇪 فرانکفورت (FRA) [1]
         builder.button(
-            text=f"📍 {p_name}",
+            text=p_name,
             callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
         )
     builder.button(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id))

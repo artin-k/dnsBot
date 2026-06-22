@@ -403,9 +403,12 @@ async def fetch_controld_proxies() -> list[dict] | None:
                     if not pop_id:
                         continue 
                     
+                    # Update this part inside fetch_controld_proxies() in app/services/controld.py
+
                     result.append({
                         "code": pop_id,
                         "country_code": country_code,
+                        "flag": get_flag_emoji(country_code),  # <-- Added Unicode Flag [1]
                         "country_name": get_country_name_fa(country_code, fallback_name),
                         "city_name": get_city_name_fa(p.get("city") or ""),
                         "city": p.get("city") or ""
@@ -416,6 +419,23 @@ async def fetch_controld_proxies() -> list[dict] | None:
             logger.error(f"Error fetching Control D proxies: {str(e)}")
             return None
 
+
+# app/services/controld.py (Paste below get_country_name_fa)
+
+def get_flag_emoji(country_code: str) -> str:
+    """
+    Converts a 2-letter ISO country code (e.g., 'US') directly into its 
+    corresponding Unicode regional indicator flag emoji [1].
+    """
+    if not country_code or len(country_code) != 2:
+        return "📍"
+    base = 127397  # Regional Indicator Symbol Letter A offset [1]
+    try:
+        char1 = chr(ord(country_code[0].upper()) + base)
+        char2 = chr(ord(country_code[1].upper()) + base)
+        return f"{char1}{char2}"
+    except Exception:
+        return "📍"
 
 async def update_service_route(profile_id: str, service_name: str, pop_code: str) -> bool:
     url = f"{BASE_URL}/profiles/{profile_id}/services/{service_name}"

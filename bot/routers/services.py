@@ -260,11 +260,13 @@ async def select_service_location(callback: CallbackQuery, session: AsyncSession
         return
 
     builder = InlineKeyboardBuilder()
-    for p in proxies[:12]:  # Show first 12 popular worldwide locations [1]
-        p_name = f"{p['country_name']} ({p['code']})"
+    # Inside bot/routers/services.py (around line 130)
+
+    for p in proxies[:12]:
+        p_name = f"{p['flag']} {p['city_name']} ({p['code']})"  # <-- Formatted as: 🇩🇪 فرانکفورت (FRA) [1]
         builder.button(
-            text=f"📍 {p_name}",
-            callback_data=f"apply_loc_change:{service_id}:{service_pk}:{p['code']}:{p_name}"  # Apply routing [1]
+            text=p_name,
+            callback_data=f"apply_loc_change:{service_id}:{service_pk}:{p['code']}:{p_name}"
         )
     builder.button(text="↩️ بازگشت", callback_data=f"service_routing_menu:{service_id}")
     builder.adjust(2)
