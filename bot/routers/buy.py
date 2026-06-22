@@ -1134,8 +1134,3 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
         "ipv4_primary": "94.183.166.203",
         "ipv4_secondary": "94.183.166.208"
     }
-
---- END OF FILE buy.py ---
-how can i change this files to write down the flag emoji and city name and POP code  and i can run it in vps without any problem 
-please give me the full fixed version because im afraid of missing indexes again 
-and please answer in english
