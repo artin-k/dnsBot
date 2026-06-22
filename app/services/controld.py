@@ -434,10 +434,16 @@ async def update_service_route(profile_id: str, service_name: str, pop_code: str
 
 
 async def fetch_controld_services(profile_id: str) -> list[dict] | None:
-    url = f"{BASE_URL}/profiles/{profile_id}/services"
+    """
+    Queries the complete, unfiltered catalog of services and games directly 
+    from the target Control D Profile [1].
+    """
+    # --- FIXED: Appended ?all=1 to retrieve the full catalog [1] ---
+    url = f"{BASE_URL}/profiles/{profile_id}/services?all=1" 
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(url, headers=_get_headers(), timeout=10.0)
+            # ... rest of the code is unchanged ...
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", [])
