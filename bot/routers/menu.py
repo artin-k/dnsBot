@@ -116,8 +116,8 @@ async def route_main_menu_text(
         await menu_actions.show_renewal_disabled(message, session)
     elif text in {texts.BTN_MY_SERVICES, "🛍 سرویس های من", "🛍 اشتراک‌های من"}:
     # Local import to prevent circular dependency [1]
-        from bot.routers.services import _show_my_services_page [1]
-        await _show_my_services_page(message, page=0, session=session) [1]
+        from bot.routers.services import _show_my_services_page 
+        await _show_my_services_page(message, page=0, session=session) 
     elif text in {texts.BTN_TARIFFS, "💰 تعرفه اشتراک ها"}:
         await menu_actions.show_tariffs(message, session)
     elif text == texts.BTN_TRACK_ORDER:
