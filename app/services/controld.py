@@ -145,9 +145,15 @@ CITY_MAP_FA = {
 }
 
 
-def get_country_name_fa(country_code: str, fallback_name: str) -> str:
-    """Translates ISO country codes to Persian, falling back to full English name [cite: 1]."""
-    return COUNTRY_MAP_FA.get(country_code.upper(), fallback_name)
+# Replace this function in app/services/controld.py (Near the top)
+
+def get_country_name_fa(country_code: str, fallback_name: str | None = None) -> str:
+    """
+    Translates ISO country codes to Persian, falling back to full English name or code [1].
+    The fallback_name is now optional to prevent any router/notification TypeErrors [1].
+    """
+    fallback = fallback_name or country_code.upper()
+    return COUNTRY_MAP_FA.get(country_code.upper(), fallback)
 
 
 def get_city_name_fa(city_name: str) -> str:

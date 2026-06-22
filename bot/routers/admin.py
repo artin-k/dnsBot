@@ -1170,9 +1170,9 @@ async def admin_payment_action(
                             
                             # Apply the routing rules dynamically on Control D backend [cite: 1]
                             if service_pk == "default":
-                                await controld_service.update_profile_default(profile_id, pop_code) [cite: 1]
+                                await controld_service.update_profile_default(profile_id, pop_code) 
                             else:
-                                await controld_service.update_service_route(profile_id, service_pk, pop_code) [cite: 1]
+                                await controld_service.update_service_route(profile_id, service_pk, pop_code) 
 
             await callback.bot.send_message(
                 chat_id=result.user_telegram_id,
