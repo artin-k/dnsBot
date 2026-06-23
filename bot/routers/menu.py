@@ -32,6 +32,7 @@ from bot.keyboards.main_menu import (
     main_menu_keyboard,
 )
 from bot.keyboards.verification import phone_verification_keyboard
+from bot.routers.buy import handle_get_test_account
 from bot.states.wallet import VerificationStates
 
 router = Router(name="menu")

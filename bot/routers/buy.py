@@ -741,7 +741,9 @@ async def handle_buy_plan_loc(
 
 آیا مایل هستید این طرح را خریداری کنید؟"""
 
+    # Inside bot/routers/buy.py -> handle_buy_plan_loc()
     builder = InlineKeyboardBuilder()
+    builder.button(text="💳 پرداخت آنلاین (پی استار)", callback_data=f"pay_online_paystar:{plan.id}:{service_pk}:{pop_code}")
     builder.button(text="🏦 پرداخت از کیف پول (آنی)", callback_data=f"pay_instant_wallet:{plan.id}:{service_pk}:{pop_code}")
     builder.button(text="💳 کارت به کارت (دستی)", callback_data=f"pay_manual_card:{plan.id}:{service_pk}:{pop_code}")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
@@ -749,6 +751,86 @@ async def handle_buy_plan_loc(
 
     await callback.message.edit_text(invoice_text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
+# Append this handler inside bot/routers/buy.py
+
+@router.callback_query(F.data.startswith("pay_online_paystar:"), StateFilter("*"))
+async def handle_pay_online_paystar(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    await callback.answer()
+    if callback.message is None or callback.from_user is None:
+        return
+
+    parts = callback.data.split(":")
+    plan_id = int(parts[1])
+    service_pk = parts[2]
+    pop_code = parts[3]
+
+    plan = await PlansRepository(session).get(plan_id)
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+
+    if plan is None or user is None:
+        await callback.message.answer("❌ خطا در پردازش درخواست.")
+        return
+
+    # Check renewal
+    active_stmt = select(VPNService).where(
+        VPNService.user_id == user.id,
+        VPNService.status == "active"
+    )
+    active_result = await session.execute(active_stmt)
+    current_sub = active_result.scalars().first()
+
+    final_price = plan.price
+    if current_sub is not None:
+        final_price = plan.price - int(plan.price * 0.1)
+
+    # Generate a unique Order tracking code
+    custom_username = f"dns_user_{user.telegram_id}|{service_pk}|{pop_code}"
+    order_service = OrderService(session, settings)
+    order, _payment = await order_service.create_order_with_payment(
+        user=user,
+        plan=plan,
+        custom_username=custom_username,
+        discount_code=None,
+        discount_percent=10 if current_sub is not None else 0,
+        discount_amount=int(plan.price * 0.1) if current_sub is not None else 0,
+    )
+
+    # Define the dynamic callback URL pointing to your running FastAPI server
+    callback_url = f"{WEB_SERVER_BASE_URL}/paystar/callback"
+
+    # Initialize Paystar Service and request payment token [cite: 3.3.1]
+    from app.services.paystar import PaystarService
+    paystar = PaystarService()
+    token = await paystar.create_payment(
+        amount_toman=final_price,
+        order_id=order.tracking_code,
+        callback_url=callback_url
+    )
+
+    if not token:
+        await callback.message.answer("❌ خطا در اتصال به درگاه پرداخت آنلاین. لطفاً از روش کارت به کارت استفاده کنید.")
+        return
+
+    # Send the secure redirection link to the user [cite: 5.1.2]
+    checkout_url = f"https://core.paystar.ir/api/pardakht/payment?token={token}"
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔗 ورود به درگاه پرداخت بانکی", url=checkout_url)
+    builder.button(text="🏠 منوی اصلی", callback_data="buy_back_to_menu")
+    builder.adjust(1)
+
+    await callback.message.answer(
+        f"✅ تراکنش آنلاین شما ایجاد شد.\n\n"
+        f"🛒 کد پیگیری: <code>{order.tracking_code}</code>\n"
+        f"💵 مبلغ قابل پرداخت: {format_money(final_price)} تومان\n\n"
+        f"لطفاً روی دکمه زیر کلیک کنید تا وارد درگاه پرداخت شاپرک شوید 👇",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
 
 # ============================================================================
 # 4. INSTANT PAYMENT FROM WALLET WITH GLOBAL LOCATION ROUTING  

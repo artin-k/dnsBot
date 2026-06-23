@@ -8,6 +8,9 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 class Settings(BaseSettings):
     controld_api_token: str = Field(default="", alias="CONTROLD_API_TOKEN")
     controld_profile_id: str = Field(default="", alias="CONTROLD_PROFILE_ID")
+    # Inside app/config.py -> class Settings()
+    paystar_gateway_id: str | None = None
+    paystar_sign_key: str | None = None
 
     bot_token: str = Field(default="", alias="BOT_TOKEN")
     database_url: str = Field(
