@@ -15,7 +15,7 @@ from sqlalchemy import func, select, delete, update # Added 'update'
 from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.models import (
     AffiliateBeneficiaryType,
     AffiliateCommission,
@@ -189,7 +189,7 @@ import httpx  # Ensure httpx is imported at the top
 # CONFIGURATION
 # ============================================================================
 # Match this with your buy.py base URL (No trailing slash)
-WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
+WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 
 # Inside bot/routers/admin.py (At the top, below imports/configurations)
 
@@ -3489,4 +3489,3 @@ def format_duration_fa(hours: int) -> str:
         days = hours // 24
         return f"{days} روز"
     return f"{hours} ساعت"
-

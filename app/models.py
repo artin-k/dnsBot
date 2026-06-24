@@ -265,6 +265,7 @@ class Payment(TimestampMixin, Base):
     )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    token: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     method: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
     status: Mapped[str] = mapped_column(
         String(32),

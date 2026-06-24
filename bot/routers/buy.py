@@ -19,8 +19,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings
-from app.models import Plan, VPNService, VPNServiceStatus, OrderKind, OrderStatus, DiceRoll, Payment
+from app.config import Settings, get_settings
+from app.models import Payment, PaymentStatus, Plan, VPNService, VPNServiceStatus, OrderKind, OrderStatus, DiceRoll
 from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.orders import OrdersRepository
 from app.repositories.plans import PlansRepository
@@ -35,6 +35,7 @@ from app.services.payment_service import (
     PaymentExpiredError,
     PaymentService,
 )
+from app.services.paystar import PaystarService
 from app.services.settings_service import AppSettingsService
 from app.services.username_validator import validate_username
 from app.services.vpn_panel import VPNPanelService
@@ -42,7 +43,7 @@ from app.services.controld import create_dns_device, ControlDService, get_catego
 from app.utils.formatting import format_money
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
-from bot.keyboards.buy import PlanCallback  # Native filter
+from bot.keyboards.buy import PlanCallback, paystar_payment_keyboard  # Native filter
 from bot.states.buy import BuyStates
 
 router = Router(name="buy")
@@ -51,7 +52,7 @@ logger = structlog.get_logger(__name__)
 # ============================================================================
 # CONFIGURATION & CATEGORIES DATA
 # ============================================================================
-WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
+WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 TEST_ACCOUNT_DURATION_HOURS = 2
 
 CATEGORY_MAP_FA = {
@@ -1386,6 +1387,94 @@ async def handle_pay_manual_card(
 {description_text}
 
 بعد از پرداخت، تصویر رسید را همینجا ارسال کنید تا ادمین‌ها حساب شما را شارژ و اشتراک را فعال کنند."""
+    )
+
+
+@router.callback_query(F.data.startswith("pay_online_paystar:"), StateFilter("*"))
+async def handle_pay_online_paystar(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    await callback.answer()
+    if callback.message is None or callback.from_user is None:
+        return
+
+    parts = callback.data.split(":")
+    plan_id = int(parts[1])
+    service_pk = parts[2]
+    pop_code = parts[3]
+
+    plan = await PlansRepository(session).get(plan_id)
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if plan is None or user is None:
+        await callback.message.answer("خطا در پردازش درخواست.")
+        return
+
+    profile_id = plan.controld_profile_id or settings.controld_profile_id
+    if not profile_id:
+        await callback.message.answer("❌ تنظیمات Control D برای این طرح کامل نیست.")
+        return
+
+    active_stmt = select(VPNService).where(
+        VPNService.user_id == user.id,
+        VPNService.status == "active",
+    )
+    active_result = await session.execute(active_stmt)
+    current_sub = active_result.scalars().first()
+
+    final_price = plan.price
+    if current_sub is not None:
+        final_price = plan.price - int(plan.price * 0.1)
+
+    custom_username = f"dns_user_{user.telegram_id}|{service_pk}|{pop_code}"
+    order_service = OrderService(session, settings)
+    order, payment = await order_service.create_order_with_payment(
+        user=user,
+        plan=plan,
+        custom_username=custom_username,
+        discount_code=None,
+        discount_percent=10 if current_sub is not None else 0,
+        discount_amount=int(plan.price * 0.1) if current_sub is not None else 0,
+        payment_method="paystar",
+        commit=False,
+    )
+
+    callback_url = f"{settings.public_web_base_url}/paystar/callback"
+    paystar = PaystarService()
+    token = await paystar.create_payment(
+        amount_toman=payment.amount,
+        order_id=order.tracking_code,
+        callback_url=callback_url,
+    )
+
+    if not token:
+        await session.rollback()
+        await callback.message.answer(
+            "❌ ساخت درگاه پی‌استار ناموفق بود. لطفاً دوباره تلاش کنید یا روش دیگری را انتخاب کنید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    payment.token = token
+    payment.method = "paystar"
+    payment.status = PaymentStatus.PENDING.value
+    await session.commit()
+    await state.clear()
+
+    redirect_url = f"{settings.public_web_base_url}/paystar/redirect?token={token}"
+    await callback.message.answer(
+        f"""💳 درگاه پرداخت پی‌استار آماده است
+
+مبلغ قابل پرداخت:
+{format_money(final_price)} تومان
+
+کد پیگیری سفارش:
+<code>{order.tracking_code}</code>
+
+برای تکمیل پرداخت روی دکمه زیر بزنید.""",
+        reply_markup=paystar_payment_keyboard(redirect_url),
     )
 
 

@@ -24,11 +24,21 @@ class PaystarService:
             hashlib.sha512
         ).hexdigest()
 
-    async def create_payment(self, amount_toman: int, order_id: str, callback_url: str) -> str | None:
+    async def create_payment(
+        self,
+        amount_toman: int,
+        order_id: str,
+        callback_url: str,
+        callback_method: int = 2,
+    ) -> str | None:
         """
         Creates a payment transaction on Paystar.
         Implements an automatic 3-attempt retry loop to bypass network latency spikes [cite: 1].
         """
+        if not self.gateway_id or not self.sign_key:
+            logger.error("Paystar gateway credentials are not configured")
+            return None
+
         amount_rial = amount_toman * 10  # Paystar expects Rials [cite: 3.3.1]
         
         sign_data = f"{amount_rial}#{order_id}#{callback_url}"
@@ -42,6 +52,7 @@ class PaystarService:
             "amount": amount_rial,
             "order_id": order_id,
             "callback": callback_url,
+            "callback_method": callback_method,
             "sign": signature
         }
 
@@ -78,6 +89,10 @@ class PaystarService:
         """
         Verifies a successful transaction directly with the Paystar API [cite: 5.4.1].
         """
+        if not self.gateway_id or not self.sign_key:
+            logger.error("Paystar gateway credentials are not configured")
+            return False
+
         amount_rial = amount_toman * 10
         
         sign_data = f"{amount_rial}#{ref_num}#{card_number}#{tracking_code}"

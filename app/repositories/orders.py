@@ -41,6 +41,20 @@ class OrdersRepository:
             .where(Order.tracking_code == tracking_code, Order.user_id == user_id)
         )
 
+    async def get_by_tracking_code_with_details(self, tracking_code: str) -> Order | None:
+        return await self.session.scalar(
+            select(Order)
+            .options(
+                joinedload(Order.user),
+                joinedload(Order.plan),
+                joinedload(Order.payment),
+                joinedload(Order.vpn_service),
+                joinedload(Order.renewal_service),
+                joinedload(Order.config_inventory_item),
+            )
+            .where(Order.tracking_code == tracking_code)
+        )
+
     async def list_by_user(self, user_id: int) -> list[Order]:
         result = await self.session.scalars(
             select(Order)

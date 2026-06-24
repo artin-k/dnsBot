@@ -1,3 +1,5 @@
+import secrets
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
@@ -27,6 +29,21 @@ class PaymentsRepository:
     async def get_by_order_id(self, order_id: int) -> Payment | None:
         return await self.session.scalar(select(Payment).where(Payment.order_id == order_id))
 
+    async def get_by_token(self, token: str) -> Payment | None:
+        return await self.session.scalar(select(Payment).where(Payment.token == token))
+
+    async def get_by_token_with_details(self, token: str) -> Payment | None:
+        return await self.session.scalar(
+            select(Payment)
+            .options(
+                joinedload(Payment.user),
+                joinedload(Payment.order).joinedload(Order.plan),
+                joinedload(Payment.order).joinedload(Order.renewal_service),
+                joinedload(Payment.order).joinedload(Order.config_inventory_item),
+            )
+            .where(Payment.token == token)
+        )
+
     async def list_pending_review(self) -> list[Payment]:
         result = await self.session.scalars(
             select(Payment)
@@ -40,6 +57,7 @@ class PaymentsRepository:
                 Payment.order_id.is_not(None),
                 Payment.status == PaymentStatus.PENDING.value,
                 Payment.receipt_file_id.is_not(None),
+                Payment.method != "paystar",
             )
             .order_by(Payment.created_at.asc())
         )
@@ -56,6 +74,7 @@ class PaymentsRepository:
                 Payment.user_id == user_id,
                 Payment.status == PaymentStatus.PENDING.value,
                 Payment.receipt_file_id.is_(None),
+                Payment.method != "paystar",
             )
             .order_by(Payment.created_at.desc())
         )
@@ -67,6 +86,7 @@ class PaymentsRepository:
         order_id: int | None,
         user_id: int,
         amount: int,
+        token: str | None = None,
         method: str = "manual",
         status: str = PaymentStatus.PENDING.value,
     ) -> Payment:
@@ -74,6 +94,7 @@ class PaymentsRepository:
             order_id=order_id,
             user_id=user_id,
             amount=amount,
+            token=token or secrets.token_urlsafe(24),
             method=method,
             status=status,
         )

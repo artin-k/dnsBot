@@ -83,6 +83,14 @@ def payment_keyboard(order_id: int, show_wallet: bool = True) -> InlineKeyboardM
     return builder.as_markup()
 
 
+def paystar_payment_keyboard(redirect_url: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💳 پرداخت آنلاین (پی‌استار)", url=redirect_url)
+    builder.button(text=texts.BTN_BACK, callback_data=BUY_BACK_TO_PLANS)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def insufficient_wallet_keyboard(order_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ شارژ کیف پول", callback_data="wallet:topup")

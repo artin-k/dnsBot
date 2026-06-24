@@ -8,9 +8,9 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 class Settings(BaseSettings):
     controld_api_token: str = Field(default="", alias="CONTROLD_API_TOKEN")
     controld_profile_id: str = Field(default="", alias="CONTROLD_PROFILE_ID")
-    # Inside app/config.py -> class Settings()
-    paystar_gateway_id: str | None = None
-    paystar_sign_key: str | None = None
+    paystar_gateway_id: str | None = Field(default=None, alias="PAYSTAR_GATEWAY_ID")
+    paystar_sign_key: str | None = Field(default=None, alias="PAYSTAR_SIGN_KEY")
+    public_web_base_url: str = Field(default="http://pingsep.ir", alias="PUBLIC_WEB_BASE_URL")
 
     bot_token: str = Field(default="", alias="BOT_TOKEN")
     database_url: str = Field(
@@ -82,6 +82,11 @@ class Settings(BaseSettings):
         if normalized not in {"memory", "redis"}:
             return "memory"
         return normalized
+
+    @field_validator("public_web_base_url", mode="after")
+    @classmethod
+    def normalize_public_web_base_url(cls, value: str) -> str:
+        return value.strip().rstrip("/")
 
     @field_validator("root_admin_telegram_id", mode="before")
     @classmethod
