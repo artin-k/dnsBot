@@ -14,3 +14,5 @@ aioresponses>=0.7,<1.0
 httpx
 jdatetime
 aiohttp
+# Add to requirements.txt
+python-multipart

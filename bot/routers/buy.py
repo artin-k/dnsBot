@@ -49,7 +49,7 @@ router = Router(name="buy")
 # ============================================================================
 # CONFIGURATION & CATEGORIES DATA
 # ============================================================================
-WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
+WEB_SERVER_BASE_URL = "http://pingsep.ir:8000"
 
 CATEGORY_MAP_FA = {
     "gaming": "🎮 بازی‌ها (Gaming)",
