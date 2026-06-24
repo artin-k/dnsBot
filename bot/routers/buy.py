@@ -50,7 +50,7 @@ router = Router(name="buy")
 # ============================================================================
 # CONFIGURATION & CATEGORIES DATA
 # ============================================================================
-WEB_SERVER_BASE_URL = "http://pingsep.ir"
+WEB_SERVER_BASE_URL = "http://pingsep.ir:8000"
 
 CATEGORY_MAP_FA = {
     "gaming": "🎮 بازی‌ها (Gaming)",
