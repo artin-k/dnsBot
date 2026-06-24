@@ -1,64 +1,143 @@
 # Open app/services/scheduler.py
 import asyncio
 from datetime import datetime, timezone
+
 import structlog
+from aiogram import Bot
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.database import async_session_maker
-from app.models import VPNService, VPNServiceStatus, Plan
 from app.config import get_settings
-# --- FIXED: Import the OOP client wrapper instead of standalone functions ---
 from app.services.controld import ControlDService
-# ----------------------------------------------------------------------------
+from app.models import Plan, VPNService, VPNServiceStatus
+from app.utils.formatting import format_datetime
 
 logger = structlog.get_logger(__name__)
 
 
-async def cleanup_expired_dns_services() -> None:
+async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
     """
-    Finds all expired DNS services, calls the Control D API to delete the device,
-    and updates their status to 'expired' inside the PostgreSQL database.
+    Marks expired DNS services as expired in the database and best-effort deletes
+    their Control D devices.
+
+    Control D already enforces the hard stop through `disable_ttl`, so this loop
+    acts as a durable reconciliation worker: it survives restarts, catches missed
+    expirations, and keeps the database in sync.
     """
     now = datetime.now(timezone.utc)
     settings = get_settings()
-    
-    # Instantiate the proxy-aware OOP client
     cd_service = ControlDService(settings)
-    
+
+    processed = 0
     async with async_session_maker() as session:
-        # 1. Query active DNS configurations that have crossed their expiration time
         stmt = (
             select(VPNService)
+            .options(joinedload(VPNService.user))
             .where(
                 VPNService.status == VPNServiceStatus.ACTIVE.value,
-                VPNService.expire_at < now
+                VPNService.expire_at <= now,
             )
+            .order_by(VPNService.expire_at.asc(), VPNService.id.asc())
         )
         result = await session.execute(stmt)
-        expired_services = result.scalars().all()
+        expired_services = list(result.scalars().unique().all())
 
         if not expired_services:
-            return
+            return 0
 
         logger.info("checking_expired_dns_services", count=len(expired_services))
 
         for service in expired_services:
-            # 2. If the subscription has an associated Control D Device ID, request deletion
+            if service.controld_device_id:
+                logger.info(
+                    "deleting_controld_device",
+                    service_id=service.id,
+                    device_id=service.controld_device_id,
+                )
+                try:
+                    success = await cd_service.delete_device(service.controld_device_id)
+                except Exception as exc:
+                    logger.error(
+                        "controld_device_delete_exception",
+                        service_id=service.id,
+                        device_id=service.controld_device_id,
+                        error=str(exc),
+                    )
+                    success = False
+
+                if not success:
+                    logger.warning("failed_to_delete_controld_device", service_id=service.id)
+                    continue
+
+                logger.info("controld_device_deleted_successfully", service_id=service.id)
+
+            try:
+                service.status = VPNServiceStatus.EXPIRED.value
+                await session.commit()
+                processed += 1
+            except Exception as exc:
+                await session.rollback()
+                logger.error("failed_to_mark_dns_service_expired", service_id=service.id, error=str(exc))
+                continue
+
+            if bot is not None and service.is_test_account and service.user is not None:
+                try:
+                    await bot.send_message(
+                        chat_id=service.user.telegram_id,
+                        text=(
+                            "â³ Ø§Ú©Ø§Ù†Øª ØªØ³Øª Ø´Ù…Ø§ Ù…Ù†Ù‚Ø¶ÛŒ Ø´Ø¯.\n\n"
+                            f"ðŸ—“ ØªØ§Ø±ÛŒØ® Ø§Ù†Ù‚Ø¶Ø§: {format_datetime(service.expire_at)}\n"
+                            "Ø¯Ø³ØªØ±Ø³ÛŒ DNS Ø´Ù…Ø§ ØºÛŒØ±ÙØ¹Ø§Ù„ Ø´Ø¯."
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning("failed_to_notify_expired_test_account", service_id=service.id, error=str(exc))
+
+        return processed
+
+        for service in expired_services:
+            service.status = VPNServiceStatus.EXPIRED.value
+            try:
+                await session.commit()
+                processed += 1
+            except Exception as exc:
+                await session.rollback()
+                logger.error("failed_to_mark_dns_service_expired", service_id=service.id, error=str(exc))
+                continue
+
             if service.controld_device_id:
                 logger.info("deleting_controld_device", service_id=service.id, device_id=service.controld_device_id)
-                
-                # --- FIXED: Use the OOP client method to delete the device ---
-                success = await cd_service.delete_device(service.controld_device_id)
-                # -------------------------------------------------------------
+                try:
+                    success = await cd_service.delete_device(service.controld_device_id)
+                except Exception as exc:
+                    logger.error(
+                        "controld_device_delete_exception",
+                        service_id=service.id,
+                        device_id=service.controld_device_id,
+                        error=str(exc),
+                    )
+                    success = False
+
                 if success:
                     logger.info("controld_device_deleted_successfully", service_id=service.id)
                 else:
                     logger.warning("failed_to_delete_controld_device", service_id=service.id)
-            
-            # 3. Mark the status as EXPIRED locally so we don't query it again
-            service.status = VPNServiceStatus.EXPIRED.value
-        
-        await session.commit()
+
+            if bot is not None and service.is_test_account and service.user is not None:
+                try:
+                    await bot.send_message(
+                        chat_id=service.user.telegram_id,
+                        text=(
+                            "⏳ اکانت تست شما منقضی شد.\n\n"
+                            f"🗓 تاریخ انقضا: {format_datetime(service.expire_at)}\n"
+                            "دسترسی DNS شما غیرفعال شد."
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning("failed_to_notify_expired_test_account", service_id=service.id, error=str(exc))
+
+    return processed
 
 
 async def sync_plans_with_controld(session) -> None:
@@ -114,14 +193,16 @@ async def sync_plans_with_controld(session) -> None:
     await session.commit()
 
 
-async def expiration_scheduler_loop(interval_seconds: int = 3600) -> None:
+async def expiration_scheduler_loop(bot: Bot | None = None, interval_seconds: int = 60) -> None:
     """
-    Background loop checking for expired subscription parameters once every hour.
+    Background loop checking for expired subscriptions on a short interval.
     """
     logger.info("starting_expiration_scheduler_loop", interval_seconds=interval_seconds)
     while True:
         try:
-            await cleanup_expired_dns_services()
+            processed = await cleanup_expired_dns_services(bot=bot)
+            if processed:
+                logger.info("expired_dns_services_processed", count=processed)
         except Exception as e:
             logger.error("expiration_scheduler_loop_error", error=str(e))
         

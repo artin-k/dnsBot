@@ -159,7 +159,7 @@ async def route_main_menu_text(
 # TOP-LEVEL MESSAGE HANDLER (Defined outside and below the routing function) [1]
 # ============================================================================
 
-@router.message(F.text == texts.BTN_TEST_ACCOUNT) 
+# @router.message(F.text == texts.BTN_TEST_ACCOUNT)
 async def direct_test_account_handler(
     message: Message,
     state: FSMContext,
@@ -246,7 +246,7 @@ async def main_menu_callback(
         await menu_actions.show_wallet(callback.message, session, state, settings, telegram_user=callback.from_user)
     elif action == MENU_TEST_CALLBACK:
         await state.clear()
-        await menu_actions.show_test_account(callback.message, session, settings, telegram_user=callback.from_user)
+        await handle_get_test_account(callback, state, session, settings, answer_callback=False)
     elif action == MENU_DICE_CALLBACK:
         await state.clear()
         await menu_actions.show_lucky_wheel(callback.message, session, settings, telegram_user=callback.from_user)

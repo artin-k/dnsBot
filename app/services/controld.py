@@ -375,7 +375,9 @@ async def delete_device(device_id: str) -> bool:
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.delete(url, headers=_get_headers()) as resp:
-                if resp.status in (200, 204):
+                if resp.status in (200, 204, 404):
+                    if resp.status == 404:
+                        logger.info("controld_device_already_absent", device_id=device_id)
                     return True
                 text = await resp.text()
                 logger.error(f"Failed to delete Control D device {device_id} (Status {resp.status}): {text}")
@@ -473,6 +475,21 @@ async def update_service_route(profile_id: str, service_name: str, pop_code: str
         except Exception as e:
             logger.error(f"Error updating service route for {service_name}: {str(e)}")
             return False
+
+
+async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
+    """
+    Updates the catch-all Default Rule for a profile.
+
+    Control D exposes Default Rule as a profile-level redirect target, but the
+    existing service routing endpoint still handles the redirect payload. We try
+    the reserved default service key first and keep the method isolated here so
+    routers do not need to know the Control D-specific implementation detail.
+    """
+    for service_name in ("default", "default_rule", "default-rule"):
+        if await update_service_route(profile_id=profile_id, service_name=service_name, pop_code=pop_code):
+            return True
+    return False
 
 
 async def fetch_controld_services(profile_id: str) -> list[dict] | None:

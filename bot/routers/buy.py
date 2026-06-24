@@ -4,8 +4,8 @@ from __future__ import annotations
 import os
 import re
 import secrets
-import token
 import httpx
+import structlog
 from datetime import datetime, timezone, timedelta
 from html import escape
 import jdatetime
@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.models import Plan, VPNService, OrderKind, OrderStatus, DiceRoll, Payment
+from app.models import Plan, VPNService, VPNServiceStatus, OrderKind, OrderStatus, DiceRoll, Payment
 from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.orders import OrdersRepository
 from app.repositories.plans import PlansRepository
@@ -46,12 +46,13 @@ from bot.keyboards.buy import PlanCallback  # Native filter
 from bot.states.buy import BuyStates
 
 router = Router(name="buy")
+logger = structlog.get_logger(__name__)
 
 # ============================================================================
 # CONFIGURATION & CATEGORIES DATA
 # ============================================================================
-# Inside bot/routers/buy.py
-WEB_SERVER_BASE_URL = "http://pingsep.ir"  # <-- Removed port 8000 [cite: 1]
+WEB_SERVER_BASE_URL = "http://82.115.24.241:8000"
+TEST_ACCOUNT_DURATION_HOURS = 2
 
 CATEGORY_MAP_FA = {
     "gaming": "🎮 بازی‌ها (Gaming)",
@@ -61,6 +62,65 @@ CATEGORY_MAP_FA = {
     "music": "🎵 موسیقی (Music)",
     "other": "🧩 سایر سرویس‌ها (Other)"
 }
+
+CATEGORIES = {
+    "games": {
+        "name": "🎮 بازی‌ها (Games)",
+        "services": [
+            {"pk": "callofduty", "name": "🎮 Call of Duty"},
+            {"pk": "apexlegends", "name": "🎮 Apex Legends"},
+            {"pk": "pubg", "name": "🎮 PUBG Mobile"},
+            {"pk": "fortnite", "name": "🎮 Fortnite"},
+            {"pk": "valorant", "name": "🎮 Valorant"},
+            {"pk": "leagueoflegends", "name": "🎮 League of Legends"},
+            {"pk": "roblox", "name": "🎮 Roblox"},
+            {"pk": "minecraft", "name": "🎮 Minecraft"},
+            {"pk": "steam", "name": "🎮 Steam / Epic Games"},
+            {"pk": "playstation", "name": "🎮 PlayStation Network"},
+            {"pk": "xbox", "name": "🎮 Xbox Live"}
+        ]
+    },
+    "streaming": {
+        "name": "🎬 رسانه و استریم (Streaming)",
+        "services": [
+            {"pk": "netflix", "name": "🎬 Netflix"},
+            {"pk": "youtube", "name": "📹 YouTube"},
+            {"pk": "disney", "name": "🏰 Disney+"},
+            {"pk": "twitch", "name": "🎮 Twitch / Kick"},
+            {"pk": "spotify", "name": "🎵 Spotify / Deezer"},
+            {"pk": "primevideo", "name": "🎬 Amazon Prime Video"},
+            {"pk": "hulu", "name": "🎬 Hulu"},
+            {"pk": "hbomax", "name": "🎬 HBO Max"}
+        ]
+    },
+    "tools": {
+        "name": "🤖 ابزارها و هوش مصنوعی (AI & Tech)",
+        "services": [
+            {"pk": "chatgpt", "name": "🤖 ChatGPT / OpenAI"},
+            {"pk": "claude", "name": "🤖 Claude / Anthropic"},
+            {"pk": "gemini", "name": "🤖 Google Gemini"},
+            {"pk": "discord", "name": "💬 Discord"},
+            {"pk": "telegram", "name": "💬 Telegram"},
+            {"pk": "twitter", "name": "💬 Twitter / X"}
+        ]
+    }
+}
+
+
+async def _safe_edit_or_reply(callback: CallbackQuery, text: str, reply_markup=None) -> None:
+    """
+    Safely edits the message if it was sent by the bot (inline button click),
+    or replies with a new message if it was sent by the user (reply keyboard click) [1].
+    """
+    bot = getattr(callback, "bot", None)
+    bot_id = getattr(bot, "id", None)
+    if callback.message and callback.message.from_user and bot_id is not None and callback.message.from_user.id == bot_id:
+        try:
+            await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+            return
+        except Exception:
+            pass
+    await callback.message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
@@ -103,9 +163,81 @@ def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
     return f"{total_minutes} دقیقه"
 
 
-# Inside bot/routers/buy.py (At the bottom)
+def format_datetime_fa(value: datetime | None) -> str:
+    """Formats datetimes for the Tehran timezone, preferring Jalali output."""
+    if value is None:
+        return "نامشخص"
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+
+    tehran_tz = ZoneInfo("Asia/Tehran")
+    localized = value.astimezone(tehran_tz)
+
+    try:
+        return jdatetime.datetime.fromgregorian(datetime=localized).strftime("%Y/%m/%d - %H:%M:%S")
+    except Exception:
+        return localized.strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def _get_active_test_service(session: AsyncSession, user_id: int, now: datetime) -> VPNService | None:
+    stmt = (
+        select(VPNService)
+        .where(
+            VPNService.user_id == user_id,
+            VPNService.is_test_account.is_(True),
+            VPNService.status == VPNServiceStatus.ACTIVE.value,
+            VPNService.expire_at > now,
+        )
+        .order_by(VPNService.expire_at.desc(), VPNService.id.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
+async def _get_latest_test_service(session: AsyncSession, user_id: int) -> VPNService | None:
+    stmt = (
+        select(VPNService)
+        .where(
+            VPNService.user_id == user_id,
+            VPNService.is_test_account.is_(True),
+        )
+        .order_by(VPNService.created_at.desc(), VPNService.id.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
+async def _apply_test_route(controld_service: ControlDService, profile_id: str, service_pk: str, pop_code: str) -> bool:
+    try:
+        if service_pk == "default":
+            return await controld_service.update_profile_default(profile_id, pop_code)
+        return await controld_service.update_service_route(profile_id, service_pk, pop_code)
+    except Exception as exc:
+        logger.exception(
+            "failed_to_apply_test_route",
+            profile_id=profile_id,
+            service_pk=service_pk,
+            pop_code=pop_code,
+            error=str(exc),
+        )
+        return False
+
+
+async def _best_effort_delete_device(controld_service: ControlDService, device_id: str | None) -> None:
+    if not device_id:
+        return
+
+    try:
+        await controld_service.delete_device(device_id)
+    except Exception as exc:
+        logger.warning("failed_to_cleanup_test_device", device_id=device_id, error=str(exc))
+
 
 async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
+    """Queries Control D on approval to fetch the exact legacy IPv4 addresses."""
     url = f"https://api.controld.com/devices/{device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
@@ -120,14 +252,14 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
-                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.22",
-                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "76.76.10.22"
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
+                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "94.183.166.208"
                 }
         except Exception:
             pass
     return {
-        "ipv4_primary": "76.76.2.22",
-        "ipv4_secondary": "76.76.10.22"
+        "ipv4_primary": "94.183.166.203",
+        "ipv4_secondary": "94.183.166.208"
     }
 
 
@@ -209,15 +341,77 @@ async def handle_get_test_account(
     state: FSMContext,
     session: AsyncSession,
     settings: Settings,
+    answer_callback: bool = True,
 ) -> None:
     if callback.message is None or callback.from_user is None:
         return
 
+    if answer_callback:
+        await callback.answer()
+
+    await state.clear()
+
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
     if user is None:
         await callback.message.answer("ابتدا /start را ارسال کنید.")
-        await callback.answer()
         return
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    active_test = await _get_active_test_service(session, user.id, now)
+    if active_test is not None:
+        await _safe_edit_or_reply(
+            callback,
+            "⚠️ شما قبلا یک اکانت تست فعال دارید.\n\n"
+            f"👤 نام دستگاه: <code>{escape(active_test.username)}</code>\n"
+            f"🗓 تاریخ ایجاد: {format_datetime_fa(active_test.created_at)}\n"
+            f"🗓 تاریخ انقضا: {format_datetime_fa(active_test.expire_at)}\n"
+            f"⏳ زمان باقی‌مانده: {calculate_remaining_time_fa(active_test.expire_at)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    existing_test = await _get_latest_test_service(session, user.id)
+    if existing_test is not None:
+        await _safe_edit_or_reply(
+            callback,
+            "❌ شما قبلا از اکانت تست استفاده کرده‌اید و امکان دریافت مجدد وجود ندارد.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    profile_id = settings.controld_profile_id
+    if not profile_id:
+        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
+        return
+
+    controld_service = ControlDService(settings)
+    services = await controld_service.fetch_controld_services(profile_id)
+
+    if not services:
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌های معتبر رخ داد.", reply_markup=main_menu_keyboard())
+        return
+
+    # Dynamic Category Selector Menu
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
+
+    # Generate dynamic categories
+    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
+
+    for key in unique_categories:
+        label = get_category_label_fa(key)
+        builder.button(text=label, callback_data=f"test_cat:{key}:0")
+    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
+    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
+    builder.adjust(1)
+
+    await _safe_edit_or_reply(
+        callback,
+        "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
+        "🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
+        reply_markup=builder.as_markup(),
+    )
+    return
 
     stmt = select(VPNService).where(
         VPNService.user_id == user.id,
@@ -236,19 +430,33 @@ async def handle_get_test_account(
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
     
-    for key, label in CATEGORY_MAP_FA.items():
-        if key == "other":
-            continue
+    # Generate dynamic categories
+    profile_id = settings.controld_profile_id
+    if not profile_id:
+        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
+        return
+
+    controld_service = ControlDService(settings)
+    services = await controld_service.fetch_controld_services(profile_id)
+    
+    if not services:
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+        return
+
+    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
+
+    for key in unique_categories:
+        label = get_category_label_fa(key)
         builder.button(text=label, callback_data=f"test_cat:{key}:0")
     builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
-    await callback.message.edit_text(
+    await _safe_edit_or_reply(
+        callback,
         "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
         "🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+        reply_markup=builder.as_markup()
     )
 
 
@@ -258,11 +466,186 @@ async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     parts = callback.data.split(":")
     category_key = parts[1]
     page = int(parts[2])
+
+    controld = ControlDService(settings)
+    services = await controld.fetch_controld_services(settings.controld_profile_id)
+    if not services:
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
+        return
+
+    filtered = [s for s in services if s["category"] == category_key]
+    filtered.sort(key=lambda x: (x["name"] or "").lower())
+
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_items = filtered[start_idx:end_idx]
+    has_next = len(filtered) > end_idx
+
+    builder = InlineKeyboardBuilder()
+    for s in page_items:
+        builder.button(
+            text=s["name"] or s["pk"],
+            callback_data=f"test_select_srv:{s['pk']}",
+        )
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_cat:{category_key}:{page - 1}"))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"test_cat:{category_key}:{page + 1}"))
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data="get_test_account"))
+    builder.adjust(2)
+
+    category_label = get_category_label_fa(category_key)
+    await _safe_edit_or_reply(
+        callback,
+        f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
+        f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
+        reply_markup=builder.as_markup(),
+    )
+    return
+
+    await state.clear()
+
+    await state.clear()
+
+    parts = callback.data.split(":")
+    service_pk = parts[1]
+    pop_code = parts[2]
+
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if user is None:
+        return
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    active_test = await _get_active_test_service(session, user.id, now)
+    if active_test is not None:
+        await _safe_edit_or_reply(
+            callback,
+            "⚠️ شما قبلا یک اکانت تست فعال دارید.\n\n"
+            f"👤 نام دستگاه: <code>{escape(active_test.username)}</code>\n"
+            f"🗓 تاریخ ایجاد: {format_datetime_fa(active_test.created_at)}\n"
+            f"🗓 تاریخ انقضا: {format_datetime_fa(active_test.expire_at)}\n"
+            f"⏳ زمان باقی‌مانده: {calculate_remaining_time_fa(active_test.expire_at)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    existing_test = await _get_latest_test_service(session, user.id)
+    if existing_test is not None:
+        await _safe_edit_or_reply(
+            callback,
+            "❌ شما قبلا از اکانت تست استفاده کرده‌اید و امکان دریافت مجدد وجود ندارد.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    await _safe_edit_or_reply(callback, "⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...")
+
+    profile_id = settings.controld_profile_id
+    if not profile_id:
+        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
+        return
+
+    random_hex = secrets.token_hex(4)
+    unique_device_name = f"tg_test_{user.telegram_id}_{random_hex}"
+
+    controld_service = ControlDService(settings)
+
+    try:
+        device_data = await controld_service.create_dns_device(
+            tg_user_id=user.telegram_id,
+            profile_id=profile_id,
+            duration_hours=TEST_ACCOUNT_DURATION_HOURS,
+            device_name=unique_device_name,
+        )
+    except Exception as exc:
+        logger.exception("failed_to_create_test_device", user_id=user.id, error=str(exc))
+        device_data = None
+
+    if device_data is None:
+        await _safe_edit_or_reply(
+            callback,
+            "❌ خطا در برقراری ارتباط با سرورهای Control D.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    device_id = device_data["device_id"]
+    if not await _apply_test_route(controld_service, profile_id, service_pk, pop_code):
+        await _best_effort_delete_device(controld_service, device_id)
+        await _safe_edit_or_reply(
+            callback,
+            "❌ خطا در اعمال مسیر سرویس Control D. لطفا دوباره تلاش کنید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    expire_at = now + timedelta(hours=TEST_ACCOUNT_DURATION_HOURS)
+
+    new_test_sub = VPNService(
+        user_id=user.id,
+        plan_id=None,
+        controld_device_id=device_id,
+        config_link=device_data["doh"],
+        subscription_link=device_data["dot"],
+        username=unique_device_name,
+        created_at=now,
+        expire_at=expire_at,
+        status=VPNServiceStatus.ACTIVE.value,
+        is_test_account=True,
+    )
+
+    try:
+        session.add(new_test_sub)
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        logger.exception("failed_to_store_test_account", user_id=user.id, error=str(exc))
+        await _best_effort_delete_device(controld_service, device_id)
+        await _safe_edit_or_reply(
+            callback,
+            "❌ ذخیره‌سازی اکانت تست با خطا مواجه شد. لطفا دوباره تلاش کنید.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    duration_text = "۲ ساعت"
+    expire_str = format_datetime_fa(expire_at)
+
+    success_text = f"""🔹 تاریخ انقضا پلن : {expire_str}
+🔷 زمان باقی‌مانده: {duration_text}
+دی ان اس اختصاصی شما :
+
+🔹 Primary : <code>{device_data['ipv4_primary']}</code>
+🔹 Secondary : <code>{device_data['ipv4_secondary']}</code>
+
+
+مراحل ثبت آی‌پی :
+1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
+2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفا وضعیت اتصال اینترنت خود را شخصا بررسی کنید."""
+
+    await callback.message.answer(
+        success_text,
+        reply_markup=_get_ip_registration_keyboard(device_id),
+        parse_mode="HTML",
+    )
+    return
+    category_key = parts[1]
+    page = int(parts[2])
     
     controld = ControlDService(settings)
     services = await controld.fetch_controld_services(settings.controld_profile_id)
     if not services:
-        await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
         
     filtered = [s for s in services if s["category"] == category_key]
@@ -292,13 +675,12 @@ async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
     builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data="get_test_account"))
     builder.adjust(2)
     
-    from app.services.controld import get_category_label_fa
     category_label = get_category_label_fa(category_key)
-    await callback.message.edit_text(
+    await _safe_edit_or_reply(
+        callback,
         f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+        reply_markup=builder.as_markup()
     )
 
 
@@ -320,7 +702,7 @@ async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: in
     proxies = await controld_service.fetch_controld_proxies()
     
     if not proxies:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
     # Sort countries alphabetically
@@ -354,11 +736,11 @@ async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: in
 
     builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="get_test_account"))
 
-    await callback.message.edit_text(
+    await _safe_edit_or_reply(
+        callback,
         f"🗺 <b>انتخاب لوکیشن سرور تست</b> | صفحه {page + 1}\n\n"
         f"لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+        reply_markup=builder.as_markup()
     )
 
 
@@ -390,7 +772,7 @@ async def handle_apply_test_loc(
     if user is None:
         return
 
-    await callback.message.edit_text("⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...")
+    await _safe_edit_or_reply(callback, "⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...")
 
     profile_id = settings.controld_profile_id
     if not profile_id:
@@ -499,7 +881,7 @@ async def handle_buy_plan_select(
     services = await controld_service.fetch_controld_services(profile_id)
     
     if not services:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
     # Extract all unique categories dynamically
@@ -517,11 +899,11 @@ async def handle_buy_plan_select(
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
-    await callback.message.edit_text(
+    await _safe_edit_or_reply(
+        callback,
         f"⚡ پلن انتخاب شده: <b>{escape(plan.title)}</b>\n\n"
         f"🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+        reply_markup=builder.as_markup()
     )
 
 
@@ -537,7 +919,7 @@ async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, setting
     controld = ControlDService(settings)
     services = await controld.fetch_controld_services(profile_id)
     if not services:
-        await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
         
     # Filter services based on the dynamically selected category key
@@ -570,11 +952,11 @@ async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, setting
     
     from app.services.controld import get_category_label_fa
     category_label = get_category_label_fa(category_key)
-    await callback.message.edit_text(
+    await _safe_edit_or_reply(
+        callback,
         f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+        reply_markup=builder.as_markup()
     )
 
 
@@ -644,11 +1026,11 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
     # 3. Append Back Button cleanly at the bottom
     builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id).pack()))
 
-    await callback.message.edit_text(
+    await _safe_edit_or_reply(
+        callback,
         f"🗺 <b>انتخاب لوکیشن سرور</b> | صفحه {page + 1}\n\n"
         f"لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+        reply_markup=builder.as_markup()
     )
 
 
@@ -744,7 +1126,6 @@ async def handle_buy_plan_loc(
 
 آیا مایل هستید این طرح را خریداری کنید؟"""
 
-    # Inside bot/routers/buy.py -> handle_buy_plan_loc()
     builder = InlineKeyboardBuilder()
     builder.button(text="💳 پرداخت آنلاین (پی استار)", callback_data=f"pay_online_paystar:{plan.id}:{service_pk}:{pop_code}")
     builder.button(text="🏦 پرداخت از کیف پول (آنی)", callback_data=f"pay_instant_wallet:{plan.id}:{service_pk}:{pop_code}")
@@ -752,89 +1133,8 @@ async def handle_buy_plan_loc(
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
-    await callback.message.edit_text(invoice_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    await _safe_edit_or_reply(callback, invoice_text, reply_markup=builder.as_markup())
 
-# Append this handler inside bot/routers/buy.py
-
-@router.callback_query(F.data.startswith("pay_online_paystar:"), StateFilter("*"))
-async def handle_pay_online_paystar(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    settings: Settings,
-) -> None:
-    await callback.answer()
-    if callback.message is None or callback.from_user is None:
-        return
-
-    parts = callback.data.split(":")
-    plan_id = int(parts[1])
-    service_pk = parts[2]
-    pop_code = parts[3]
-
-    plan = await PlansRepository(session).get(plan_id)
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-
-    if plan is None or user is None:
-        await callback.message.answer("❌ خطا در پردازش درخواست.")
-        return
-
-    # Check renewal
-    active_stmt = select(VPNService).where(
-        VPNService.user_id == user.id,
-        VPNService.status == "active"
-    )
-    active_result = await session.execute(active_stmt)
-    current_sub = active_result.scalars().first()
-
-    final_price = plan.price
-    if current_sub is not None:
-        final_price = plan.price - int(plan.price * 0.1)
-
-    # Generate a unique Order tracking code
-    custom_username = f"dns_user_{user.telegram_id}|{service_pk}|{pop_code}"
-    order_service = OrderService(session, settings)
-    order, _payment = await order_service.create_order_with_payment(
-        user=user,
-        plan=plan,
-        custom_username=custom_username,
-        discount_code=None,
-        discount_percent=10 if current_sub is not None else 0,
-        discount_amount=int(plan.price * 0.1) if current_sub is not None else 0,
-    )
-
-    # Define the dynamic callback URL pointing to your running FastAPI server
-    callback_url = f"{WEB_SERVER_BASE_URL}/paystar/callback"
-
-    # Initialize Paystar Service and request payment token [cite: 3.3.1]
-    from app.services.paystar import PaystarService
-    paystar = PaystarService()
-    token = await paystar.create_payment(
-        amount_toman=final_price,
-        order_id=order.tracking_code,
-        callback_url=callback_url
-    )
-
-    if not token:
-        await callback.message.answer("❌ خطا در اتصال به درگاه پرداخت آنلاین. لطفاً از روش کارت به کارت استفاده کنید.")
-        return
-
-# Inside bot/routers/buy.py -> handle_pay_online_paystar()
-# Route through your own server to supply the correct HTTP Referer header[[2](https://www.google.com/url?sa=E&q=https%3A%2F%2Fvertexaisearch.cloud.google.com%2Fgrounding-api-redirect%2FAUZIYQFyzX1s7-vfKLVS8SxhAXJDRcQyHU70LYIJFeA6pfQFO_DIg5t4VGc7Kdq_98-vW9GHa6GYy-wkVNOfnO3RkxrCBapeNNuWLvtzByuAhm4QD1Mctc67WjOoKB9ws2V6fju5J6qCz5ZPix_AnYajWIOiY3O-Lce0OpD0SKg85duuCbcBQMKsI-ZxkdRYDp4y_lvDule3g613Jx1ODoEmj0CMeHSIH7rifNCCi14HpfSqfuzgas83tBiwqC76DYGlKxRuhztqhd5eRqbg1afey73GkViJdkGREc07IPcp14TIDPIT5mVZk267AKw2OlX0neAs1eZ-NztPVxE73VLV9zG_T0Mu4f2O80ImkiTK2gKKTIfB)]
-    checkout_url = f"{WEB_SERVER_BASE_URL}/paystar/redirect?token={token}"
-    
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🔗 ورود به درگاه پرداخت بانکی", url=checkout_url)
-    builder.button(text="🏠 منوی اصلی", callback_data="buy_back_to_menu")
-    builder.adjust(1)
-
-    await callback.message.answer(
-        f"✅ تراکنش آنلاین شما ایجاد شد.\n\n"
-        f"🛒 کد پیگیری: <code>{order.tracking_code}</code>\n"
-        f"💵 مبلغ قابل پرداخت: {format_money(final_price)} تومان\n\n"
-        f"لطفاً روی دکمه زیر کلیک کنید تا وارد درگاه پرداخت شاپرک شوید 👇",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
 
 # ============================================================================
 # 4. INSTANT PAYMENT FROM WALLET WITH GLOBAL LOCATION ROUTING  

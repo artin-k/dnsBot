@@ -56,7 +56,7 @@ async def main() -> None:
 
     try:
         # Start background loop
-        scheduler_task = asyncio.create_task(expiration_scheduler_loop(interval_seconds=3600))
+        scheduler_task = asyncio.create_task(expiration_scheduler_loop(bot=bot, interval_seconds=60))
         
         # --- 2. Polling loop ---
         retry_count = 5
