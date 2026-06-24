@@ -117,6 +117,39 @@ async def update_device_ip(request: Request, device_id: str):
             return f"<h3>خطا در برقراری ارتباط با سرور: {str(e)}</h3>"
 
 
+# Add this endpoint inside ip_server.py
+
+@app.get("/paystar/redirect", response_class=HTMLResponse)
+async def paystar_redirect(token: str):
+    """
+    Acts as a secure referrer proxy [cite: 3.2.1].
+    Automatically submits a POST form to Paystar with the token [cite: 3.2.1, 5.1.2].
+    This guarantees that the HTTP Referer header matches your registered domain/IP!
+    """
+    html_content = f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>در حال انتقال به درگاه بانکی...</title>
+        <script>
+            window.onload = function() {{
+                document.getElementById('paystar_form').submit();
+            }};
+        </script>
+    </head>
+    <body>
+        <div style="text-align: center; margin-top: 100px; font-family: Tahoma, sans-serif;">
+            <h3>در حال انتقال به درگاه پرداخت بانکی شاپرک...</h3>
+            <p>لطفاً شکیبا باشید.</p>
+            <form id="paystar_form" action="https://core.paystar.ir/api/pardakht/payment" method="POST">
+                <input type="hidden" name="token" value="{token}" />
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
 # ============================================================================
 # ONLINE PAYMENT CALLBACK CONTROLLER
 # ============================================================================

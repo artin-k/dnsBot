@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import token
 import httpx
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -815,8 +816,9 @@ async def handle_pay_online_paystar(
         await callback.message.answer("❌ خطا در اتصال به درگاه پرداخت آنلاین. لطفاً از روش کارت به کارت استفاده کنید.")
         return
 
-    # Send the secure redirection link to the user [cite: 5.1.2]
-    checkout_url = f"https://core.paystar.ir/api/pardakht/payment?token={token}"
+# Inside bot/routers/buy.py -> handle_pay_online_paystar()
+# Route through your own server to supply the correct HTTP Referer header[[2](https://www.google.com/url?sa=E&q=https%3A%2F%2Fvertexaisearch.cloud.google.com%2Fgrounding-api-redirect%2FAUZIYQFyzX1s7-vfKLVS8SxhAXJDRcQyHU70LYIJFeA6pfQFO_DIg5t4VGc7Kdq_98-vW9GHa6GYy-wkVNOfnO3RkxrCBapeNNuWLvtzByuAhm4QD1Mctc67WjOoKB9ws2V6fju5J6qCz5ZPix_AnYajWIOiY3O-Lce0OpD0SKg85duuCbcBQMKsI-ZxkdRYDp4y_lvDule3g613Jx1ODoEmj0CMeHSIH7rifNCCi14HpfSqfuzgas83tBiwqC76DYGlKxRuhztqhd5eRqbg1afey73GkViJdkGREc07IPcp14TIDPIT5mVZk267AKw2OlX0neAs1eZ-NztPVxE73VLV9zG_T0Mu4f2O80ImkiTK2gKKTIfB)]
+    checkout_url = f"{WEB_SERVER_BASE_URL}/paystar/redirect?token={token}"
     
     builder = InlineKeyboardBuilder()
     builder.button(text="🔗 ورود به درگاه پرداخت بانکی", url=checkout_url)
