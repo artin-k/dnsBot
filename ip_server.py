@@ -28,7 +28,7 @@ bot = create_bot(settings)
 # CONFIGURATION (No trailing slash)
 # ============================================================================
 # --- FIXED: Defined the VPS base URL for IP registration buttons ---
-WEB_SERVER_BASE_URL = "http://pingsep.ir:8000"
+WEB_SERVER_BASE_URL = "http://pingsep.ir"
 
 
 def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
