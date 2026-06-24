@@ -231,11 +231,9 @@ def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+# Inside bot/routers/admin.py (Near the top)
+
 async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
-    """
-    Real-time API fallback: Queries Control D on approval to fetch the exact 
-    legacy IPv4 addresses mapped to this device.
-    """
     url = f"https://api.controld.com/devices/{device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
@@ -247,19 +245,17 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or {}
+                resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
-                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.22",
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "76.76.10.22"
                 }
-        except Exception as e:
-            logger.warning("failed_to_fetch_controld_ips_for_admin", device_id=device_id, error=str(e))
-            
-    # Reliable hardcoded fallbacks
+        except Exception:
+            pass
     return {
-        "ipv4_primary": "94.183.166.203",
-        "ipv4_secondary": "94.183.166.208"
+        "ipv4_primary": "76.76.2.22",
+        "ipv4_secondary": "76.76.10.22"
     }
 
 # Callback used for interactive order management

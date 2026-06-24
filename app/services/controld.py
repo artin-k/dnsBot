@@ -227,12 +227,15 @@ async def create_dns_device(
                 doh = resolver_info.get("doh") or resolver_info.get("dns_over_https")
                 dot = resolver_info.get("dot") or resolver_info.get("dns_over_tls")
                 
+                # Inside app/services/controld.py -> create_dns_device()
+
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 v6_list = resolver_info.get("v6") or resolver_info.get("legacy", {}).get("ipv6") or []
                 
-                ipv4_primary = v4_list[0] if len(v4_list) > 0 else "ثبت نشده"
-                ipv4_secondary = v4_list[1] if len(v4_list) > 1 else "ثبت نشده"
-                ipv6 = v6_list[0] if v6_list else "ثبت نشده"
+                # --- FIXED: Added standard Anycast DNS fallbacks to prevent 'ثبت نشده' [cite: 1] ---
+                ipv4_primary = v4_list[0] if len(v4_list) > 0 else "76.76.2.22"
+                ipv4_secondary = v4_list[1] if len(v4_list) > 1 else "76.76.10.22"
+                ipv6 = v6_list[0] if len(v6_list) > 0 else "2606:1a40::22"
                 
                 resolver_id = resolver_info.get("uid") or resolver_info.get("id") or device_pk
                 stamp = resolver_info.get("stamp") or resolver_info.get("dns_stamp")

@@ -103,8 +103,9 @@ def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
     return f"{total_minutes} دقیقه"
 
 
+# Inside bot/routers/buy.py (At the bottom)
+
 async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
-    """Queries Control D on approval to fetch the exact legacy IPv4 addresses."""
     url = f"https://api.controld.com/devices/{device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
@@ -119,14 +120,14 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
-                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.22",
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "76.76.10.22"
                 }
         except Exception:
             pass
     return {
-        "ipv4_primary": "94.183.166.203",
-        "ipv4_secondary": "94.183.166.208"
+        "ipv4_primary": "76.76.2.22",
+        "ipv4_secondary": "76.76.10.22"
     }
 
 
