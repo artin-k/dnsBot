@@ -50,9 +50,8 @@ router = Router(name="buy")
 # ============================================================================
 # CONFIGURATION & CATEGORIES DATA
 # ============================================================================
-# In buy.py and ip_server.py
-# Using the raw VPS IP on port 80 (Nginx handles the forwarding) [cite: 1]
-WEB_SERVER_BASE_URL = "http://82.115.24.241"
+# Inside bot/routers/buy.py
+WEB_SERVER_BASE_URL = "http://pingsep.ir"  # <-- Removed port 8000 [cite: 1]
 
 CATEGORY_MAP_FA = {
     "gaming": "🎮 بازی‌ها (Gaming)",
