@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from html import escape
+from zoneinfo import ZoneInfo
 
+from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, User as TelegramUser
+from sqlalchemy.ext import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -67,9 +70,6 @@ async def show_features_menu(message: Message) -> None:
     )
 
 
-# Open bot/menu_actions.py
-# Find and update your show_account_dashboard function:
-
 async def show_account_dashboard(
     message: Message,
     session: AsyncSession,
@@ -85,7 +85,6 @@ async def show_account_dashboard(
     active_services_count = len(await ServicesRepository(session).list_active_by_user(user.id))
     recent_orders_count = await OrdersRepository(session).count_by_user(user.id)
 
-    # --- FIXED: Use the database verification status instead of hardcoded 'True' ---
     await message.answer(
         f"""👤 حساب کاربری شما
 
@@ -98,16 +97,12 @@ async def show_account_dashboard(
     )
 
 
-# In bot/menu_actions.py
-
 async def show_buy_plans(message: Message, session: AsyncSession) -> None:
-    # 1. Fetch active DNS plans
     plans = await PlansRepository(session).list_active()
     if not plans:
         await message.answer("در حال حاضر پلن فعالی برای خرید وجود ندارد.", reply_markup=main_menu_keyboard())
         return
 
-    # 2. Bypass inventory checks since DNS has unlimited stock
     counts = {plan.id: 9999 for plan in plans}
     text = texts.BUY_PLANS_TEXT
     
@@ -123,6 +118,7 @@ async def show_renewal_disabled(message: Message, session: AsyncSession | None =
         "♻️ تمدید مستقیم اشتراک در حال حاضر فعال نیست.\n\nبرای ادامه استفاده، لطفاً از بخش «خرید اشتراک» یک سرویس جدید تهیه کنید.",
         reply_markup=buy_renew_menu_keyboard(),
     )
+
 
 async def show_my_services(
     message: Message,
@@ -147,6 +143,18 @@ async def show_my_services(
     await message.answer("\n".join(lines), reply_markup=services_actions_keyboard(services))
 
 
+# Helper to convert duration_hours to Persian text
+def format_duration_fa(hours: int) -> str:
+    """
+    Dynamically formats hours into readable Persian text.
+    Shows days if divisible by 24, otherwise displays hours.
+    """
+    if hours >= 24 and hours % 24 == 0:
+        days = hours // 24
+        return f"{days} روز"
+    return f"{hours} ساعت"
+
+
 async def show_tariffs(message: Message, session: AsyncSession) -> None:
     plans = await PlansRepository(session).list_active()
     if not plans:
@@ -155,10 +163,12 @@ async def show_tariffs(message: Message, session: AsyncSession) -> None:
 
     lines = ["💰 تعرفه اشتراک‌های DNS"]
     for index, plan in enumerate(plans, start=1):
+        # Fix: Convert plan.duration_hours to a readable Persian duration
+        duration_text = format_duration_fa(plan.duration_hours or 0)
         lines.append(
             f"""
 {index}. {escape(plan.title)}
-🗓 مدت اعتبار: {plan.duration_days} روز
+🗓 مدت اعتبار: {duration_text}
 💵 قیمت: {format_money(plan.price)} تومان"""
         )
         if plan.description:

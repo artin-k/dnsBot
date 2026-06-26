@@ -1,4 +1,4 @@
-# Open bot/routers/tariffs.py
+# bot/routers/tariffs.py
 from html import escape
 
 from aiogram import F, Router
@@ -6,10 +6,22 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.plans import PlansRepository
-from app.utils.money import format_toman
+# Fix: Import the standard format_money utility used across the project
+from app.utils.formatting import format_money
 from bot import texts
 
 router = Router(name="tariffs")
+
+
+def format_duration_fa(hours: int) -> str:
+    """
+    Dynamically formats hours into readable Persian text.
+    Shows days if divisible by 24, otherwise displays hours.
+    """
+    if hours >= 24 and hours % 24 == 0:
+        days = hours // 24
+        return f"{days} روز"
+    return f"{hours} ساعت"
 
 
 @router.message(F.text == texts.BTN_TARIFFS)
@@ -24,11 +36,15 @@ async def tariffs(message: Message, session: AsyncSession) -> None:
     for index, plan in enumerate(plans, start=1):
         # 2. Rebranded to support dynamic, unlimited DNS provisioning (Always Available)
         stock_status = "✅ وضعیت: فعال و آماده تحویل"
+        
+        # Safely convert duration_hours to a readable string (e.g. 720 hours -> 30 روز)
+        duration_text = format_duration_fa(plan.duration_hours or 0)
+        
         lines.append(
             f"""
 {index}. {escape(plan.title)}
-🗓 مدت اعتبار: {plan.duration_days} روز
-💵 قیمت: {format_toman(plan.price)} تومان
+🗓 مدت اعتبار: {duration_text}
+💵 قیمت: {format_money(plan.price)} تومان
 {stock_status}"""
         )
         if plan.description:
