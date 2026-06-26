@@ -1,3 +1,4 @@
+# app/repositories/plans.py
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +28,7 @@ class PlansRepository:
         self,
         *,
         title: str,
-        duration_days: int,
+        duration_hours: int,  # Fixed: Changed from duration_days to duration_hours
         volume_gb: int,
         price: int,
         description: str | None = None,
@@ -36,7 +37,7 @@ class PlansRepository:
     ) -> Plan:
         plan = Plan(
             title=title,
-            duration_days=duration_days,
+            duration_hours=duration_hours,  # Fixed: Mapped to duration_hours on the SQLAlchemy model
             volume_gb=volume_gb,
             price=price,
             description=description,
