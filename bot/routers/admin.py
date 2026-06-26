@@ -274,7 +274,7 @@ EDIT_FIELD_MAP = {
     "edit_duration": ("duration_hours", "مدت جدید را به ساعت ارسال کنید (مثال: 720 برای ۳۰ روز):", "positive_int"),
     # ----------------------------------------------------------------------------
     "edit_price": ("price", "قیمت جدید را به تومان ارسال کنید:", "positive_int"),
-    "edit_sort": ("sort_order", "ترتیب نمایش جدید را ارسال کنید. مقدار 0 مجاز است:", "int"),
+    "edit_sort": ("sort_order", "ترتیب نمایش جدید را ارسال کنید. مقدار 0 هم مجاز است:", "int"),
 }
 
 @router.callback_query(AdminOrderCallback.filter())
@@ -1496,6 +1496,23 @@ async def admin_user_action(
     if callback_data.action == "detail":
         await _show_user_detail(callback, session, user)
         return
+    if callback_data.action == "reset_test":
+        from app.models import TestAccountClaim, VPNService
+        from sqlalchemy import delete
+        
+        # Delete claims so user can fetch a test account again
+        await session.execute(delete(TestAccountClaim).where(TestAccountClaim.user_id == user.id))
+        # Delete the actual active trial/test account VPNService
+        await session.execute(
+            delete(VPNService).where(
+                VPNService.user_id == user.id,
+                VPNService.is_test_account == True
+            )
+        )
+        await session.commit()
+        await callback.message.answer(f"✅ وضعیت اکانت تست برای {user.first_name or user.telegram_id} ریست شد.")
+        await _show_user_detail(callback, session, user)
+        return
     if callback_data.action in {"add_wallet", "sub_wallet"}:
         await state.set_state(AdminWalletAdjustStates.amount)
         await state.update_data(user_id=user.id, direction="add" if callback_data.action == "add_wallet" else "sub")
@@ -1534,7 +1551,7 @@ async def admin_service_action(
     await callback.answer()
 
     if callback_data.action == "search":
-        await state.set_state(AdminSearchStates.service_query)
+        await state.set_state(AdminServiceEditStates.service_query)
         if callback.message:
             await callback.message.answer("نام کاربری سرویس یا آیدی عددی کاربر را ارسال کنید.")
         return
@@ -2430,8 +2447,7 @@ async def _show_affiliate_tree(
             f"{branch} 👤 {format_user_display(user)} | خرید موفق: {orders_count} | فروش: {format_money(revenue)} تومان | زیرمجموعه مستقیم: {children_count}"
         )
     await _safe_edit_or_answer(
-        callback,
-        "\n".join(lines),
+        callback.join(lines),
         reply_markup=affiliate_tree_keyboard(
             parent_id=parent.id,
             page=max(page, 0),
@@ -2817,7 +2833,17 @@ async def _show_user_detail(callback: CallbackQuery, session: AsyncSession, user
 🗓 تاریخ عضویت: {format_datetime(user.created_at)}
 🧾 تعداد سفارش‌ها: {orders_count}
 🛍 تعداد سرویس‌ها: {services_count}"""
-    await _safe_edit_or_answer(callback, text, reply_markup=user_detail_keyboard(user, viewer_id=viewer_id))
+    
+    markup = user_detail_keyboard(user, viewer_id=viewer_id)
+    from aiogram.types import InlineKeyboardButton
+    reset_button = InlineKeyboardButton(
+        text="🔄 ریست وضعیت تست",
+        callback_data=AdminUserCallback(action="reset_test", user_id=user.id).pack()
+    )
+    if hasattr(markup, "inline_keyboard"):
+        markup.inline_keyboard.append([reset_button])
+        
+    await _safe_edit_or_answer(callback, text, reply_markup=markup)
 
 
 async def _show_user_orders(callback: CallbackQuery, session: AsyncSession, user: User, reply_markup=None) -> None:
