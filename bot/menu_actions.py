@@ -419,20 +419,15 @@ async def show_lucky_wheel(
         reply_markup=main_menu_keyboard(),
     )
 
-
 async def show_coming_soon(message: Message) -> None:
     await message.answer(texts.COMING_SOON_TEXT, reply_markup=main_menu_keyboard())
-
 
 def format_service_summary(service: VPNService, index: int | None = None) -> str:
     prefix = f"\n{index}. " if index is not None else ""
     return f"""{prefix}{escape(service.username)}
 ⚡ پلن: {escape(service.plan.title if service.plan else "-")}
 🗓 تاریخ انقضا: {format_datetime(service.expire_at)}
-📌 وضعیت: {format_service_status_fa(service.status)}
-🌐 دی‌ان‌اس DoH: `{escape(service.config_link or "-")}`
-🔒 دی‌ان‌اس DoT: `{escape(service.subscription_link or "-")}`"""
-
+📌 وضعیت: {format_service_status_fa(service.status)}"""
 
 def format_order_summary(order: Order, index: int | None = None) -> str:
     prefix = f"\n{index}. " if index is not None else "\n"

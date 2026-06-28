@@ -3333,9 +3333,12 @@ def _approved_message(
         
     target_expire = expire_at or result.new_expire_at
     try:
+        if target_expire.tzinfo is None:
+            target_expire = target_expire.replace(tzinfo=timezone.utc)
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = target_expire.astimezone(tehran_tz)
-        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=tehran_expire)
+        naive_tehran = tehran_expire.replace(tzinfo=None)
+        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran)
         expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
     except Exception:
         expire_str = target_expire.strftime("%Y-%m-%d %H:%M:%S") if target_expire else "-"
@@ -3385,7 +3388,9 @@ def _approved_message(
 2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
+
+📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
 
 def _manual_activation_user_message(
     *,
@@ -3396,9 +3401,12 @@ def _manual_activation_user_message(
     ipv4_secondary: str = "94.183.166.208"
 ) -> str:
     try:
+        if expire_at.tzinfo is None:
+            expire_at = expire_at.replace(tzinfo=timezone.utc)
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
-        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=tehran_expire)
+        naive_tehran = tehran_expire.replace(tzinfo=None)
+        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran)
         expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
     except Exception:
         expire_str = expire_at.strftime("%Y-%m-%d %H:%M:%S")

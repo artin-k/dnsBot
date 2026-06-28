@@ -1128,7 +1128,7 @@ async def handle_buy_plan_loc(
 آیا مایل هستید این طرح را خریداری کنید؟"""
 
     builder = InlineKeyboardBuilder()
-    builder.button(text="💳 پرداخت آنلاین (پی استار)", callback_data=f"pay_online_paystar:{plan.id}:{service_pk}:{pop_code}")
+    builder.button(text="💳 پرداخت آنلاین", callback_data=f"pay_online_paystar:{plan.id}:{service_pk}:{pop_code}")
     builder.button(text="🏦 پرداخت از کیف پول (آنی)", callback_data=f"pay_instant_wallet:{plan.id}:{service_pk}:{pop_code}")
     builder.button(text="💳 کارت به کارت (دستی)", callback_data=f"pay_manual_card:{plan.id}:{service_pk}:{pop_code}")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
@@ -1472,6 +1472,8 @@ async def handle_pay_online_paystar(
 
 کد پیگیری سفارش:
 <code>{order.tracking_code}</code>
+
+⚠️ لطفاً پیش از ورود به درگاه پرداخت، وی‌پی‌ان (VPN) خود را خاموش کنید.
 
 برای تکمیل پرداخت روی دکمه زیر بزنید.""",
         reply_markup=paystar_payment_keyboard(redirect_url),

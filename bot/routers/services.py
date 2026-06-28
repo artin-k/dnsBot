@@ -87,8 +87,6 @@ def format_service_item_display(service: VPNService, index: int) -> str:
 ⚡ <b>پلن:</b> {escape(service.plan.title if service.plan else "اکانت تست")}
 🗓 <b>تاریخ انقضا:</b> {format_datetime(service.expire_at)}
 📌 <b>وضعیت:</b> {status_fa}
-🌐 <b>DoH:</b> <code>{escape(service.config_link or "ثبت نشده")}</code>
-🔒 <b>DoT:</b> <code>{escape(service.subscription_link or "ثبت نشده")}</code>
 """
 
 
