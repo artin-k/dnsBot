@@ -165,9 +165,6 @@ def format_order_payment_admin_caption(order: Order, payment: Payment) -> str:
         username_part = order.renewal_service.username
         
     receipt_status = "رسید دریافت شده" if payment.receipt_file_id else "بدون رسید"
-    inventory_line = ""
-    if order.order_kind == OrderKind.PURCHASE.value:
-        inventory_line = f"\n📦 کانفیگ رزرو شده: {'بله' if order.config_inventory_id else 'خیر'} | شناسه: {order.config_inventory_id or '-'}"
         
     return f"""🧾 پرداخت جدید در انتظار تایید
 
@@ -182,8 +179,7 @@ def format_order_payment_admin_caption(order: Order, payment: Payment) -> str:
 🔐 نام کاربری دستگاه: <code>{escape(username_part)}</code>
 🎮 برنامه/بازی: <b>{escape(service_display)}</b>
 🗺 سرور (کشور): <b>{escape(country_display)}</b>
-📎 وضعیت رسید: {receipt_status}{inventory_line}"""
-
+📎 وضعیت رسید: {receipt_status}"""
 
 def format_wallet_topup_admin_caption(transaction: WalletTransaction) -> str:
     user = transaction.user

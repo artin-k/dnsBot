@@ -2675,11 +2675,6 @@ async def _show_pending_payments(callback: CallbackQuery, session: AsyncSession)
             telegram_username = f"@{payment.user.telegram_username}" if payment.user.telegram_username else "-"
             service_username = order.custom_username if order else "-"
             receipt_status = "رسید دریافت شده" if payment.receipt_file_id else "بدون رسید"
-            inventory_line = "📦 موجودی: -"
-            if order and order.order_kind == OrderKind.PURCHASE.value:
-                available_count = await get_available_count(session, order.plan_id)
-                reserved = "بله" if order.config_inventory_id else "خیر"
-                inventory_line = f"📦 کانفیگ رزرو شده: {reserved} | شناسه: {order.config_inventory_id or '-'} | موجودی پلن: {available_count}"
             lines.append(
                 f"""
 🛒 کد پیگیری: {order.tracking_code if order else "-"}
@@ -2690,8 +2685,7 @@ async def _show_pending_payments(callback: CallbackQuery, session: AsyncSession)
 ⚡ پلن: {escape(order.plan.title if order and order.plan else "-")}
 🔐 سرویس/نام کاربری: {escape(service_username or "-")}
 💵 مبلغ: {format_money(payment.amount)} تومان
-📎 وضعیت رسید: {receipt_status}
-{inventory_line}"""
+📎 وضعیت رسید: {receipt_status}"""
             )
         text = "\n".join(lines)
 
