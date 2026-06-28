@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     controld_profile_id: str = Field(default="", alias="CONTROLD_PROFILE_ID")
     paystar_gateway_id: str | None = Field(default=None, alias="PAYSTAR_GATEWAY_ID")
     paystar_sign_key: str | None = Field(default=None, alias="PAYSTAR_SIGN_KEY")
-    PUBLIC_WEB_BASE_URL: str = Field(default="https://bot.pingsep.ir", alias="PUBLIC_WEB_BASE_URL")
+    public_web_base_url: str = Field(default="https://bot.pingsep.ir", alias="PUBLIC_WEB_BASE_URL")
 
     bot_token: str = Field(default="", alias="BOT_TOKEN")
     database_url: str = Field(
