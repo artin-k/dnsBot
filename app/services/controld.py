@@ -477,19 +477,32 @@ async def update_service_route(profile_id: str, service_name: str, pop_code: str
             return False
 
 
+# app/services/controld.py
+
+# --- LOCATE THIS FUNCTION AND REPLACE IT ---
 async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
     """
     Updates the catch-all Default Rule for a profile.
-
-    Control D exposes Default Rule as a profile-level redirect target, but the
-    existing service routing endpoint still handles the redirect payload. We try
-    the reserved default service key first and keep the method isolated here so
-    routers do not need to know the Control D-specific implementation detail.
+    Correct Control D API endpoint: PUT /profiles/{profile_id}/default
     """
-    for service_name in ("default", "default_rule", "default-rule"):
-        if await update_service_route(profile_id=profile_id, service_name=service_name, pop_code=pop_code):
-            return True
-    return False
+    url = f"{BASE_URL}/profiles/{profile_id}/default"
+    payload = {
+        "do": 3,      # 3 represents REDIRECT/SPOOF in Control D's default rule options [cite: 8.3.2]
+        "status": 1,  # 1 represents enabled/active [cite: 8.4.1]
+        "via": pop_code
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
+            if response.status_code in (200, 201):
+                logger.info("controld_default_route_updated", profile_id=profile_id, pop_code=pop_code)
+                return True
+            else:
+                logger.error(f"Failed to update default route on Control D (Status {response.status_code}): {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"Error updating profile default route: {str(e)}")
+            return False
 
 
 async def fetch_controld_services(profile_id: str) -> list[dict] | None:

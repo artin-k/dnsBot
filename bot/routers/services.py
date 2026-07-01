@@ -271,12 +271,16 @@ async def _show_default_loc_page(callback: CallbackQuery, service_id: int, page:
     page_proxies = proxies[start_idx:end_idx]
     has_next = len(proxies) > end_idx
 
+    # bot/routers/services.py
+
+# --- LOCATE THIS BLOCK (around line 186) AND REPLACE IT ---
     builder = InlineKeyboardBuilder()
     for p in page_proxies:
         p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
+        # Optimized callback_data to strictly respect Telegram's 64-character limit
         builder.button(
             text=p_name,
-            callback_data=f"apply_def_loc:{service_id}:{p['code']}:{p['country_name']} - {p['city_name']}"
+            callback_data=f"apply_def_loc:{service_id}:{p['code']}"
         )
     
     # 1. First adjust the 10 countries into rows of 2
@@ -309,15 +313,9 @@ async def handle_change_default_loc_select(callback: CallbackQuery, settings: Se
     await _show_default_loc_page(callback, service_id, page=0, settings=settings)
 
 
-@router.callback_query(F.data.startswith("def_loc_page:"), StateFilter("*"))
-async def handle_def_loc_page(callback: CallbackQuery, settings: Settings) -> None:
-    await callback.answer()
-    parts = callback.data.split(":")
-    service_id = int(parts[1])
-    page = int(parts[2])
-    await _show_default_loc_page(callback, service_id, page, settings)
+# bot/routers/services.py
 
-
+# --- LOCATE THIS HANDLER (around line 217) AND REPLACE IT ---
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     await callback.answer()
@@ -327,14 +325,11 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     parts = callback.data.split(":")
     service_id = int(parts[1])
     pop_code = parts[2]
-    pop_name = parts[3]
 
     service = await ServicesRepository(session).get(service_id)
     if service is None or not service.controld_device_id:
         await callback.message.answer("❌ سرویس یا شناسه دستگاه معتبر یافت نشد.")
         return
-
-    await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن کل اینترنت شما به {pop_name}...")
 
     # Find the dynamic profile_id linked to this device
     controld_service = ControlDService(settings)
@@ -360,10 +355,26 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         await callback.message.answer("❌ شناسه پروفایل این دستگاه یافت نشد.")
         return
 
-    # Call overall default profile routing PUT API [cite: 1]
+    # Dynamically resolve POP display name to prevent 64-byte callback truncation
+    proxies = await controld_service.fetch_controld_proxies()
+    pop_name = pop_code
+    if proxies:
+        for p in proxies:
+            if p["code"] == pop_code:
+                pop_name = f"{p['flag']} {p['country_name']} - {p['city_name']} ({pop_code})"
+                break
+
+    await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن کل اینترنت شما به {pop_name}...")
+
+    # Call overall default profile routing PUT API
     success = await controld_service.update_profile_default(profile_id, pop_code)
 
     if success:
+        # DB Sync: Rebuild and save the metadata string in the database
+        raw_username = service.username.split("|")[0]
+        service.username = f"{raw_username}|default|{pop_code}"
+        await session.commit()
+
         await callback.message.answer(
             f"✅ لوکیشن کل ترافیک اینترنت دستگاه <code>{escape(service.username.split('|')[0])}</code> با موفقیت به سرور <b>{escape(pop_name)}</b> تغییر یافت!\n\n"
             f"تغییرات به صورت آنی روی دی‌ان‌اس اختصاصی شما اعمال شد.",
@@ -372,7 +383,6 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         )
     else:
         await callback.message.answer("❌ خطا در ثبت لوکیشن در پنل Control D. مجدداً تلاش کنید.")
-
 
 # ============================================================================
 # 2. FINE-GRAINED SERVICE ROUTING CONTROLLER
@@ -512,9 +522,12 @@ async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, 
     )
 
 
+# bot/routers/services.py
+
+# --- LOCATE select_service_location AND REPLACE IT WITH THESE TWO FUNCTIONS ---
 @router.callback_query(F.data.startswith("select_srv_loc:"), StateFilter("*"))
 async def select_service_location(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Fetches and displays available Control D proxies as buttons."""
+    """Entry point for specific service location selector. Starts at page 0."""
     await callback.answer()
     if callback.message is None:
         return
@@ -523,32 +536,95 @@ async def select_service_location(callback: CallbackQuery, session: AsyncSession
     service_id = int(parts[1])
     service_pk = parts[2]
 
-    # Fetch available POP proxies from Control D API [1]
+    # Start specific service selection at page 0
+    await _show_service_loc_page(callback, service_id, service_pk, page=0, settings=settings)
+
+
+async def _show_service_loc_page(
+    callback: CallbackQuery, 
+    service_id: int, 
+    service_pk: str, 
+    page: int, 
+    settings: Settings
+) -> None:
+    """Renders the paginated specific service location selector [cite: services.py]."""
     controld_service = ControlDService(settings)
     proxies = await controld_service.fetch_controld_proxies()
     
     if not proxies:
-        await callback.message.answer("❌ خطایی در بارگذاری لوکیشن‌های معتبر رخ داد.")
+        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
+    # Sort countries alphabetically
+    proxies.sort(key=lambda x: x["country_name"].lower())
+
+    limit = 10
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_proxies = proxies[start_idx:end_idx]
+    has_next = len(proxies) > end_idx
+
     builder = InlineKeyboardBuilder()
-    for p in proxies[:12]:  # Show first 12 popular worldwide locations [1]
+    for p in page_proxies:
         p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
         builder.button(
             text=p_name,
-            callback_data=f"apply_loc_change:{service_id}:{service_pk}:{p['code']}:{p_name}"  # Apply routing [1]
+            # Optimized callback_data to strictly respect Telegram's 64-character limit
+            callback_data=f"apply_loc_change:{service_id}:{service_pk}:{p['code']}"
         )
-    builder.button(text="↩️ بازگشت", callback_data=f"service_routing_menu:{service_id}")
+    
+    # 1. Layout: 2 buttons per row
     builder.adjust(2)
 
+    # 2. Append Page Navigation Controls (strictly within 64-byte bounds)
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="⬅️ قبلی", 
+                callback_data=f"srv_loc_page:{service_id}:{service_pk}:{page - 1}"
+            )
+        )
+    if has_next:
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text="بعدی ➡️", 
+                callback_data=f"srv_loc_page:{service_id}:{service_pk}:{page + 1}"
+            )
+        )
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    # 3. Append Back Button
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"service_routing_menu:{service_id}"))
+
     await callback.message.edit_text(
-        f"🗺 تنظیم لوکیشن برای این سرویس\n\n"
+        f"🗺 <b>تنظیم لوکیشن برای سرویس</b> | صفحه {page + 1}\n\n"
         f"لطفاً کشوری که می‌خواهید ترافیک این سرویس از طریق آن عبور کند انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
 
+# bot/routers/services.py
 
+# --- PLACE THIS ROUTER HANDLER BELOW THE BUILDER FUNCTIONS ---
+@router.callback_query(F.data.startswith("srv_loc_page:"), StateFilter("*"))
+async def handle_srv_loc_page(callback: CallbackQuery, settings: Settings) -> None:
+    """Handles pagination buttons for specific service location changes."""
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    parts = callback.data.split(":")
+    service_id = int(parts[1])
+    service_pk = parts[2]
+    page = int(parts[3])
+
+    await _show_service_loc_page(callback, service_id, service_pk, page, settings)
+
+# bot/routers/services.py
+
+# --- LOCATE THIS HANDLER (around line 369) AND REPLACE IT ---
 @router.callback_query(F.data.startswith("apply_loc_change:"), StateFilter("*"))
 async def apply_service_route(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     """Executes the PUT API call to redirect the service on Control D [1]."""
@@ -560,7 +636,6 @@ async def apply_service_route(callback: CallbackQuery, session: AsyncSession, se
     service_id = int(parts[1])
     service_pk = parts[2]
     pop_code = parts[3]
-    pop_name = parts[4]
 
     service = await ServicesRepository(session).get(service_id)
     if service is None or not service.controld_device_id:
@@ -591,6 +666,15 @@ async def apply_service_route(callback: CallbackQuery, session: AsyncSession, se
         await callback.message.answer("❌ شناسه پروفایل این دستگاه یافت نشد.")
         return
 
+    # Dynamically resolve POP display name to prevent 64-byte callback truncation
+    proxies = await controld_service.fetch_controld_proxies()
+    pop_name = pop_code
+    if proxies:
+        for p in proxies:
+            if p["code"] == pop_code:
+                pop_name = f"{p['flag']} {p['country_name']} - {p['city_name']} ({pop_code})"
+                break
+
     await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن سرویس شما به {pop_name}...")
 
     # Execute the PUT routing command using the dynamic profile_id [1]
@@ -600,6 +684,11 @@ async def apply_service_route(callback: CallbackQuery, session: AsyncSession, se
         success = await controld_service.update_service_route(profile_id, service_pk, pop_code)  
 
     if success:
+        # DB Sync: Rebuild and save the metadata string in the database
+        raw_username = service.username.split("|")[0]
+        service.username = f"{raw_username}|{service_pk}|{pop_code}"
+        await session.commit()
+
         await callback.message.answer(
             f"✅ ترافیک سرویس شما با موفقیت به سرور <b>{escape(pop_name)}</b> هدایت شد!\n\n"
             f"تغییرات به صورت آنی و بدون نیاز به تغییر لینک دی‌ان‌اس روی دستگاه شما اعمال شد.",
@@ -608,7 +697,6 @@ async def apply_service_route(callback: CallbackQuery, session: AsyncSession, se
         )
     else:
         await callback.message.answer("❌ خطا در ثبت لوکیشن در پنل Control D. مجدداً تلاش کنید.")
-
 
 async def _safe_answer(callback: CallbackQuery, text: str) -> None:
     if callback.message:

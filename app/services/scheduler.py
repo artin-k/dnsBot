@@ -1,4 +1,4 @@
-# Open app/services/scheduler.py
+# app/services/scheduler.py
 import asyncio
 from datetime import datetime, timezone
 
@@ -66,11 +66,15 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
                     )
                     success = False
 
-                if not success:
-                    logger.warning("failed_to_delete_controld_device", service_id=service.id)
-                    continue
-
-                logger.info("controld_device_deleted_successfully", service_id=service.id)
+                if success:
+                    logger.info("controld_device_deleted_successfully", service_id=service.id)
+                else:
+                    # Log the warning but DO NOT use 'continue'. We still must expire
+                    # the database record so it doesn't get stuck in an active state.
+                    logger.warning(
+                        "failed_to_delete_controld_device_proceeding_to_expire_locally",
+                        service_id=service.id,
+                    )
 
             try:
                 service.status = VPNServiceStatus.EXPIRED.value
@@ -81,63 +85,31 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
                 logger.error("failed_to_mark_dns_service_expired", service_id=service.id, error=str(exc))
                 continue
 
-            if bot is not None and service.is_test_account and service.user is not None:
+            # Send Persian notification to user if it's an expired test account
+            # Send customized expiration notifications
+            if bot is not None and service.user is not None:
                 try:
-                    await bot.send_message(
-                        chat_id=service.user.telegram_id,
-                        text=(
-                            "â³ Ø§Ú©Ø§Ù†Øª ØªØ³Øª Ø´Ù…Ø§ Ù…Ù†Ù‚Ø¶ÛŒ Ø´Ø¯.\n\n"
-                            f"ðŸ—“ ØªØ§Ø±ÛŒØ® Ø§Ù†Ù‚Ø¶Ø§: {format_datetime(service.expire_at)}\n"
-                            "Ø¯Ø³ØªØ±Ø³ÛŒ DNS Ø´Ù…Ø§ ØºÛŒØ±ÙØ¹Ø§Ù„ Ø´Ø¯."
-                        ),
-                    )
-                except Exception as exc:
-                    logger.warning("failed_to_notify_expired_test_account", service_id=service.id, error=str(exc))
-
-        return processed
-
-        for service in expired_services:
-            service.status = VPNServiceStatus.EXPIRED.value
-            try:
-                await session.commit()
-                processed += 1
-            except Exception as exc:
-                await session.rollback()
-                logger.error("failed_to_mark_dns_service_expired", service_id=service.id, error=str(exc))
-                continue
-
-            if service.controld_device_id:
-                logger.info("deleting_controld_device", service_id=service.id, device_id=service.controld_device_id)
-                try:
-                    success = await cd_service.delete_device(service.controld_device_id)
-                except Exception as exc:
-                    logger.error(
-                        "controld_device_delete_exception",
-                        service_id=service.id,
-                        device_id=service.controld_device_id,
-                        error=str(exc),
-                    )
-                    success = False
-
-                if success:
-                    logger.info("controld_device_deleted_successfully", service_id=service.id)
-                else:
-                    logger.warning("failed_to_delete_controld_device", service_id=service.id)
-
-            if bot is not None and service.is_test_account and service.user is not None:
-                try:
-                    await bot.send_message(
-                        chat_id=service.user.telegram_id,
-                        text=(
+                    if service.is_test_account:
+                        text = (
                             "⏳ اکانت تست شما منقضی شد.\n\n"
                             f"🗓 تاریخ انقضا: {format_datetime(service.expire_at)}\n"
                             "دسترسی DNS شما غیرفعال شد."
-                        ),
+                        )
+                    else:
+                        text = (
+                            "⏳ اشتراک DNS شما به پایان رسید.\n\n"
+                            f"🗓 تاریخ انقضا: {format_datetime(service.expire_at)}\n"
+                            "دسترسی شما غیرفعال شد. برای تمدید یا خرید اشتراک جدید می‌توانید از منوی اصلی اقدام کنید."
+                        )
+                    
+                    await bot.send_message(
+                        chat_id=service.user.telegram_id,
+                        text=text,
                     )
                 except Exception as exc:
-                    logger.warning("failed_to_notify_expired_test_account", service_id=service.id, error=str(exc))
+                    logger.warning("failed_to_notify_expired_service_owner", service_id=service.id, error=str(exc))
 
-    return processed
+        return processed
 
 
 async def sync_plans_with_controld(session) -> None:
@@ -149,9 +121,8 @@ async def sync_plans_with_controld(session) -> None:
     # Instantiate the proxy-aware OOP client
     cd_service = ControlDService(settings)
     
-    # --- FIXED: Use the OOP client method to retrieve profiles ---
+    # Use the OOP client method to retrieve profiles
     profiles = await cd_service.fetch_controld_profiles()
-    # --------------------------------------------------------------
     if not profiles:
         logger.warning("no_controld_profiles_found_or_sync_failed")
         return
@@ -177,7 +148,7 @@ async def sync_plans_with_controld(session) -> None:
                 description=profile_desc,
                 duration_hours=720,         # Default: 30 days = 720 hours
                 volume_gb=0,                # DNS has no volume limit
-                price=50000,                # Default price (Toman) - edit this later in Admin Panel
+                price=50000,                # Default price (Toman)
                 is_active=True,
                 sort_order=0,
                 controld_profile_id=profile_id
