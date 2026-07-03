@@ -1,13 +1,15 @@
 # app/services/controld.py
+import os
+
 import httpx
-import logging
+import structlog
 import aiohttp
 import asyncio
 from datetime import datetime, timezone, timedelta
 
 from app.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 settings = get_settings()
 
 BASE_URL = "https://api.controld.com"
@@ -479,6 +481,10 @@ async def update_service_route(profile_id: str, service_name: str, pop_code: str
 
 # app/services/controld.py
 
+# app/services/controld.py
+
+# app/services/controld.py
+
 # --- LOCATE THIS FUNCTION AND REPLACE IT ---
 async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
     """
@@ -487,12 +493,13 @@ async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
     """
     url = f"{BASE_URL}/profiles/{profile_id}/default"
     payload = {
-        "do": 3,      # 3 represents REDIRECT/SPOOF in Control D's default rule options [cite: 8.3.2]
+        "do": 3,      # 3 represents REDIRECT/SPOOF to Location [cite: 8.3.2]
         "status": 1,  # 1 represents enabled/active [cite: 8.4.1]
         "via": pop_code
     }
     async with httpx.AsyncClient() as client:
         try:
+            # Reverted to PUT, which is the correct REST method for /default updates
             response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
             if response.status_code in (200, 201):
                 logger.info("controld_default_route_updated", profile_id=profile_id, pop_code=pop_code)
@@ -504,6 +511,20 @@ async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
             logger.error(f"Error updating profile default route: {str(e)}")
             return False
 
+def _get_headers() -> dict:
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json",
+        "accept": "application/json"
+    }
+    
+    # Securely support Organization account impersonation (Sub-Organizations) [cite: 3.4.1]
+    # If CONTROLD_ORG_ID is set in your .env/settings, we inject the required X-Force-Org-Id header [cite: 3.4.1]
+    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
+    if org_id:
+        headers["X-Force-Org-Id"] = org_id
+        
+    return headers
 
 async def fetch_controld_services(profile_id: str) -> list[dict] | None:
     """

@@ -336,6 +336,8 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 # 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES
 # ============================================================================
 
+# bot/routers/buy.py
+
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
 async def handle_get_test_account(
     callback: CallbackQuery,
@@ -380,29 +382,9 @@ async def handle_get_test_account(
         )
         return
 
-    profile_id = settings.controld_profile_id
-    if not profile_id:
-        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
-        return
-
-    controld_service = ControlDService(settings)
-    services = await controld_service.fetch_controld_services(profile_id)
-
-    if not services:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌های معتبر رخ داد.", reply_markup=main_menu_keyboard())
-        return
-
-    # Dynamic Category Selector Menu
+    # Hardcoded to ONLY display the first option (Default Traffic) and the Back button
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
-
-    # Generate dynamic categories
-    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
-
-    for key in unique_categories:
-        label = get_category_label_fa(key)
-        builder.button(text=label, callback_data=f"test_cat:{key}:0")
-    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -411,53 +393,6 @@ async def handle_get_test_account(
         "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
         "🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
         reply_markup=builder.as_markup(),
-    )
-    return
-
-    stmt = select(VPNService).where(
-        VPNService.user_id == user.id,
-        VPNService.is_test_account == True
-    )
-    result = await session.execute(stmt)
-    existing_test = result.scalars().first()
-
-    if existing_test is not None:
-        await callback.answer("❌ شما قبلا از اکانت تست استفاده کرده‌اید.", show_alert=True)
-        return
-
-    await callback.answer()
-
-    # Dynamic Category Selector Menu
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
-    
-    # Generate dynamic categories
-    profile_id = settings.controld_profile_id
-    if not profile_id:
-        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
-        return
-
-    controld_service = ControlDService(settings)
-    services = await controld_service.fetch_controld_services(profile_id)
-    
-    if not services:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
-
-    for key in unique_categories:
-        label = get_category_label_fa(key)
-        builder.button(text=label, callback_data=f"test_cat:{key}:0")
-    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
-    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
-    builder.adjust(1)
-
-    await _safe_edit_or_reply(
-        callback,
-        "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
-        "🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
-        reply_markup=builder.as_markup()
     )
 
 
@@ -856,6 +791,8 @@ async def handle_apply_test_loc(
 # 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW WITH PAGINATION
 # ============================================================================
 
+# bot/routers/buy.py
+
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
 async def handle_buy_plan_select(
     callback: CallbackQuery,
@@ -876,27 +813,9 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Fetch all services dynamically from Control D first
-    profile_id = settings.controld_profile_id or "default"
-    controld_service = ControlDService(settings)
-    services = await controld_service.fetch_controld_services(profile_id)
-    
-    if not services:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    # Extract all unique categories dynamically
-    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
-
-    from app.services.controld import get_category_label_fa
-
+    # Hardcoded to ONLY display the first option (Default Traffic) and the Back button
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
-    
-    for cat_key in unique_categories:
-        label = get_category_label_fa(cat_key)
-        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{cat_key}:0")
-        
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
