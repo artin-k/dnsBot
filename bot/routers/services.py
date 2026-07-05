@@ -704,3 +704,19 @@ async def _safe_answer(callback: CallbackQuery, text: str) -> None:
             await callback.message.edit_text(text)
         except Exception:
             await callback.message.answer(text)
+
+# bot/routers/services.py
+
+# --- PLACE THIS HANDLER BLOCK WITHIN YOUR SERVICES.PY FILE ---
+@router.callback_query(F.data.startswith("def_loc_page:"), StateFilter("*"))
+async def handle_def_loc_page(callback: CallbackQuery, settings: Settings) -> None:
+    """Handles pagination buttons for the default internet traffic location changer."""
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    parts = callback.data.split(":")
+    service_id = int(parts[1])
+    page = int(parts[2])
+
+    await _show_default_loc_page(callback, service_id, page, settings)

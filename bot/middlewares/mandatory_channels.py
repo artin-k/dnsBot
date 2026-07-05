@@ -1,12 +1,18 @@
 from __future__ import annotations
-
+from typing import Any, Callable, Awaitable
+from aiogram import BaseMiddleware
 import structlog
+from app.config import get_settings
+from app.repositories.users import UsersRepository
+
 from aiogram import BaseMiddleware, Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, TelegramObject, User as TelegramUser, Update
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, TelegramObject, User as TelegramUser, Update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.mandatory_channels import MandatoryChannelsRepository
 from app.repositories.users import UsersRepository # Added to check admin status
+from bot import texts
+from bot.routers.mandatory_channels import check_user_mandatory_channels
 
 logger = structlog.get_logger(__name__)
 
@@ -23,95 +29,122 @@ async def _is_admin(telegram_id: int | None, session: AsyncSession, settings) ->
     return bool(user and user.is_admin)
 
 
-class DynamicMandatoryJoinMiddleware(BaseMiddleware):
-    """
-    Middleware that checks if users are members of all mandatory channels.
-    If a user is missing any channels, blocks the handler and displays join buttons.
-    
-    Note: This middleware only checks in private chats and skips service messages.
-    """
+# bot/middlewares/mandatory_channels.py
 
-    async def __call__(self, handler, event: TelegramObject, data: dict):
-        # Resolve the actual Message object from the incoming event/update
-        message: Message | None = None
+class DynamicMandatoryJoinMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        # 1. Identify the event type (handling both direct events and the global Update wrapper)
+        message = None
+        callback_query = None
         
-        if isinstance(event, Message):
+        if isinstance(event, Update):
+            if event.message:
+                message = event.message
+            elif event.callback_query:
+                callback_query = event.callback_query
+                message = event.callback_query.message
+        elif isinstance(event, Message):
             message = event
-        elif isinstance(event, Update) and event.message:
+        elif isinstance(event, CallbackQuery):
+            callback_query = event
             message = event.message
 
-        # If it's not a message (e.g., a callback query or inline query), let it pass
-        if not message:
+        # Safety check: if no message or user is resolved, proceed to handler
+        if not message or not message.from_user:
             return await handler(event, data)
 
-        # Skip service messages and non-text messages
-        if not message.text or message.message_auto_delete_timer_changed or message.group_chat_created:
+        telegram_user = message.from_user
+        text = (message.text or "").strip()
+        cb_data = (callback_query.data or "").strip() if callback_query else ""
+
+        # 2. Check if the user is an admin (Admins bypass all mandatory checks)
+        session = data.get("session")
+        settings = get_settings()
+        is_admin = False
+        
+        if telegram_user.id in settings.admin_ids or telegram_user.id == settings.root_admin_telegram_id:
+            is_admin = True
+        elif session:
+            user = await UsersRepository(session).get_by_telegram_id(telegram_user.id)
+            if user and user.is_admin:
+                is_admin = True
+
+        if is_admin:
             return await handler(event, data)
 
-        # Extract user, session, and configurations from data
-        user: TelegramUser | None = message.from_user
-        session: AsyncSession | None = data.get("session")
-        bot: Bot | None = data.get("bot")
-        settings = data.get("settings")
+        # 3. Whitelist check (Bypass checking for /start, main menu, tutorials, support, profile, wheel, tracking, and back commands)
+        whitelisted_texts = {
+            "/start",
+            "/help",
+            texts.BTN_BACK,
+            texts.BTN_MAIN_MENU,
+            texts.BTN_SUPPORT,
+            texts.BTN_TUTORIALS,
+            texts.BTN_ACCOUNT,
+            texts.BTN_LUCKY_WHEEL,
+            texts.BTN_TRACK_ORDER,
+            "🏠 منوی اصلی",
+            "↩️ بازگشت",
+            "👤 حساب کاربری",
+            "☎️ پشتیبانی",
+            "📚 آموزش",
+            "🎲 گردونه شانس",
+            "📦 پیگیری سفارش"
+        }
 
-        if not user or not session or not bot:
+        whitelisted_callback_prefixes = (
+            "menu:",
+            "buy_back_to_menu",
+            "mandatory_join_check",
+            "tutorials:",
+            "back_to_main",
+        )
+
+        # If it's a whitelisted message text, proceed instantly
+        if text in whitelisted_texts:
             return await handler(event, data)
 
-        # Only check in private chats
-        if message.chat.type != "private":
+        # If it's a whitelisted callback prefix, proceed instantly
+        if cb_data and any(cb_data.startswith(prefix) for prefix in whitelisted_callback_prefixes):
             return await handler(event, data)
 
-        # --- ADMIN BYPASS ---
-        # Do not block admins from using the bot or configuration commands
-        if await _is_admin(user.id, session, settings):
-            return await handler(event, data)
-        # ---------------------
-
-        try:
-            # Check mandatory channels
-            repo = MandatoryChannelsRepository(session)
-            channels = await repo.get_all_active()
-
-            if not channels:
-                # No mandatory channels configured
-                return await handler(event, data)
-
-            # Check membership for each mandatory channel
-            unjoined_channels = []
-            for channel in channels:
-                try:
-                    member = await bot.get_chat_member(
-                        chat_id=channel.channel_id,
-                        user_id=user.id,
-                    )
-                    # Check if user is actually a member
-                    if member.status not in ("member", "administrator", "creator"):
-                        unjoined_channels.append(channel)
-                except Exception as e:
-                    logger.warning(
-                        "failed_to_check_channel_membership",
-                        channel_id=channel.channel_id,
-                        user_id=user.id,
-                        error=str(e),
-                    )
-                    # If we can't verify, assume they're not a member (safer)
-                    unjoined_channels.append(channel)
-
+        # 4. For all other core actions (e.g., Buy, Test Accounts, Subscriptions), check sponsor channel membership
+        bot = data.get("bot")
+        if bot and session:
+            unjoined_channels = await check_user_mandatory_channels(telegram_user.id, bot, session)
             if unjoined_channels:
-                # User is missing at least one channel
-                await self._send_mandatory_channels_message(message, bot, unjoined_channels)
-                return  # Block the handler chain
+                # Build inline keyboard to present unjoined sponsor channels
+                keyboard_buttons: list[list[InlineKeyboardButton]] = []
+                for channel in unjoined_channels:
+                    button = InlineKeyboardButton(
+                        text=f"📱 {channel.channel_name}",
+                        url=channel.invite_link,
+                    )
+                    keyboard_buttons.append([button])
 
-        except Exception as e:
-            # Log the error but DON'T block the user - let them through
-            # This prevents outages if the mandatory channels system fails
-            logger.error(
-                "mandatory_channels_middleware_error",
-                user_id=user.id,
-                chat_id=message.chat.id,
-                error=str(e),
-            )
-            # Continue to handler regardless - fail open, not fail closed
+                refresh_button = InlineKeyboardButton(
+                    text="🔄 بررسی مجدد",
+                    callback_data="mandatory_join_check",
+                )
+                keyboard_buttons.append([refresh_button])
+
+                markup = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+                message_text = (
+                    "❌ برای استفاده از خدمات این بخش، ابتدا باید عضو کانال‌های اسپانسر ما شوید:\n\n"
+                    "لطفاً پس از عضویت در تمام کانال‌ها، روی دکمه «🔄 بررسی مجدد» کلیک کنید."
+                )
+
+                if callback_query:
+                    await callback_query.answer("⚠️ ابتدا باید در کانال‌های اسپانسر عضو شوید.", show_alert=True)
+                    await callback_query.message.answer(message_text, reply_markup=markup)
+                else:
+                    await message.answer(message_text, reply_markup=markup)
+                return
 
         return await handler(event, data)
 

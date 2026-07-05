@@ -79,3 +79,4 @@ def _create_storage(settings: Settings) -> BaseStorage:
             raise RuntimeError("Redis FSM storage requires installing the optional redis package.") from exc
         return RedisStorage.from_url(settings.redis_url)
     return MemoryStorage()
+

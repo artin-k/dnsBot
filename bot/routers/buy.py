@@ -253,14 +253,14 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
-                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "94.183.166.208"
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.22",
+                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "76.76.10.22"
                 }
         except Exception:
             pass
     return {
-        "ipv4_primary": "94.183.166.203",
-        "ipv4_secondary": "94.183.166.208"
+        "ipv4_primary": "76.76.2.22",
+        "ipv4_secondary": "76.76.10.22"
     }
 
 
@@ -1521,12 +1521,12 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
-                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "94.183.166.203",
-                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "94.183.166.208"  # <-- FIXED: Accessed index 1 [cite: 1]
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.22",
+                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "76.76.10.22"  # <-- FIXED: Accessed index 1 [cite: 1]
                 }
         except Exception:
             pass
     return {
-        "ipv4_primary": "94.183.166.203",
-        "ipv4_secondary": "94.183.166.208"
+        "ipv4_primary": "76.76.2.22",
+        "ipv4_secondary": "76.76.10.22"
     }
