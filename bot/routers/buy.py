@@ -382,9 +382,35 @@ async def handle_get_test_account(
         )
         return
 
-    # Hardcoded to ONLY display the first option (Default Traffic) and the Back button
+    profile_id = settings.controld_profile_id
+    if not profile_id:
+        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
+        return
+
+    controld_service = ControlDService(settings)
+    services = await controld_service.fetch_controld_services(profile_id)
+
+    if not services:
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌های معتبر رخ داد.", reply_markup=main_menu_keyboard())
+        return
+
+    # Extract all unique categories dynamically
+    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
+
+    from app.services.controld import get_category_label_fa
+
+    # Dynamic Category Selector Menu
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
+
+    # Filter loop
+    category_blacklist = {"hosting", "tools", "vendors"}
+    for key in unique_categories:
+        if key.lower() in category_blacklist:
+            continue
+        label = get_category_label_fa(key)
+        builder.button(text=label, callback_data=f"test_cat:{key}:0")
+    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -813,9 +839,31 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Hardcoded to ONLY display the first option (Default Traffic) and the Back button
+    # Fetch all services dynamically from Control D first to build categories
+    profile_id = plan.controld_profile_id or settings.controld_profile_id or "default"
+    controld_service = ControlDService(settings)
+    services = await controld_service.fetch_controld_services(profile_id)
+    
+    if not services:
+        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+        return
+
+    # Extract all unique categories dynamically
+    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
+
+    from app.services.controld import get_category_label_fa
+
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
+    
+    # Strictly filter out the unneeded technical categories
+    category_blacklist = {"hosting", "tools", "vendors"}
+    for cat_key in unique_categories:
+        if cat_key.lower() in category_blacklist:
+            continue
+        label = get_category_label_fa(cat_key)
+        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{cat_key}:0")
+        
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 

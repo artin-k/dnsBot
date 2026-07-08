@@ -206,13 +206,17 @@ async def create_dns_device(
         name = name.split("|")[0].strip()
     # -------------------------------------------------------------------------------------------------
 
+    if name:
+        name = name.replace("_", "-")
+
     disable_ttl = int((datetime.now(timezone.utc) + timedelta(hours=duration_hours)).timestamp())
     payload = {
         "name": name,
         "profile_id": profile_id,
         "device_type": device_type,
         "analytics": 1,
-        "disable_ttl": disable_ttl
+        "disable_ttl": disable_ttl,
+        "legacy_ipv4_status": 1
     }
 
     async with httpx.AsyncClient() as client:
@@ -334,11 +338,15 @@ async def create_device(profile_id: str, device_name: str, duration_hours: int) 
         device_name = device_name.split("|")[0].strip()
     # -------------------------------------------------------------------------------------------------
 
+    if device_name:
+        device_name = device_name.replace("_", "-")
+
     payload = {
         "name": device_name,
         "profile_id": profile_id,
         "analytics": 1,
-        "disable_ttl": disable_ttl
+        "disable_ttl": disable_ttl,
+        "legacy_ipv4_status": 1
     }
     # ... rest of the function continues normally ...
     timeout = aiohttp.ClientTimeout(total=10)

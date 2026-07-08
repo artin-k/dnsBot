@@ -388,6 +388,8 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
 # 2. FINE-GRAINED SERVICE ROUTING CONTROLLER
 # ============================================================================
 
+# bot/routers/services.py
+
 @router.callback_query(F.data.startswith("service_routing_menu:"), StateFilter("*"))
 async def service_routing_menu(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     """Displays Category Selector for location management."""
@@ -408,6 +410,13 @@ async def service_routing_menu(callback: CallbackQuery, session: AsyncSession, s
         "Authorization": f"Bearer {settings.controld_api_token}",
         "Content-Type": "application/json"
     }
+    
+    # Impersonate organization if set in env
+    import os
+    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
+    if org_id:
+        headers["X-Force-Org-Id"] = org_id
+
     async with httpx.AsyncClient() as client:
         try:
             device_resp = await client.get(device_url, headers=headers, timeout=5.0)
@@ -426,6 +435,7 @@ async def service_routing_menu(callback: CallbackQuery, session: AsyncSession, s
         await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
 
+    # Extract all unique categories dynamically
     unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
 
     from app.services.controld import get_category_label_fa
@@ -433,7 +443,11 @@ async def service_routing_menu(callback: CallbackQuery, session: AsyncSession, s
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"select_srv_loc:{service_id}:default")
     
+    # Filter loop
+    category_blacklist = {"hosting", "tools", "vendors"}
     for cat_key in unique_categories:
+        if cat_key.lower() in category_blacklist:
+            continue
         label = get_category_label_fa(cat_key)
         builder.button(text=label, callback_data=f"srv_manage_cat:{service_id}:{cat_key}:0")
         
