@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
 from html import escape
+import site
 from zoneinfo import ZoneInfo
 import jdatetime # <-- Add this line [1]
 
@@ -36,6 +39,7 @@ from app.models import (
     WalletWithdrawalStatus,
 )
 
+from app.repositories import settings
 from app.repositories.config_inventory import ConfigInventoryRepository
 from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.orders import OrdersRepository
@@ -157,6 +161,7 @@ from bot.keyboards.admin import (
     wallet_topups_keyboard,
 )
 from bot.keyboards.main_menu import main_menu_keyboard
+from bot.keyboards.services import ServiceActionCallback
 from bot.keyboards.wallet import WalletTopupReviewCallback
 from bot.states.admin import (
     AdminAddPlanStates,
@@ -2931,18 +2936,126 @@ def _format_withdrawal_detail(withdrawal: WalletWithdrawalRequest) -> str:
 تاریخ ثبت: {format_datetime(withdrawal.created_at)}"""
 
 
+# bot/routers/admin.py
+
+# --- LOCATE AND REPLACE THE _show_services METHOD ---
 async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None:
+    """
+    Parses active subscription metadata on the fly, queries Control D in real-time
+    to ensure 100% remote-to-local IP synchronization, and renders the Farsi catalog [cite: services.py, 1].
+    """
     services = await ServicesRepository(session).list_recent(10)
+    
     if not services:
-        text = "هنوز سرویسی ثبت نشده است."
-    else:
-        lines = ["🛍 مدیریت سرویس‌ها", "آخرین سرویس‌ها:"]
-        for service in services:
-            lines.append(f"{service.username} | {format_service_status_fa(service.status)} | {format_datetime(service.expire_at)}")
-        text = "\n".join(lines)
-    await _safe_edit_or_answer(callback, text, reply_markup=services_admin_keyboard(services))
+        await _safe_edit_or_answer(callback, "❌ هنوز هیچ سرویسی در پایگاه داده ثبت نشده است.")
+        return
 
+    from app.config import SLOT_CONFIGS
+    from app.services.controld import get_flag_emoji
 
+    lines = ["🛍 <b>مدیریت سرویس‌ها | آخرین اشتراک‌های فعال:</b>\n"]
+    
+    builder = InlineKeyboardBuilder()
+    for index, service in enumerate(services, start=1):
+        user = service.user
+        username_tg = f"@{user.telegram_username}" if user and user.telegram_username else "-"
+        first_name = user.first_name if user else "-"
+        telegram_id = user.telegram_id if user else "-"
+
+        # Parse static country slots and metadata [cite: services.py, 1]
+        raw_username = service.username or ""
+        username_part = raw_username
+        service_display = "کل ترافیک اینترنت (Default)"
+        country_display = "پیش‌فرض"
+        flag = "📍"
+        
+        if "|" in raw_username:
+            parts = raw_username.split("|")
+            username_part = parts[0]
+            service_pk = parts[1] if len(parts) > 1 else "default"
+            slot_num_str = parts[2] if len(parts) > 2 else "1"
+            
+            if service_pk != "default":
+                service_display = service_pk.capitalize()
+
+            if slot_num_str and slot_num_str.isdigit():
+                slot_num = int(slot_num_str)
+                if slot_num in SLOT_CONFIGS:
+                    country_display = SLOT_CONFIGS[slot_num]["name"]
+                    try:
+                        country_display_clean = country_display.split(" ")[1] if len(country_display.split(" ")) > 1 else country_display
+                        flag = country_display.split(" ")[0]
+                    except Exception:
+                        flag = "📍"
+
+        # Safe Shamsi/Jalali expiration formatting [cite: Paste July 09, 2026 - 10:50AM]
+        expire_at = service.expire_at
+        shamsi_expire = "-"
+        if expire_at:
+            if expire_at.tzinfo is None:
+                expire_at = expire_at.replace(tzinfo=timezone.utc)
+            tehran_tz = ZoneInfo("Asia/Tehran")
+            tehran_expire = expire_at.astimezone(tehran_tz)
+            try:
+                naive_tehran = tehran_expire.replace(tzinfo=None)
+                shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M")
+            except Exception:
+                shamsi_expire = tehran_expire.strftime("%Y-%m-%d %H:%M")
+
+        # Dynamic Real-Time IP Synchronization with Control D [cite: 1]
+        active_ip = service.authorized_ip
+        if service.controld_device_id:
+            try:
+                controld = ControlDService(settings)
+                # Fetch active IPs directly from Control D API in real-time [cite: 1]
+                active_ips = await controld.get_active_ips(service.controld_device_id)
+                if active_ips:
+                    real_ip = active_ips[0]
+                    # Update local database if desynchronized [cite: 1]
+                    if service.authorized_ip != real_ip:
+                        service.authorized_ip = real_ip
+                        await session.commit()
+                    active_ip = real_ip
+                else:
+                    # Clear DB if no active IPs on Control D [cite: 1]
+                    if service.authorized_ip:
+                        service.authorized_ip = None
+                        await session.commit()
+                    active_ip = None
+            except Exception as exc:
+                logger.error("failed_to_sync_active_ips_on_show_services", device_id=service.controld_device_id, error=str(exc))
+
+        status_emoji = "🟢" if service.status == "active" else "🔴"
+        status_fa = "فعال" if service.status == "active" else "منقضی شده"
+        active_ip_display = active_ip or "ثبت نشده (No IP)"
+
+        # Append clean card to the text message
+        lines.append(
+            f"""<b>{index}. 👤 کاربر:</b> {escape(first_name)} (<code>{telegram_id}</code>)
+🔗 <b>یوزرنیم:</b> {escape(username_tg)}
+🎮 <b>برنامه/بازی:</b> <code>{escape(service_display)}</code>
+🗺 <b>سرور (کشور):</b> {escape(country_display)}
+⚡ <b>آی‌پی فعال:</b> <code>{escape(active_ip_display)}</code>
+⏳ <b>تاریخ انقضا:</b> <code>{shamsi_expire}</code>
+📌 <b>وضعیت:</b> {status_emoji} {escape(status_fa)}
+━━━━━━━━━━━━━━━━━━━━━"""
+        )
+
+        # Build clean buttons with country flags [cite: services.py, 1]
+        button_label = f"👤 {first_name[:10]} | {flag} {country_display.split(' - ')[0][:12]}"
+        builder.button(
+            text=button_label,
+            callback_data=ServiceActionCallback(action="status", service_id=service.id)
+        )
+
+    # Layout: Stacks user buttons cleanly
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="↩️ بازگشت به پنل مدیریت", callback_data="admin:panel"))
+
+    text_content = "\n".join(lines)
+    await _safe_edit_or_answer(callback, text_content, reply_markup=builder.as_markup())
+
+    
 async def _show_service_detail(callback: CallbackQuery, service) -> None:
     await _safe_edit_or_answer(callback, _format_service_detail(service), reply_markup=service_detail_keyboard(service))
 
@@ -3517,3 +3630,82 @@ def format_duration_fa(hours: int) -> str:
         days = hours // 24
         return f"{days} روز"
     return f"{hours} ساعت"
+
+
+# --- PLACE THIS HELPER FUNCTION INSIDE bot/routers/admin.py ---
+def get_admin_web_url(telegram_id: int) -> str:
+    """Generates the secure passwordless redirect URL signed by your private BOT_TOKEN [cite: 3.4.1, 1]."""
+    settings = get_settings()
+    
+    # Compute the secure hmac token
+    token = hmac.new(
+        settings.bot_token.encode('utf-8'),
+        str(telegram_id).encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    
+    return f"{settings.public_web_base_url}/admin?uid={telegram_id}&token={token}"
+
+
+# --- EXAMPLE HANDLER INTEGRATION INSIDE bot/routers/admin.py ---
+@router.callback_query(F.data == "admin:panel")
+async def show_admin_panel(callback: CallbackQuery):
+    """Sends the admin panel message with the secure passwordless button [cite: 3.4.1, 1]."""
+    settings = get_settings()
+    admin_ids = set(settings.admin_ids)
+    if settings.root_admin_telegram_id is not None:
+        admin_ids.add(settings.root_admin_telegram_id)
+
+    # Security check: only users in .env are allowed to view [cite: mandatory_channels.py, 1]
+    if callback.from_user.id not in admin_ids:
+        await callback.answer("⛔ شما دسترسی مدیریت ندارید.", show_alert=True)
+        return
+
+    await callback.answer()
+    
+    # Generate link dynamically [cite: 3.4.1, 1]
+    web_url = get_admin_web_url(callback.from_user.id)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🖥 ورود به پنل وب", url=web_url)
+    builder.button(text="↩️ بازگشت", callback_data="back_to_main")
+    builder.adjust(1)
+    
+    await callback.message.answer(
+        "🛠 <b>به پنل وب مدیریت خوش آمدید</b>\n\n"
+        "برای مانیتور کردن کاربران و ثبت/حذف آی‌پی‌ها روی دکمه زیر کلیک کنید:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+
+# bot/routers/admin.py
+
+# --- PLACE THIS COMMAND HANDLER INSIDE YOUR bot/routers/admin.py ---
+@router.message(Command("admin_web"), StateFilter("*"))
+async def cmd_admin_web(message: Message, settings: Settings) -> None:
+    """Sends the secure, passwordless Admin Panel web link directly to whitelisted admins."""
+    if message.from_user is None:
+        return
+        
+    admin_ids = set(settings.admin_ids)
+    if settings.root_admin_telegram_id is not None:
+        admin_ids.add(settings.root_admin_telegram_id)
+
+    # Security check: Only verified admin IDs can request this [cite: mandatory_channels.py, 1]
+    if message.from_user.id not in admin_ids:
+        await message.answer("⛔ شما دسترسی مدیریت ندارید.")
+        return
+
+    # Generate the secure signed URL dynamically [cite: 3.4.1, 1]
+    from bot.routers.admin import get_admin_web_url
+    web_url = get_admin_web_url(message.from_user.id)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🖥 ورود به پنل وب مدیریت", url=web_url)
+    
+    await message.answer(
+        "📊 <b>پنل وب مدیریت دی‌ان‌اس اختصاصی</b>\n\n"
+        "برای مشاهده اشتراک کاربران، پایش پینگ، و ثبت/حذف لوکیشن‌ها روی دکمه زیر کلیک کنید:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )

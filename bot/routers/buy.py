@@ -39,80 +39,24 @@ from app.services.paystar import PaystarService
 from app.services.settings_service import AppSettingsService
 from app.services.username_validator import validate_username
 from app.services.vpn_panel import VPNPanelService
-from app.services.controld import create_dns_device, ControlDService, get_category_label_fa  # ControlD direct integration
+from app.services.controld import ControlDService, get_category_label_fa
+from app.services.slot_manager import get_least_populated_personal_slot
+from app.services.ip_manager import update_device_ip_safe
 from app.utils.formatting import format_money
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
-from bot.keyboards.buy import PlanCallback, paystar_payment_keyboard  # Native filter
+from bot.keyboards.buy import PlanCallback, paystar_payment_keyboard
 from bot.states.buy import BuyStates
 
 router = Router(name="buy")
 logger = structlog.get_logger(__name__)
 
-# ============================================================================
-# CONFIGURATION & CATEGORIES DATA
-# ============================================================================
 WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 TEST_ACCOUNT_DURATION_HOURS = 2
 
-CATEGORY_MAP_FA = {
-    "gaming": "🎮 بازی‌ها (Gaming)",
-    "video": "🎬 رسانه و استریم (Video/Streaming)",
-    "social": "💬 شبکه‌های اجتماعی (Social)",
-    "ai": "🤖 هوش مصنوعی (AI & Tech)",
-    "music": "🎵 موسیقی (Music)",
-    "other": "🧩 سایر سرویس‌ها (Other)"
-}
-
-CATEGORIES = {
-    "games": {
-        "name": "🎮 بازی‌ها (Games)",
-        "services": [
-            {"pk": "callofduty", "name": "🎮 Call of Duty"},
-            {"pk": "apexlegends", "name": "🎮 Apex Legends"},
-            {"pk": "pubg", "name": "🎮 PUBG Mobile"},
-            {"pk": "fortnite", "name": "🎮 Fortnite"},
-            {"pk": "valorant", "name": "🎮 Valorant"},
-            {"pk": "leagueoflegends", "name": "🎮 League of Legends"},
-            {"pk": "roblox", "name": "🎮 Roblox"},
-            {"pk": "minecraft", "name": "🎮 Minecraft"},
-            {"pk": "steam", "name": "🎮 Steam / Epic Games"},
-            {"pk": "playstation", "name": "🎮 PlayStation Network"},
-            {"pk": "xbox", "name": "🎮 Xbox Live"}
-        ]
-    },
-    "streaming": {
-        "name": "🎬 رسانه و استریم (Streaming)",
-        "services": [
-            {"pk": "netflix", "name": "🎬 Netflix"},
-            {"pk": "youtube", "name": "📹 YouTube"},
-            {"pk": "disney", "name": "🏰 Disney+"},
-            {"pk": "twitch", "name": "🎮 Twitch / Kick"},
-            {"pk": "spotify", "name": "🎵 Spotify / Deezer"},
-            {"pk": "primevideo", "name": "🎬 Amazon Prime Video"},
-            {"pk": "hulu", "name": "🎬 Hulu"},
-            {"pk": "hbomax", "name": "🎬 HBO Max"}
-        ]
-    },
-    "tools": {
-        "name": "🤖 ابزارها و هوش مصنوعی (AI & Tech)",
-        "services": [
-            {"pk": "chatgpt", "name": "🤖 ChatGPT / OpenAI"},
-            {"pk": "claude", "name": "🤖 Claude / Anthropic"},
-            {"pk": "gemini", "name": "🤖 Google Gemini"},
-            {"pk": "discord", "name": "💬 Discord"},
-            {"pk": "telegram", "name": "💬 Telegram"},
-            {"pk": "twitter", "name": "💬 Twitter / X"}
-        ]
-    }
-}
-
 
 async def _safe_edit_or_reply(callback: CallbackQuery, text: str, reply_markup=None) -> None:
-    """
-    Safely edits the message if it was sent by the bot (inline button click),
-    or replies with a new message if it was sent by the user (reply keyboard click) [1].
-    """
+    """Safely edits bot messages or replies to user interactions."""
     bot = getattr(callback, "bot", None)
     bot_id = getattr(bot, "id", None)
     if callback.message and callback.message.from_user and bot_id is not None and callback.message.from_user.id == bot_id:
@@ -125,7 +69,7 @@ async def _safe_edit_or_reply(callback: CallbackQuery, text: str, reply_markup=N
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
-    """Generates the inline keyboard matching your design screenshot."""
+    """Generates the inline keyboard for automatic and manual IP registrations."""
     builder = InlineKeyboardBuilder()
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
@@ -135,7 +79,7 @@ def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
 
 
 def format_duration_fa(hours: int) -> str:
-    """Formats hours dynamically into a readable Persian duration string."""
+    """Helper to cleanly format duration hours into Persian texts."""
     if hours >= 24 and hours % 24 == 0:
         days = hours // 24
         return f"{days} روز"
@@ -165,7 +109,7 @@ def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
 
 
 def format_datetime_fa(value: datetime | None) -> str:
-    """Formats datetimes for the Tehran timezone, preferring Jalali output."""
+    """Formats standard datetimes into Shamsi format cleanly."""
     if value is None:
         return "نامشخص"
 
@@ -176,7 +120,8 @@ def format_datetime_fa(value: datetime | None) -> str:
     localized = value.astimezone(tehran_tz)
 
     try:
-        return jdatetime.datetime.fromgregorian(datetime=localized).strftime("%Y/%m/%d - %H:%M:%S")
+        naive_tehran = localized.replace(tzinfo=None)
+        return jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
     except Exception:
         return localized.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -211,34 +156,8 @@ async def _get_latest_test_service(session: AsyncSession, user_id: int) -> VPNSe
     return result.scalars().first()
 
 
-async def _apply_test_route(controld_service: ControlDService, profile_id: str, service_pk: str, pop_code: str) -> bool:
-    try:
-        if service_pk == "default":
-            return await controld_service.update_profile_default(profile_id, pop_code)
-        return await controld_service.update_service_route(profile_id, service_pk, pop_code)
-    except Exception as exc:
-        logger.exception(
-            "failed_to_apply_test_route",
-            profile_id=profile_id,
-            service_pk=service_pk,
-            pop_code=pop_code,
-            error=str(exc),
-        )
-        return False
-
-
-async def _best_effort_delete_device(controld_service: ControlDService, device_id: str | None) -> None:
-    if not device_id:
-        return
-
-    try:
-        await controld_service.delete_device(device_id)
-    except Exception as exc:
-        logger.warning("failed_to_cleanup_test_device", device_id=device_id, error=str(exc))
-
-
 async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
-    """Queries Control D on approval to fetch the exact legacy IPv4 addresses."""
+    """Queries Control D to retrieve legacy IPv4 endpoint resolvers."""
     url = f"https://api.controld.com/devices/{device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
@@ -333,11 +252,10 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 
 
 # ============================================================================
-# 2. THE TEST ACCOUNT FLOW WITH WORLDWIDE COUNTRIES & DYNAMIC CATEGORIES
+# 2. THE TEST ACCOUNT FLOW (RE-ROUTED TO STATIC BALANCER SLOTS)
 # ============================================================================
 
-# bot/routers/buy.py
-
+# --- LOCATE AND REPLACE handle_get_test_account ---
 @router.callback_query(F.data == "get_test_account", StateFilter("*"))
 async def handle_get_test_account(
     callback: CallbackQuery,
@@ -365,7 +283,7 @@ async def handle_get_test_account(
         await _safe_edit_or_reply(
             callback,
             "⚠️ شما قبلا یک اکانت تست فعال دارید.\n\n"
-            f"👤 نام دستگاه: <code>{escape(active_test.username)}</code>\n"
+            f"👤 نام دستگاه: <code>{escape(active_test.username.split('|')[0])}</code>\n"
             f"🗓 تاریخ ایجاد: {format_datetime_fa(active_test.created_at)}\n"
             f"🗓 تاریخ انقضا: {format_datetime_fa(active_test.expire_at)}\n"
             f"⏳ زمان باقی‌مانده: {calculate_remaining_time_fa(active_test.expire_at)}",
@@ -382,35 +300,10 @@ async def handle_get_test_account(
         )
         return
 
-    profile_id = settings.controld_profile_id
-    if not profile_id:
-        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
-        return
-
-    controld_service = ControlDService(settings)
-    services = await controld_service.fetch_controld_services(profile_id)
-
-    if not services:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌های معتبر رخ داد.", reply_markup=main_menu_keyboard())
-        return
-
-    # Extract all unique categories dynamically
-    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
-
-    from app.services.controld import get_category_label_fa
-
-    # Dynamic Category Selector Menu
+    # Strictly display only Default Traffic and Gaming Categories
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
-
-    # Filter loop
-    category_blacklist = {"hosting", "tools", "vendors"}
-    for key in unique_categories:
-        if key.lower() in category_blacklist:
-            continue
-        label = get_category_label_fa(key)
-        builder.button(text=label, callback_data=f"test_cat:{key}:0")
-    builder.button(text="🧩 سایر سرویس‌ها (Other)", callback_data="test_cat:other:0")
+    builder.button(text="🎮 بازی‌ها (Gaming)", callback_data="test_cat:gaming:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -469,181 +362,6 @@ async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
         reply_markup=builder.as_markup(),
     )
-    return
-
-    await state.clear()
-
-    await state.clear()
-
-    parts = callback.data.split(":")
-    service_pk = parts[1]
-    pop_code = parts[2]
-
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-    if user is None:
-        return
-
-    now = datetime.now(timezone.utc).replace(microsecond=0)
-    active_test = await _get_active_test_service(session, user.id, now)
-    if active_test is not None:
-        await _safe_edit_or_reply(
-            callback,
-            "⚠️ شما قبلا یک اکانت تست فعال دارید.\n\n"
-            f"👤 نام دستگاه: <code>{escape(active_test.username)}</code>\n"
-            f"🗓 تاریخ ایجاد: {format_datetime_fa(active_test.created_at)}\n"
-            f"🗓 تاریخ انقضا: {format_datetime_fa(active_test.expire_at)}\n"
-            f"⏳ زمان باقی‌مانده: {calculate_remaining_time_fa(active_test.expire_at)}",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    existing_test = await _get_latest_test_service(session, user.id)
-    if existing_test is not None:
-        await _safe_edit_or_reply(
-            callback,
-            "❌ شما قبلا از اکانت تست استفاده کرده‌اید و امکان دریافت مجدد وجود ندارد.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    await _safe_edit_or_reply(callback, "⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...")
-
-    profile_id = settings.controld_profile_id
-    if not profile_id:
-        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
-        return
-
-    random_hex = secrets.token_hex(4)
-    unique_device_name = f"tg_test_{user.telegram_id}_{random_hex}"
-
-    controld_service = ControlDService(settings)
-
-    try:
-        device_data = await controld_service.create_dns_device(
-            tg_user_id=user.telegram_id,
-            profile_id=profile_id,
-            duration_hours=TEST_ACCOUNT_DURATION_HOURS,
-            device_name=unique_device_name,
-        )
-    except Exception as exc:
-        logger.exception("failed_to_create_test_device", user_id=user.id, error=str(exc))
-        device_data = None
-
-    if device_data is None:
-        await _safe_edit_or_reply(
-            callback,
-            "❌ خطا در برقراری ارتباط با سرورهای Control D.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    device_id = device_data["device_id"]
-    if not await _apply_test_route(controld_service, profile_id, service_pk, pop_code):
-        await _best_effort_delete_device(controld_service, device_id)
-        await _safe_edit_or_reply(
-            callback,
-            "❌ خطا در اعمال مسیر سرویس Control D. لطفا دوباره تلاش کنید.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    now = datetime.now(timezone.utc).replace(microsecond=0)
-    expire_at = now + timedelta(hours=TEST_ACCOUNT_DURATION_HOURS)
-
-    new_test_sub = VPNService(
-        user_id=user.id,
-        plan_id=None,
-        controld_device_id=device_id,
-        config_link=device_data["doh"],
-        subscription_link=device_data["dot"],
-        username=unique_device_name,
-        created_at=now,
-        expire_at=expire_at,
-        status=VPNServiceStatus.ACTIVE.value,
-        is_test_account=True,
-    )
-
-    try:
-        session.add(new_test_sub)
-        await session.commit()
-    except Exception as exc:
-        await session.rollback()
-        logger.exception("failed_to_store_test_account", user_id=user.id, error=str(exc))
-        await _best_effort_delete_device(controld_service, device_id)
-        await _safe_edit_or_reply(
-            callback,
-            "❌ ذخیره‌سازی اکانت تست با خطا مواجه شد. لطفا دوباره تلاش کنید.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    duration_text = "۲ ساعت"
-    expire_str = format_datetime_fa(expire_at)
-
-    success_text = f"""🔹 تاریخ انقضا پلن : {expire_str}
-🔷 زمان باقی‌مانده: {duration_text}
-دی ان اس اختصاصی شما :
-
-🔹 Primary : <code>{device_data['ipv4_primary']}</code>
-🔹 Secondary : <code>{device_data['ipv4_secondary']}</code>
-
-
-مراحل ثبت آی‌پی :
-1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
-2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
-❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
-
-⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفا وضعیت اتصال اینترنت خود را شخصا بررسی کنید."""
-
-    await callback.message.answer(
-        success_text,
-        reply_markup=_get_ip_registration_keyboard(device_id),
-        parse_mode="HTML",
-    )
-    return
-    category_key = parts[1]
-    page = int(parts[2])
-    
-    controld = ControlDService(settings)
-    services = await controld.fetch_controld_services(settings.controld_profile_id)
-    if not services:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
-        return
-        
-    filtered = [s for s in services if s["category"] == category_key]
-    filtered.sort(key=lambda x: (x["name"] or "").lower())
-    
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_items = filtered[start_idx:end_idx]
-    has_next = len(filtered) > end_idx
-
-    builder = InlineKeyboardBuilder()
-    for s in page_items:
-        builder.button(
-            text=s["name"] or s["pk"],
-            callback_data=f"test_select_srv:{s['pk']}"
-        )
-    
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_cat:{category_key}:{page - 1}"))
-    if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"test_cat:{category_key}:{page + 1}"))
-    if nav_buttons:
-        builder.row(*nav_buttons)
-        
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data="get_test_account"))
-    builder.adjust(2)
-    
-    category_label = get_category_label_fa(category_key)
-    await _safe_edit_or_reply(
-        callback,
-        f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
-        f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
-        reply_markup=builder.as_markup()
-    )
 
 
 @router.callback_query(F.data.startswith("test_select_srv:"), StateFilter("*"))
@@ -658,63 +376,30 @@ async def handle_test_select_srv(
     await _show_test_loc_page(callback, service_pk, page=0, settings=settings)
 
 
+# --- LOCATE AND REPLACE _show_test_loc_page ---
 async def _show_test_loc_page(callback: CallbackQuery, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the paginated test location selector dynamically [cite: 1]."""
-    controld_service = ControlDService(settings)
-    proxies = await controld_service.fetch_controld_proxies()
-    
-    if not proxies:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    # Sort countries alphabetically
-    proxies.sort(key=lambda x: x["country_name"].lower())
-
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_proxies = proxies[start_idx:end_idx]
-    has_next = len(proxies) > end_idx
+    """Renders the trial selection menu showing exactly your 5 premium static servers [cite: 1]."""
+    from app.config import SLOT_CONFIGS
 
     builder = InlineKeyboardBuilder()
-    for p in page_proxies:
-        p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
+    for slot_num, config in SLOT_CONFIGS.items():
         builder.button(
-            text=p_name,  # Clean Flag City POP layout
-            callback_data=f"apply_test_loc:{service_pk}:{p['code']}"  # Uses correct trial creation callback data
+            text=config["name"],
+            callback_data=f"apply_test_loc:{service_pk}:{slot_num}" # We pass the Slot Number!
         )
 
-    # 1. Adjust countries first
-    builder.adjust(2)
-
-    # 2. Navigation Controls
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_loc_page:{service_pk}:{page - 1}"))
-    if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"test_loc_page:{service_pk}:{page + 1}"))
-    if nav_buttons:
-        builder.row(*nav_buttons)
-
+    builder.adjust(1)
     builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="get_test_account"))
 
     await _safe_edit_or_reply(
         callback,
-        f"🗺 <b>انتخاب لوکیشن سرور تست</b> | صفحه {page + 1}\n\n"
-        f"لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
+        "🗺 <b>انتخاب لوکیشن سرور تست</b>\n\n"
+        "لطفاً کشور (سرور) مورد نظر خود را برای اکانت تست خود انتخاب کنید:",
         reply_markup=builder.as_markup()
     )
 
 
-@router.callback_query(F.data.startswith("test_loc_page:"), StateFilter("*"))
-async def handle_test_loc_page(callback: CallbackQuery, settings: Settings) -> None:
-    await callback.answer()
-    parts = callback.data.split(":")
-    service_pk = parts[1]
-    page = int(parts[2])
-    await _show_test_loc_page(callback, service_pk, page, settings)
-
-
+# --- LOCATE AND REPLACE handle_apply_test_loc ---
 @router.callback_query(F.data.startswith("apply_test_loc:"), StateFilter("*"))
 async def handle_apply_test_loc(
     callback: CallbackQuery,
@@ -722,13 +407,14 @@ async def handle_apply_test_loc(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
+    """Creates a 2-hour free test subscription bound directly to the chosen static slot [cite: buy.py, 1]."""
     await callback.answer()
     if callback.message is None or callback.from_user is None:
         return
 
     parts = callback.data.split(":")
     service_pk = parts[1]
-    pop_code = parts[2]
+    slot_num = int(parts[2])
 
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
     if user is None:
@@ -736,41 +422,24 @@ async def handle_apply_test_loc(
 
     await _safe_edit_or_reply(callback, "⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...")
 
-    profile_id = settings.controld_profile_id
-    if not profile_id:
-        await callback.message.answer("❌ تنظیمات اکانت تست از طرف مدیریت کامل نیست.")
-        return
-
-    random_hex = secrets.token_hex(4)
-    unique_device_name = f"tg_test_{user.telegram_id}_{random_hex}"
-
-    controld_service = ControlDService(settings)
-    device_data = await controld_service.create_dns_device(
-        tg_user_id=user.telegram_id,
-        profile_id=profile_id,
-        duration_hours=2,
-        device_name=unique_device_name
-    )
-
-    if device_data is None:
-        await callback.message.answer("❌ خطا در برقراری ارتباط با سرورهای Control D.")
-        return
-
-    device_id = device_data["device_id"]
-    if service_pk == "default":
-        await controld_service.update_profile_default(profile_id, pop_code)  
-    else:
-        await controld_service.update_service_route(profile_id, service_pk, pop_code)  
+    from app.config import SLOT_CONFIGS
+    device_id = SLOT_CONFIGS[slot_num]["device_id"]
+    ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
+    ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
 
     now = datetime.now(timezone.utc)
     expire_at = now + timedelta(hours=2)
+    random_hex = secrets.token_hex(4)
+    
+    # Bundle the Slot Number inside the custom metadata username
+    unique_device_name = f"tg-test-{user.telegram_id}-{random_hex}|{service_pk}|{slot_num}"
 
     new_test_sub = VPNService(
         user_id=user.id,
         plan_id=None,
         controld_device_id=device_id,
-        config_link=device_data["doh"],
-        subscription_link=device_data["dot"],
+        config_link="sdns://placeholder",
+        subscription_link="sdns://placeholder",
         username=unique_device_name,
         expire_at=expire_at,
         status="active",
@@ -781,22 +450,14 @@ async def handle_apply_test_loc(
     await state.clear()
 
     duration_text = "۲ ساعت"
-
-    try:
-        tehran_tz = ZoneInfo("Asia/Tehran")
-        tehran_expire = expire_at.astimezone(tehran_tz)
-        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=tehran_expire)
-        expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
-    except ImportError:
-        tehran_tz = ZoneInfo("Asia/Tehran")
-        expire_str = expire_at.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
+    expire_str = format_datetime_fa(expire_at)
 
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
 🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
-🔷 Primary : <code>{device_data['ipv4_primary']}</code>
-🔷 Secondary : <code>{device_data['ipv4_secondary']}</code>
+🔷 Primary : <code>{ipv4_primary}</code>
+🔷 Secondary : <code>{ipv4_secondary}</code>
 
 
 مراحل ثبت آی‌پی :
@@ -804,7 +465,9 @@ async def handle_apply_test_loc(
 2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
+
+📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
 
     await callback.message.answer(
         success_text, 
@@ -814,11 +477,10 @@ async def handle_apply_test_loc(
 
 
 # ============================================================================
-# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW WITH PAGINATION
+# 3. CHOOSE PLAN, CATEGORY, GAME & LOCATION SELECTION FLOW
 # ============================================================================
 
-# bot/routers/buy.py
-
+# --- LOCATE AND REPLACE handle_buy_plan_select ---
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
 async def handle_buy_plan_select(
     callback: CallbackQuery,
@@ -839,31 +501,10 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Fetch all services dynamically from Control D first to build categories
-    profile_id = plan.controld_profile_id or settings.controld_profile_id or "default"
-    controld_service = ControlDService(settings)
-    services = await controld_service.fetch_controld_services(profile_id)
-    
-    if not services:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    # Extract all unique categories dynamically
-    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
-
-    from app.services.controld import get_category_label_fa
-
+    # Strictly display only Default Traffic and Gaming Categories
     builder = InlineKeyboardBuilder()
     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
-    
-    # Strictly filter out the unneeded technical categories
-    category_blacklist = {"hosting", "tools", "vendors"}
-    for cat_key in unique_categories:
-        if cat_key.lower() in category_blacklist:
-            continue
-        label = get_category_label_fa(cat_key)
-        builder.button(text=label, callback_data=f"srv_cat:{plan.id}:{cat_key}:0")
-        
+    builder.button(text="🎮 بازی‌ها (Gaming)", callback_data=f"srv_cat:{plan.id}:gaming:0")
     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
 
@@ -890,7 +531,6 @@ async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, setting
         await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
         return
         
-    # Filter services based on the dynamically selected category key
     filtered = [s for s in services if s["category"] == category_key]
     filtered.sort(key=lambda x: (x["name"] or "").lower())
     
@@ -939,7 +579,7 @@ async def handle_buy_plan_srv(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1
+    plan_id = int(parts[1])
     service_pk = parts[2]
 
     controld_service = ControlDService(settings)
@@ -949,55 +589,29 @@ async def handle_buy_plan_srv(
         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
         return
 
-    # Redirect to page 0 of the purchase country selector
     await _show_buy_loc_page(callback, plan_id, service_pk, page=0, settings=settings)
 
 
+
+# --- LOCATE AND REPLACE _show_buy_loc_page ---
 async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the paginated purchase location selector dynamically."""
-    controld_service = ControlDService(settings)
-    proxies = await controld_service.fetch_controld_proxies()
-    
-    if not proxies:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    # Sort countries alphabetically
-    proxies.sort(key=lambda x: x["country_name"].lower())
-
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_proxies = proxies[start_idx:end_idx]
-    has_next = len(proxies) > end_idx
+    """Renders the selection menu showing exactly your 5 premium static servers [cite: 1]."""
+    from app.config import SLOT_CONFIGS
 
     builder = InlineKeyboardBuilder()
-    for p in page_proxies:
-        p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
+    for slot_num, config in SLOT_CONFIGS.items():
         builder.button(
-            text=p_name,  # Clean Flag City POP layout
-            callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{p['code']}"
+            text=config["name"],
+            callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{slot_num}" # We pass the Slot Number!
         )
 
-    # 1. Adjust countries first
-    builder.adjust(2)
-
-    # 2. Navigation Controls
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"buy_loc_page:{plan_id}:{service_pk}:{page - 1}"))
-    if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"buy_loc_page:{plan_id}:{service_pk}:{page + 1}"))
-    if nav_buttons:
-        builder.row(*nav_buttons)
-
-    # 3. Append Back Button cleanly at the bottom
+    builder.adjust(1)
     builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id).pack()))
 
     await _safe_edit_or_reply(
         callback,
-        f"🗺 <b>انتخاب لوکیشن سرور</b> | صفحه {page + 1}\n\n"
-        f"لطفاً کشور (لوکیشن) مورد نظر خود را برای این بازی/سرویس انتخاب کنید:",
+        "🗺 <b>انتخاب لوکیشن سرور</b>\n\n"
+        "لطفاً کشور (سرور) مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
         reply_markup=builder.as_markup()
     )
 
@@ -1023,7 +637,7 @@ async def handle_buy_plan_loc(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
+    plan_id = int(parts[1])
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -1039,12 +653,11 @@ async def handle_buy_plan_loc(
     if user is None:
         return
 
-    # 1. Resolve Game/Service display name dynamically from Control D [cite: 1]
+    # Resolve Game/Service display name
     service_display = service_pk.capitalize()
     if service_pk == "default":
         service_display = "🌐 کل ترافیک اینترنت"
     else:
-        # Query Control D dynamically to retrieve the correct, un-hardcoded display name [cite: 1]
         controld_service = ControlDService(settings)
         services = await controld_service.fetch_controld_services(settings.controld_profile_id or "default")
         if services:
@@ -1063,11 +676,9 @@ async def handle_buy_plan_loc(
                 country_display = f"{p['country_name']} - {p['city_name']} ({p['code']})"
                 break
 
-    # Safe duration formatting
     duration_hours = plan.duration_hours or 720
     duration_text = format_duration_fa(duration_hours)
 
-    # Check renewal
     active_stmt = select(VPNService).where(
         VPNService.user_id == user.id,
         VPNService.status == "active"
@@ -1105,7 +716,7 @@ async def handle_buy_plan_loc(
 
 
 # ============================================================================
-# 4. INSTANT PAYMENT FROM WALLET WITH GLOBAL LOCATION ROUTING  
+# 4. INSTANT PAYMENT FROM WALLET (RE-ROUTED TO STATIC BALANCER SLOTS)
 # ============================================================================
 
 @router.callback_query(F.data.startswith("pay_instant_wallet:"), StateFilter("*"))
@@ -1115,12 +726,13 @@ async def handle_pay_instant_wallet(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
+    """Processes wallet checkouts by allocating slot from permanent load balancer [cite: buy.py, 1]."""
     await callback.answer()
     if callback.message is None or callback.from_user is None:
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
+    plan_id = int(parts[1])
     service_pk = parts[2]
     pop_code = parts[3]
 
@@ -1147,7 +759,6 @@ async def handle_pay_instant_wallet(
     if current_sub is not None:
         final_price = plan.price - int(plan.price * 0.1)
 
-    # Validate wallet balance  
     if user.wallet_balance < final_price:
         await callback.message.answer(
             f"❌ موجودی کیف پول کافی نیست.\n"
@@ -1163,41 +774,37 @@ async def handle_pay_instant_wallet(
     profile_id = plan.controld_profile_id or settings.controld_profile_id
 
     if current_sub is None:
-        # Create new device
-        expire_at = now + timedelta(hours=plan.duration_hours)
-        random_hex = secrets.token_hex(4)
-        unique_device_name = f"tg_user_{user.telegram_id}_{random_hex}"
-
-        # Provision device on Control D
-        device_data = await create_dns_device(
-            tg_user_id=user.telegram_id,
-            profile_id=profile_id,
-            duration_hours=plan.duration_hours,
-            device_type="mobile",
-            device_name=unique_device_name
-        )
-
-        if device_data is None:
-            await callback.message.answer("❌ خطا در برقراری ارتباط با سرهمان دی‌ان‌اس.")
+        # Allocate slot from permanent balancer pool [cite: 1]
+        try:
+            device_id = await get_least_populated_personal_slot(session)
+        except Exception as exc:
+            await callback.message.answer(f"❌ خطا در تخصیص اسلات دی‌ان‌اس: {str(exc)}")
             return
 
-        device_id = device_data["device_id"]
+        expire_at = now + timedelta(hours=plan.duration_hours)
+        random_hex = secrets.token_hex(4)
+        
+        # Save persistent metadata string to DB for correct dashboard rendering [cite: services.py]
+        unique_device_name = f"tg-user-{user.telegram_id}-{random_hex}|{service_pk}|{pop_code}"
+
+        # Fetch DNS resolvers [cite: 1]
+        device_data = await get_controld_device_ips(device_id, settings)
         ipv4_primary = device_data["ipv4_primary"]
         ipv4_secondary = device_data["ipv4_secondary"]
 
-        # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ---
-        controld_service = ControlDService(settings)
-        if service_pk == "default":
-            await controld_service.update_profile_default(profile_id, pop_code)  
-        else:
-            await controld_service.update_service_route(profile_id, service_pk, pop_code)  
+        # Apply chosen routing country directly [cite: buy.py]
+        # controld_service = ControlDService(settings)
+        # if service_pk == "default":
+        #     await controld_service.update_profile_default(profile_id, pop_code)  
+        # else:
+        #     await controld_service.update_service_route(profile_id, service_pk, pop_code)  
 
         new_subscription = VPNService(
             user_id=user.id,
             plan_id=plan.id,
             controld_device_id=device_id,
-            config_link=device_data["doh"],
-            subscription_link=device_data["dot"],
+            config_link="sdns://placeholder",
+            subscription_link="sdns://placeholder",
             username=unique_device_name,
             expire_at=expire_at,
             status="active"
@@ -1205,7 +812,7 @@ async def handle_pay_instant_wallet(
         session.add(new_subscription)
         
     else:
-        # Renewal - accumulate time
+        # Renewal - Simply extend time, avoid setting a custom TTL on Control D [cite: buy.py, 1]
         current_expire = current_sub.expire_at
         if current_expire.tzinfo is None:
             current_expire = current_expire.replace(timezone.utc)
@@ -1214,49 +821,29 @@ async def handle_pay_instant_wallet(
         current_sub.expire_at = expire_at
         current_sub.plan_id = plan.id
 
-        new_disable_ttl = int(expire_at.timestamp())
-        controld_service = ControlDService(settings)
-        
-        success = await controld_service.update_device(
-            device_id=current_sub.controld_device_id,
-            disable_ttl=new_disable_ttl
-        )
-
-        if not success:
-            await callback.message.answer("❌ خطا در تمدید اشتراک در سرورهای Control D.")
-            return
-
         device_id = current_sub.controld_device_id
         
-        # --- REDIRECT THE SELECTED GAME ROUTE VIA CHOSEN COUNTRY ON RENEWAL ---
-        if service_pk == "default":
-            await controld_service.update_profile_default(profile_id, pop_code)  
-        else:
-            await controld_service.update_service_route(profile_id, service_pk, pop_code)  
+        # Apply chosen routing country directly [cite: buy.py]
+        # controld_service = ControlDService(settings)
+        # if service_pk == "default":
+        #     await controld_service.update_profile_default(profile_id, pop_code)  
+        # else:
+        #     await controld_service.update_service_route(profile_id, service_pk, pop_code)  
 
-        # Use our real-time IP fallback getter to fetch dynamic IPs  
-        ips = await get_controld_device_ips(device_id, settings)
-        ipv4_primary = ips["ipv4_primary"]
-        ipv4_secondary = ips["ipv4_secondary"]
+        # Fetch DNS resolvers [cite: 1]
+        device_data = await get_controld_device_ips(device_id, settings)
+        ipv4_primary = device_data["ipv4_primary"]
+        ipv4_secondary = device_data["ipv4_secondary"]
 
-    # Atomic balance deduction  
+    # Balance deduction  
     user.wallet_balance -= final_price
     await session.commit()
     await state.clear()
 
     # Format Expiration
     duration_text = calculate_remaining_time_fa(expire_at)  
+    expire_str = format_datetime_fa(expire_at)
 
-    try:
-        tehran_tz = ZoneInfo("Asia/Tehran")
-        tehran_expire = expire_at.astimezone(tehran_tz)
-        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=tehran_expire)
-        expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
-    except ImportError:
-        tehran_tz = ZoneInfo("Asia/Tehran")
-        expire_str = expire_at.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-    # Success Card Message
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
 🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
@@ -1270,7 +857,9 @@ async def handle_pay_instant_wallet(
 2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
+
+📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
 
     await callback.message.answer(
         success_text, 
@@ -1295,9 +884,9 @@ async def handle_pay_manual_card(
         return
 
     parts = callback.data.split(":")
-    plan_id = int(parts[1])  # <-- FIXED: Accessed index 1 [cite: 1]
+    plan_id = int(parts[1])
     service_pk = parts[2]
-    pop_code = parts[3]  # Selected location POP code  
+    pop_code = parts[3]
 
     plan = await PlansRepository(session).get(plan_id)
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
@@ -1317,7 +906,7 @@ async def handle_pay_manual_card(
     if current_sub is not None:
         final_price = plan.price - int(plan.price * 0.1)
 
-    # --- GENIUS WORKAROUND: Append chosen location (POP code) and game_pk directly into order custom_username ---
+    # Append chosen location (POP code) and game_pk directly into order custom_username
     custom_username = f"dns_user_{user.telegram_id}|{service_pk}|{pop_code}"
 
     # Build database order & payment records
@@ -1419,7 +1008,7 @@ async def handle_pay_online_paystar(
     if not token:
         await session.rollback()
         await callback.message.answer(
-            "❌ ساخت درگاه پی‌استار ناموفق بود. لطفاً دوباره تلاش کنید یا روش دیگری را انتخاب کنید.",
+            "❌ ساخت درگاه بانکی ناموفق بود. لطفاً دوباره تلاش کنید یا روش دیگری را انتخاب کنید.",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -1432,7 +1021,7 @@ async def handle_pay_online_paystar(
 
     redirect_url = f"{settings.public_web_base_url}/paystar/redirect?token={token}"
     await callback.message.answer(
-        f"""💳 درگاه پرداخت پی‌استار آماده است
+        f"""💳 درگاه پرداخت بانکی آماده است
 
 مبلغ قابل پرداخت:
 {format_money(final_price)} تومان
@@ -1477,7 +1066,6 @@ async def receive_receipt_photo(
 
     await message.answer("✅ رسید شما دریافت شد و در انتظار تایید ادمین است.")
 
-    # --- FIXED: Local import to bypass circular dependency name-error ---
     from bot.notifications import notify_admins_order_payment 
 
     sent_count = await notify_admins_order_payment(
@@ -1493,13 +1081,13 @@ async def receive_receipt_photo(
 
 
 # ============================================================================
-# 6. MANUAL IP REGISTRATION FSM FLOW
+# MANUAL IP REGISTRATION FSM FLOW
 # ============================================================================
 
 @router.callback_query(F.data.startswith("manual_ip_reg:"), StateFilter("*"))
 async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    device_id = callback.data.split(":")[1]  # <-- FIXED: Accessed index 1 [cite: 1]
+    device_id = callback.data.split(":")[1]
     
     await state.set_state(BuyStates.waiting_manual_ip)
     await state.update_data(device_id=device_id)
@@ -1530,51 +1118,20 @@ async def process_manual_ip(
         await message.answer("❌ خطای سیستمی. لطفاً مجدداً تلاش کنید.")
         return
 
-    url = f"https://api.controld.com/devices/{device_id}/ips"
-    headers = {
-        "Authorization": f"Bearer {settings.controld_api_token}",
-        "Content-Type": "application/json",
-        "accept": "application/json"
-    }
-    payload = {"ip": user_ip}
+    stmt = select(VPNService).where(VPNService.controld_device_id == device_id, VPNService.status == "active").limit(1)
+    res = await session.execute(stmt)
+    service = res.scalars().first()
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(url, json=payload, headers=headers, timeout=10.0)
-            if response.status_code in (200, 201):
-                await state.clear()
-                await message.answer(f"✅ آی‌پی <code>{user_ip}</code> با موفقیت به صورت دستی برای دستگاه شما ثبت شد.", parse_mode="HTML")
-            else:
-                await message.answer(f"❌ خطا در ثبت آی‌پی در سیستم Control D:\n<code>{response.text}</code>", parse_mode="HTML")
-        except Exception as e:
-            await message.answer(f"❌ خطا در ارتباط با پنل Control D: {str(e)}")
+    if not service:
+        await state.clear()
+        await message.answer("❌ دستگاه فعال متناظر با این اشتراک یافت نشد.")
+        return
 
+    from app.services.ip_manager import update_device_ip_safe
+    success = await update_device_ip_safe(session, service, user_ip)
 
-# ============================================================================
-# REAL-TIME IP FETCHING FALLBACK HELPER  
-# ============================================================================
-
-async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
-    url = f"https://api.controld.com/devices/{device_id}"
-    headers = {
-        "Authorization": f"Bearer {settings.controld_api_token}",
-        "Content-Type": "application/json"
-    }
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, timeout=10.0)
-            if response.status_code == 200:
-                data = response.json()
-                body = data.get("body", {})
-                resolver_info = body.get("resolvers") or body.get("resolver") or []
-                v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
-                return {
-                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.22",
-                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "76.76.10.22"  # <-- FIXED: Accessed index 1 [cite: 1]
-                }
-        except Exception:
-            pass
-    return {
-        "ipv4_primary": "76.76.2.22",
-        "ipv4_secondary": "76.76.10.22"
-    }
+    if success:
+        await state.clear()
+        await message.answer(f"✅ آی‌پی <code>{user_ip}</code> با موفقیت به صورت دستی برای دستگاه شما ثبت شد.", parse_mode="HTML")
+    else:
+        await message.answer(f"❌ خطا در ثبت آی‌پی در سیستم Control D. مجدداً تلاش کنید.")

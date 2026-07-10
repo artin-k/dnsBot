@@ -365,6 +365,9 @@ class VPNService(TimestampMixin, Base):
         ForeignKey("config_inventory.id", ondelete="SET NULL"),
         index=True,
     )
+
+    authorized_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+
     controld_device_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     is_test_account: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     

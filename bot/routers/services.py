@@ -3,6 +3,7 @@ from html import escape
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import httpx
+import structlog
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -12,45 +13,37 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.config import Settings
+from app.config import Settings, get_settings, SLOT_CONFIGS
 from app.models import Plan, VPNService
 from app.repositories.services import ServicesRepository
 from app.repositories.users import UsersRepository
-from app.services.controld import ControlDService, get_country_name_fa, get_flag_emoji, get_city_name_fa  # Wrapper integrations
-from app.utils.formatting import format_datetime  # Standard datetime formatter
+from app.services.controld import ControlDService
+from app.utils.formatting import format_datetime
 from bot import menu_actions
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
 from bot.keyboards.services import ServiceActionCallback
 
 router = Router(name="services")
+logger = structlog.get_logger(__name__)
 
-# Dynamic Category Labels [1]
-CATEGORY_MAP_FA = {
-    "gaming": "🎮 بازی‌ها (Gaming)",
-    "video": "🎬 رسانه و استریم (Video/Streaming)",
-    "social": "💬 شبکه‌های اجتماعی (Social)",
-    "ai": "🤖 هوش مصنوعی (AI & Tech)",
-    "music": "🎵 موسیقی (Music)",
-    "other": "🧩 سایر سرویس‌ها (Other)"
-}
+WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 
-# Define popular services supported by Control D
-POPULAR_SERVICES = [
-    {"pk": "default", "name": "🌐 کل ترافیک اینترنت (Default)"},
-    {"pk": "callofduty", "name": "🎮 Call of Duty"},
-    {"pk": "apexlegends", "name": "🎮 Apex Legends"},
-    {"pk": "pubg", "name": "🎮 PUBG Mobile"},
-    {"pk": "fortnite", "name": "🎮 Fortnite"},
-    {"pk": "youtube", "name": "📹 YouTube"},
-    {"pk": "netflix", "name": "🎬 Netflix"}
-]
+
+def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
+    """Generates the automatic and manual IP registration controls [cite: buy.py]."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{device_id}")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 def format_service_item_display(service: VPNService, index: int) -> str:
     """
-    Parses database metadata out of raw pipe-delimited username strings 
-    and formats them into beautiful Persian representations with flags [1].
+    Parses active subscription metadata cleanly to display beautiful 
+    Persian flag tags and localized server names [cite: services.py].
     """
     raw_username = service.username or ""
     service_display = "کل ترافیک اینترنت (Default)"
@@ -61,9 +54,9 @@ def format_service_item_display(service: VPNService, index: int) -> str:
         parts = raw_username.split("|")
         username_part = parts[0]
         service_pk = parts[1] if len(parts) > 1 else "default"
-        pop_code = parts[2] if len(parts) > 2 else None
+        slot_num_str = parts[2] if len(parts) > 2 else None
         
-        # Resolve Game Display
+        # Format game/service display name
         if service_pk != "default":
             try:
                 from bot.routers.buy import CATEGORIES
@@ -75,9 +68,11 @@ def format_service_item_display(service: VPNService, index: int) -> str:
             except Exception:
                 service_display = service_pk.capitalize()
                 
-        # Resolve Country Flag & Name [1]
-        if pop_code:
-            country_display = f"{get_flag_emoji(pop_code)} {get_country_name_fa(pop_code)} ({pop_code})"
+        # Resolve static slot display name [cite: services.py, 1]
+        if slot_num_str and slot_num_str.isdigit():
+            slot_num = int(slot_num_str)
+            if slot_num in SLOT_CONFIGS:
+                country_display = SLOT_CONFIGS[slot_num]["name"]
     
     status_fa = "🟢 فعال" if service.status == "active" else "🔴 منقضی شده"
     
@@ -90,9 +85,15 @@ def format_service_item_display(service: VPNService, index: int) -> str:
 """
 
 
-def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
-    """Generates active service management keyboard."""
+def _get_service_manage_keyboard(service_id: int, device_id: str | None = None) -> InlineKeyboardMarkup:
+    """Generates active service management keyboard with side-by-side quick action pairings [cite: services.py]."""
     builder = InlineKeyboardBuilder()
+    
+    # Add quick IP registration actions directly in management panel [cite: buy.py]
+    if device_id:
+        builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+        builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{device_id}")
+        
     builder.button(
         text="🔗 لینک‌های اتصال",
         callback_data=ServiceActionCallback(action="link", service_id=service_id)
@@ -102,15 +103,21 @@ def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
         callback_data=ServiceActionCallback(action="status", service_id=service_id)
     )
     builder.button(
+        # Rerouted to go directly to our static 5-slot location changer [cite: services.py, 1]
         text="🗺 تنظیمات لوکیشن سرور",
-        callback_data=f"location_settings_menu:{service_id}"  # Triggers main settings menu [1]
+        callback_data=f"change_default_loc_select:{service_id}"
     )
-    builder.adjust(1)
+    
+    if device_id:
+        builder.adjust(1, 1, 1, 1, 1)
+    else:
+        builder.adjust(1)
+        
     return builder.as_markup()
 
 
 async def _show_my_services_page(callback_or_message: CallbackQuery | Message, page: int, session: AsyncSession) -> None:
-    """Renders 3 parsed services per page dynamically with custom navigations [1]."""
+    """Renders 3 parsed services per page dynamically with dynamic side-by-side quick actions [cite: services.py, 1]."""
     user_id = callback_or_message.from_user.id
     user = await UsersRepository(session).get_by_telegram_id(user_id)
     if not user:
@@ -125,10 +132,10 @@ async def _show_my_services_page(callback_or_message: CallbackQuery | Message, p
             await callback_or_message.answer(msg)
         return
 
-    # Sort services: Active first, then Expired, then by expiration date descending [1]
+    # Sort services: Active first, then Expired, then by expiration date descending [cite: services.py]
     services.sort(key=lambda s: (0 if s.status == "active" else 1, s.expire_at), reverse=True)
 
-    limit = 3  # Compact pagination [1]
+    limit = 3  
     start_idx = page * limit
     end_idx = start_idx + limit
     page_services = services[start_idx:end_idx]
@@ -138,19 +145,32 @@ async def _show_my_services_page(callback_or_message: CallbackQuery | Message, p
     
     builder = InlineKeyboardBuilder()
     for idx, service in enumerate(page_services, start=start_idx + 1):
-        # Format parsed text card
         lines.append(format_service_item_display(service, idx))
         
-        # Dedicated management button for each service on the page [1]
         raw_name = (service.username or "دستگاه").split("|")[0].strip()
-        builder.button(
-            text=f"🛠 مدیریت: {raw_name}",
-            callback_data=ServiceActionCallback(action="status", service_id=service.id)
-        )
+        
+        if service.status == "active":
+            # UX Masterpiece: Generate side-by-side quick buttons for active plans [cite: services.py]
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"✳️ ثبت آی‌پی سریع",
+                    url=f"{WEB_SERVER_BASE_URL}/update-ip/{service.controld_device_id}"
+                ),
+                InlineKeyboardButton(
+                    text=f"🛠 مدیریت",
+                    callback_data=ServiceActionCallback(action="status", service_id=service.id).pack()
+                )
+            )
+        else:
+            # Full-width warning button for expired plans
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"❌ منقضی شده: {raw_name}",
+                    callback_data=ServiceActionCallback(action="status", service_id=service.id).pack()
+                )
+            )
 
-    builder.adjust(1)  # Stacks management buttons cleanly
-
-    # Append navigation controls [1]
+    # Append standard page controls at the bottom
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"my_services_page:{page - 1}"))
@@ -215,92 +235,36 @@ async def service_action(
 <b>لینک اشتراک DoT:</b>
 <code>{escape(service.subscription_link or "ثبت نشده")}</code>
 
-<b>لینک کانفیگ DoH:</b>
+<b>لینک کانگیف DoH:</b>
 <code>{escape(service.config_link or "ثبت نشده")}</code>"""
         
-        await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id), parse_mode="HTML")
+        await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id, service.controld_device_id), parse_mode="HTML")
         return
 
     # Default action: status
     text = menu_actions.format_service_summary(service)
-    await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id), parse_mode="HTML")
+    await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id, service.controld_device_id), parse_mode="HTML")
 
 
 # ============================================================================
-# MAIN LOCATION SETTINGS GATEWAY (Overall vs App Routing)
-# ============================================================================
-
-@router.callback_query(F.data.startswith("location_settings_menu:"), StateFilter("*"))
-async def handle_location_settings_menu(callback: CallbackQuery, session: AsyncSession) -> None:
-    await callback.answer()
-    service_id = int(callback.data.split(":")[1])
-    
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🌐 تغییر لوکیشن کل اینترنت (Default)", callback_data=f"change_default_loc_select:{service_id}")
-    builder.button(text="🎮 تغییر لوکیشن بازی‌ها و برنامه‌ها", callback_data=f"service_routing_menu:{service_id}")
-    builder.button(text="↩️ بازگشت", callback_data=ServiceActionCallback(action="status", service_id=service_id))
-    builder.adjust(1)
-    
-    await callback.message.edit_text(
-        "🗺 <b>تنظیمات لوکیشن سرور</b>\n\n"
-        "یکی از دو روش زیر را برای تغییر لوکیشن سرور دی‌ان‌اس خود انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
-
-
-# ============================================================================
-# 1. OVERALL DEFAULT ROUTING CHANGER
+# CATCH-ALL STATIC LOCATION SWITCHER
 # ============================================================================
 
 async def _show_default_loc_page(callback: CallbackQuery, service_id: int, page: int, settings: Settings) -> None:
-    """Renders the paginated overall default location selector [cite: 1]."""
-    controld_service = ControlDService(settings)
-    proxies = await controld_service.fetch_controld_proxies()
-    
-    if not proxies:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    # Sort countries alphabetically
-    proxies.sort(key=lambda x: x["country_name"].lower())
-
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_proxies = proxies[start_idx:end_idx]
-    has_next = len(proxies) > end_idx
-
-    # bot/routers/services.py
-
-# --- LOCATE THIS BLOCK (around line 186) AND REPLACE IT ---
+    """Renders the location selection menu displaying exactly your 5 fixed premium slots [cite: 1]."""
     builder = InlineKeyboardBuilder()
-    for p in page_proxies:
-        p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
-        # Optimized callback_data to strictly respect Telegram's 64-character limit
+    for slot_num, config in SLOT_CONFIGS.items():
         builder.button(
-            text=p_name,
-            callback_data=f"apply_def_loc:{service_id}:{p['code']}"
+            text=config["name"],
+            callback_data=f"apply_def_loc:{service_id}:{slot_num}" # Pass the Slot Number!
         )
     
-    # 1. First adjust the 10 countries into rows of 2
-    builder.adjust(2)
-
-    # 2. Append Navigation Controls [cite: 1]
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"def_loc_page:{service_id}:{page - 1}"))
-    if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"def_loc_page:{service_id}:{page + 1}"))
-    if nav_buttons:
-        builder.row(*nav_buttons)
-
-    # 3. Append Back Button [cite: 1]
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"location_settings_menu:{service_id}"))
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=ServiceActionCallback(action="status", service_id=service_id).pack()))
 
     await callback.message.edit_text(
-        f"🗺 <b>تغییر لوکیشن کل ترافیک اینترنت</b> | صفحه {page + 1}\n\n"
-        f"کشوری که می‌خواهید لوکیشن کل ترافیک اینترنت شما به آن تغییر یابد انتخاب کنید:",
+        "🗺 <b>تغییر لوکیشن سرور دی‌ان‌اس</b>\n\n"
+        "کشوری که می‌خواهید ترافیک اینترنت شما به سرور آن متصل شود را انتخاب کنید:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
@@ -315,402 +279,78 @@ async def handle_change_default_loc_select(callback: CallbackQuery, settings: Se
 
 # bot/routers/services.py
 
-# --- LOCATE THIS HANDLER (around line 217) AND REPLACE IT ---
+# --- LOCATE AND REPLACE THE handle_apply_def_loc METHOD ---
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+    """Migrates a user's IP registration from one static slot to another, wiping the old one [cite: services.py, 1]."""
     await callback.answer()
     if callback.message is None:
         return
 
     parts = callback.data.split(":")
     service_id = int(parts[1])
-    pop_code = parts[2]
+    slot_num = int(parts[2])
 
-    service = await ServicesRepository(session).get(service_id)
-    if service is None or not service.controld_device_id:
-        await callback.message.answer("❌ سرویس یا شناسه دستگاه معتبر یافت نشد.")
-        return
-
-    # Find the dynamic profile_id linked to this device
-    controld_service = ControlDService(settings)
-    
-    device_url = f"https://api.controld.com/devices/{service.controld_device_id}"
-    headers = {
-        "Authorization": f"Bearer {settings.controld_api_token}",
-        "Content-Type": "application/json"
-    }
-    profile_id = None
-    async with httpx.AsyncClient() as client:
-        try:
-            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
-            if device_resp.status_code == 200:
-                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
-        except Exception:
-            pass
-
-    if not profile_id:
-        profile_id = settings.controld_profile_id
-
-    if not profile_id:
-        await callback.message.answer("❌ شناسه پروفایل این دستگاه یافت نشد.")
-        return
-
-    # Dynamically resolve POP display name to prevent 64-byte callback truncation
-    proxies = await controld_service.fetch_controld_proxies()
-    pop_name = pop_code
-    if proxies:
-        for p in proxies:
-            if p["code"] == pop_code:
-                pop_name = f"{p['flag']} {p['country_name']} - {p['city_name']} ({pop_code})"
-                break
-
-    await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن کل اینترنت شما به {pop_name}...")
-
-    # Call overall default profile routing PUT API
-    success = await controld_service.update_profile_default(profile_id, pop_code)
-
-    if success:
-        # DB Sync: Rebuild and save the metadata string in the database
-        raw_username = service.username.split("|")[0]
-        service.username = f"{raw_username}|default|{pop_code}"
-        await session.commit()
-
-        await callback.message.answer(
-            f"✅ لوکیشن کل ترافیک اینترنت دستگاه <code>{escape(service.username.split('|')[0])}</code> با موفقیت به سرور <b>{escape(pop_name)}</b> تغییر یافت!\n\n"
-            f"تغییرات به صورت آنی روی دی‌ان‌اس اختصاصی شما اعمال شد.",
-            reply_markup=main_menu_keyboard(),
-            parse_mode="HTML"
-        )
-    else:
-        await callback.message.answer("❌ خطا در ثبت لوکیشن در پنل Control D. مجدداً تلاش کنید.")
-
-# ============================================================================
-# 2. FINE-GRAINED SERVICE ROUTING CONTROLLER
-# ============================================================================
-
-# bot/routers/services.py
-
-@router.callback_query(F.data.startswith("service_routing_menu:"), StateFilter("*"))
-async def service_routing_menu(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Displays Category Selector for location management."""
-    await callback.answer()
-    if callback.message is None:
-        return
-        
-    service_id = int(callback.data.split(":")[1])
     service = await ServicesRepository(session).get(service_id)
     if service is None:
-        await callback.message.answer("❌ سرویس پیدا نشد.")
+        await callback.message.answer("❌ سرویس یافت نشد.")
         return
 
-    # Fetch device profile
-    profile_id = settings.controld_profile_id
-    device_url = f"https://api.controld.com/devices/{service.controld_device_id}"
-    headers = {
-        "Authorization": f"Bearer {settings.controld_api_token}",
-        "Content-Type": "application/json"
-    }
-    
-    # Impersonate organization if set in env
-    import os
-    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
-    if org_id:
-        headers["X-Force-Org-Id"] = org_id
+    from app.config import SLOT_CONFIGS
+    if slot_num not in SLOT_CONFIGS:
+        await callback.message.answer("❌ اسلات نامعتبر است.")
+        return
 
-    async with httpx.AsyncClient() as client:
-        try:
-            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
-            if device_resp.status_code == 200:
-                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
-        except Exception:
-            pass
+    new_device_id = SLOT_CONFIGS[slot_num]["device_id"]
+    new_pop_name = SLOT_CONFIGS[slot_num]["name"]
+    ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
+    ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
 
-    if not profile_id:
-        profile_id = settings.controld_profile_id
+    # Prevent redundant migrations
+    if service.controld_device_id == new_device_id:
+        await callback.message.answer(f"ℹ️ اشتراک شما در حال حاضر روی سرور {new_pop_name} فعال است.")
+        return
 
-    # Fetch active categories dynamically
+    await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن اشتراک شما به سرور {new_pop_name}...")
+
+    # Step 1: Self-Cleaning: Fetch and deauthorize ALL active IPs from their OLD permanent slot [cite: 1]
     controld = ControlDService(settings)
-    services = await controld.fetch_controld_services(profile_id)
-    if not services:
-        await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
-        return
-
-    # Extract all unique categories dynamically
-    unique_categories = sorted(list(set(s["category"] for s in services if s.get("category"))))
-
-    from app.services.controld import get_category_label_fa
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"select_srv_loc:{service_id}:default")
-    
-    # Filter loop
-    category_blacklist = {"hosting", "tools", "vendors"}
-    for cat_key in unique_categories:
-        if cat_key.lower() in category_blacklist:
-            continue
-        label = get_category_label_fa(cat_key)
-        builder.button(text=label, callback_data=f"srv_manage_cat:{service_id}:{cat_key}:0")
-        
-    builder.button(text="↩️ بازگشت", callback_data=f"location_settings_menu:{service_id}")
-    builder.adjust(1)
-
-    await callback.message.edit_text(
-        f"🗺 <b>تنظیم لوکیشن سرویس‌ها</b> | دستگاه: <code>{escape(service.username.split('|')[0])}</code>\n\n"
-        f"🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
-
-
-@router.callback_query(F.data.startswith("srv_manage_cat:"), StateFilter("*"))
-async def handle_srv_manage_cat(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    await callback.answer()
-    parts = callback.data.split(":")
-    service_id = int(parts[1])
-    category_key = parts[2]
-    page = int(parts[3])
-    
-    service = await ServicesRepository(session).get(service_id)
-    if service is None or not service.controld_device_id:
-        await callback.message.answer("❌ سرویس معتبر یافت نشد.")
-        return
-
-    # Find profile_id
-    profile_id = settings.controld_profile_id
-    device_url = f"https://api.controld.com/devices/{service.controld_device_id}"
-    headers = {
-        "Authorization": f"Bearer {settings.controld_api_token}",
-        "Content-Type": "application/json"
-    }
-    async with httpx.AsyncClient() as client:
+    if service.controld_device_id:
         try:
-            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
-            if device_resp.status_code == 200:
-                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
-        except Exception:
-            pass
+            active_ips = await controld.get_active_ips(service.controld_device_id)
+            logger.info("fetched_active_ips_for_migration_cleanup", device_id=service.controld_device_id, ips=active_ips)
+            for active_ip in active_ips:
+                await controld.deauthorize_ip(service.controld_device_id, active_ip)
+        except Exception as exc:
+            logger.error("failed_to_clean_old_slot_ips_during_migration", device_id=service.controld_device_id, error=str(exc))
 
-    if not profile_id:
-        profile_id = settings.controld_profile_id
+    # Step 2: Authorize their IP on their NEW permanent slot [cite: 1]
+    if service.authorized_ip:
+        logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=service.authorized_ip)
+        await controld.authorize_ip(new_device_id, service.authorized_ip)
 
-    controld = ControlDService(settings)
-    services = await controld.fetch_controld_services(profile_id)
-    if not services:
-        await callback.message.answer("❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
-        return
-        
-    filtered = [s for s in services if s["category"] == category_key]
-    filtered.sort(key=lambda x: (x["name"] or "").lower())
-    
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_items = filtered[start_idx:end_idx]
-    has_next = len(filtered) > end_idx
+    # Step 3: Update local DB record with new slot assignment and metadata [cite: services.py, 1]
+    raw_username = service.username.split("|")[0]
+    service.username = f"{raw_username}|default|{slot_num}"
+    service.controld_device_id = new_device_id
+    await session.commit()
 
-    builder = InlineKeyboardBuilder()
-    for s in page_items:
-        builder.button(
-            text=s["name"] or s["pk"],
-            callback_data=f"select_srv_loc:{service_id}:{s['pk']}"
-        )
-    
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"srv_manage_cat:{service_id}:{category_key}:{page - 1}"))
-    if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"srv_manage_cat:{service_id}:{category_key}:{page + 1}"))
-    if nav_buttons:
-        builder.row(*nav_buttons)
-        
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=f"service_routing_menu:{service_id}"))
-    builder.adjust(2)
-    
-    from app.services.controld import get_category_label_fa
-    category_label = get_category_label_fa(category_key)
-    await callback.message.edit_text(
-        f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
-        f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
-        reply_markup=builder.as_markup(),
+    success_text = f"""✅ <b>لوکیشن اشتراک شما با موفقیت تغییر یافت!</b>
+
+🗺 <b>سرور جدید:</b> {escape(new_pop_name)}
+
+🔐 <b>دی‌ان‌اس‌های اختصاصی سرور جدید:</b>
+Primary: <code>{ipv4_primary}</code>
+Secondary: <code>{ipv4_secondary}</code>
+
+⚠️ <i>در صورت عدم اتصال، لطفاً مجدداً روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید.</i>"""
+
+    await callback.message.answer(
+        success_text,
+        reply_markup=_get_ip_registration_keyboard(new_device_id),
         parse_mode="HTML"
     )
 
-
-# bot/routers/services.py
-
-# --- LOCATE select_service_location AND REPLACE IT WITH THESE TWO FUNCTIONS ---
-@router.callback_query(F.data.startswith("select_srv_loc:"), StateFilter("*"))
-async def select_service_location(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Entry point for specific service location selector. Starts at page 0."""
-    await callback.answer()
-    if callback.message is None:
-        return
-
-    parts = callback.data.split(":")
-    service_id = int(parts[1])
-    service_pk = parts[2]
-
-    # Start specific service selection at page 0
-    await _show_service_loc_page(callback, service_id, service_pk, page=0, settings=settings)
-
-
-async def _show_service_loc_page(
-    callback: CallbackQuery, 
-    service_id: int, 
-    service_pk: str, 
-    page: int, 
-    settings: Settings
-) -> None:
-    """Renders the paginated specific service location selector [cite: services.py]."""
-    controld_service = ControlDService(settings)
-    proxies = await controld_service.fetch_controld_proxies()
-    
-    if not proxies:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    # Sort countries alphabetically
-    proxies.sort(key=lambda x: x["country_name"].lower())
-
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_proxies = proxies[start_idx:end_idx]
-    has_next = len(proxies) > end_idx
-
-    builder = InlineKeyboardBuilder()
-    for p in page_proxies:
-        p_name = f"{p['flag']} {p['city_name']} ({p['code']})"
-        builder.button(
-            text=p_name,
-            # Optimized callback_data to strictly respect Telegram's 64-character limit
-            callback_data=f"apply_loc_change:{service_id}:{service_pk}:{p['code']}"
-        )
-    
-    # 1. Layout: 2 buttons per row
-    builder.adjust(2)
-
-    # 2. Append Page Navigation Controls (strictly within 64-byte bounds)
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(
-            InlineKeyboardButton(
-                text="⬅️ قبلی", 
-                callback_data=f"srv_loc_page:{service_id}:{service_pk}:{page - 1}"
-            )
-        )
-    if has_next:
-        nav_buttons.append(
-            InlineKeyboardButton(
-                text="بعدی ➡️", 
-                callback_data=f"srv_loc_page:{service_id}:{service_pk}:{page + 1}"
-            )
-        )
-    if nav_buttons:
-        builder.row(*nav_buttons)
-
-    # 3. Append Back Button
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"service_routing_menu:{service_id}"))
-
-    await callback.message.edit_text(
-        f"🗺 <b>تنظیم لوکیشن برای سرویس</b> | صفحه {page + 1}\n\n"
-        f"لطفاً کشوری که می‌خواهید ترافیک این سرویس از طریق آن عبور کند انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
-    )
-
-# bot/routers/services.py
-
-# --- PLACE THIS ROUTER HANDLER BELOW THE BUILDER FUNCTIONS ---
-@router.callback_query(F.data.startswith("srv_loc_page:"), StateFilter("*"))
-async def handle_srv_loc_page(callback: CallbackQuery, settings: Settings) -> None:
-    """Handles pagination buttons for specific service location changes."""
-    await callback.answer()
-    if callback.message is None:
-        return
-
-    parts = callback.data.split(":")
-    service_id = int(parts[1])
-    service_pk = parts[2]
-    page = int(parts[3])
-
-    await _show_service_loc_page(callback, service_id, service_pk, page, settings)
-
-# bot/routers/services.py
-
-# --- LOCATE THIS HANDLER (around line 369) AND REPLACE IT ---
-@router.callback_query(F.data.startswith("apply_loc_change:"), StateFilter("*"))
-async def apply_service_route(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Executes the PUT API call to redirect the service on Control D [1]."""
-    await callback.answer()
-    if callback.message is None:
-        return
-
-    parts = callback.data.split(":")
-    service_id = int(parts[1])
-    service_pk = parts[2]
-    pop_code = parts[3]
-
-    service = await ServicesRepository(session).get(service_id)
-    if service is None or not service.controld_device_id:
-        await callback.message.answer("❌ سرویس یا شناسه دستگاه معتبر یافت نشد.")
-        return
-
-    # Find the dynamic profile_id linked to this device
-    controld_service = ControlDService(settings)
-    
-    device_url = f"https://api.controld.com/devices/{service.controld_device_id}"
-    headers = {
-        "Authorization": f"Bearer {settings.controld_api_token}",
-        "Content-Type": "application/json"
-    }
-    profile_id = None
-    async with httpx.AsyncClient() as client:
-        try:
-            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
-            if device_resp.status_code == 200:
-                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
-        except Exception:
-            pass
-
-    if not profile_id:
-        profile_id = settings.controld_profile_id
-
-    if not profile_id:
-        await callback.message.answer("❌ شناسه پروفایل این دستگاه یافت نشد.")
-        return
-
-    # Dynamically resolve POP display name to prevent 64-byte callback truncation
-    proxies = await controld_service.fetch_controld_proxies()
-    pop_name = pop_code
-    if proxies:
-        for p in proxies:
-            if p["code"] == pop_code:
-                pop_name = f"{p['flag']} {p['country_name']} - {p['city_name']} ({pop_code})"
-                break
-
-    await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن سرویس شما به {pop_name}...")
-
-    # Execute the PUT routing command using the dynamic profile_id [1]
-    if service_pk == "default":
-        success = await controld_service.update_profile_default(profile_id, pop_code)  
-    else:
-        success = await controld_service.update_service_route(profile_id, service_pk, pop_code)  
-
-    if success:
-        # DB Sync: Rebuild and save the metadata string in the database
-        raw_username = service.username.split("|")[0]
-        service.username = f"{raw_username}|{service_pk}|{pop_code}"
-        await session.commit()
-
-        await callback.message.answer(
-            f"✅ ترافیک سرویس شما با موفقیت به سرور <b>{escape(pop_name)}</b> هدایت شد!\n\n"
-            f"تغییرات به صورت آنی و بدون نیاز به تغییر لینک دی‌ان‌اس روی دستگاه شما اعمال شد.",
-            reply_markup=main_menu_keyboard(),
-            parse_mode="HTML"
-        )
-    else:
-        await callback.message.answer("❌ خطا در ثبت لوکیشن در پنل Control D. مجدداً تلاش کنید.")
 
 async def _safe_answer(callback: CallbackQuery, text: str) -> None:
     if callback.message:
@@ -719,9 +359,7 @@ async def _safe_answer(callback: CallbackQuery, text: str) -> None:
         except Exception:
             await callback.message.answer(text)
 
-# bot/routers/services.py
 
-# --- PLACE THIS HANDLER BLOCK WITHIN YOUR SERVICES.PY FILE ---
 @router.callback_query(F.data.startswith("def_loc_page:"), StateFilter("*"))
 async def handle_def_loc_page(callback: CallbackQuery, settings: Settings) -> None:
     """Handles pagination buttons for the default internet traffic location changer."""

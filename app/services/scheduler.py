@@ -18,30 +18,33 @@ logger = structlog.get_logger(__name__)
 
 async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
     """
-    Marks expired DNS services as expired in the database and best-effort deletes
-    their Control D devices.
-
-    Control D already enforces the hard stop through `disable_ttl`, so this loop
-    acts as a durable reconciliation worker: it survives restarts, catches missed
-    expirations, and keeps the database in sync.
+    Finds expired active DNS services, calls Control D to deauthorize their mapped 
+    IP address to cut off access immediately, and transitions their DB status to 'expired' [cite: 1].
+    Uses isolated savepoints to handle failures gracefully.
     """
+    # Standardize on timezone-aware UTC timestamps for comparison
     now = datetime.now(timezone.utc)
     settings = get_settings()
     cd_service = ControlDService(settings)
-
     processed = 0
+
     async with async_session_maker() as session:
-        stmt = (
-            select(VPNService)
-            .options(joinedload(VPNService.user))
-            .where(
-                VPNService.status == VPNServiceStatus.ACTIVE.value,
-                VPNService.expire_at <= now,
+        try:
+            # Query active services whose expiration time has passed
+            stmt = (
+                select(VPNService)
+                .options(joinedload(VPNService.user))
+                .where(
+                    VPNService.status == VPNServiceStatus.ACTIVE.value,
+                    VPNService.expire_at <= now,
+                )
+                .order_by(VPNService.expire_at.asc(), VPNService.id.asc())
             )
-            .order_by(VPNService.expire_at.asc(), VPNService.id.asc())
-        )
-        result = await session.execute(stmt)
-        expired_services = list(result.scalars().unique().all())
+            result = await session.execute(stmt)
+            expired_services = list(result.scalars().unique().all())
+        except Exception as e:
+            logger.error("failed_to_query_expired_services", error=str(e))
+            return 0
 
         if not expired_services:
             return 0
@@ -49,65 +52,79 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
         logger.info("checking_expired_dns_services", count=len(expired_services))
 
         for service in expired_services:
-            if service.controld_device_id:
-                logger.info(
-                    "deleting_controld_device",
-                    service_id=service.id,
-                    device_id=service.controld_device_id,
-                )
-                try:
-                    success = await cd_service.delete_device(service.controld_device_id)
-                except Exception as exc:
-                    logger.error(
-                        "controld_device_delete_exception",
-                        service_id=service.id,
-                        device_id=service.controld_device_id,
-                        error=str(exc),
-                    )
-                    success = False
-
-                if success:
-                    logger.info("controld_device_deleted_successfully", service_id=service.id)
-                else:
-                    # Log the warning but DO NOT use 'continue'. We still must expire
-                    # the database record so it doesn't get stuck in an active state.
-                    logger.warning(
-                        "failed_to_delete_controld_device_proceeding_to_expire_locally",
-                        service_id=service.id,
-                    )
-
+            logger.info("processing_personal_expiration", service_id=service.id, username=service.username)
+            
             try:
-                service.status = VPNServiceStatus.EXPIRED.value
+                # Isolate operations per user using a nested transaction
+                async with session.begin_nested():
+                    # Timezone safety validation
+                    service_expire = service.expire_at
+                    if service_expire.tzinfo is None:
+                        service_expire = service_expire.replace(tzinfo=timezone.utc)
+
+                    if service_expire > now:
+                        logger.warning("skipping_non_expired_service_safety_check", service_id=service.id)
+                        continue
+
+                    # If an authorized IP is registered, deauthorize it immediately on Control D [cite: 1]
+                    if service.controld_device_id and service.authorized_ip:
+                        logger.info(
+                            "deauthorizing_expired_ip_on_controld",
+                            service_id=service.id,
+                            device_id=service.controld_device_id,
+                            ip=service.authorized_ip,
+                        )
+                        try:
+                            # DELETE https://api.controld.com/access?device_id={device_id} [cite: 1]
+                            success = await cd_service.deauthorize_ip(
+                                device_id=service.controld_device_id, 
+                                ip=service.authorized_ip
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "controld_ip_deauthorization_raised_exception",
+                                service_id=service.id,
+                                error=str(exc),
+                            )
+                            success = False
+
+                        if not success:
+                            # Log warning, but proceed with DB expiration to prevent infinite retries
+                            logger.warning(
+                                "failed_to_deauthorize_expired_ip_remotely_proceeding_locally", 
+                                service_id=service.id
+                            )
+
+                    # Mark subscription status as expired in the database [cite: 1]
+                    service.status = VPNServiceStatus.EXPIRED.value
+                    # Optionally clear the authorized_ip column or preserve it for history
+                    # service.authorized_ip = None
+
+                # Commit changes for this individual subscription
                 await session.commit()
                 processed += 1
-            except Exception as exc:
-                await session.rollback()
-                logger.error("failed_to_mark_dns_service_expired", service_id=service.id, error=str(exc))
-                continue
 
-            # Send Persian notification to user if it's an expired test account
-            # Send customized expiration notifications
-            if bot is not None and service.user is not None:
-                try:
-                    if service.is_test_account:
-                        text = (
-                            "⏳ اکانت تست شما منقضی شد.\n\n"
-                            f"🗓 تاریخ انقضا: {format_datetime(service.expire_at)}\n"
-                            "دسترسی DNS شما غیرفعال شد."
+                # Send Telegram notification to the user
+                if bot is not None and service.user is not None:
+                    try:
+                        await bot.send_message(
+                            chat_id=service.user.telegram_id,
+                            text=(
+                                "⏳ <b>اشتراک DNS شما به پایان رسید.</b>\n\n"
+                                f"🗓 <b>تاریخ انقضاء:</b> {format_datetime(service.expire_at)}\n"
+                                "دسترسی شما غیرفعال و آی‌پی شما از پنل حذف شد. "
+                                "برای خرید مجدد یا تمدید می‌توانید از منوی اصلی اقدام کنید."
+                            ),
+                            parse_mode="HTML"
                         )
-                    else:
-                        text = (
-                            "⏳ اشتراک DNS شما به پایان رسید.\n\n"
-                            f"🗓 تاریخ انقضا: {format_datetime(service.expire_at)}\n"
-                            "دسترسی شما غیرفعال شد. برای تمدید یا خرید اشتراک جدید می‌توانید از منوی اصلی اقدام کنید."
-                        )
-                    
-                    await bot.send_message(
-                        chat_id=service.user.telegram_id,
-                        text=text,
-                    )
-                except Exception as exc:
-                    logger.warning("failed_to_notify_expired_service_owner", service_id=service.id, error=str(exc))
+                    except Exception as exc:
+                        logger.warning("failed_to_notify_expired_service_owner", service_id=service.id, error=str(exc))
+
+            except Exception as e:
+                # Rollback changes within this savepoint only to keep session intact
+                await session.rollback()
+                logger.error("failed_to_expire_personal_service_individually", service_id=service.id, error=str(e))
+                continue
 
         return processed
 
@@ -117,11 +134,8 @@ async def sync_plans_with_controld(session) -> None:
     Synchronizes your Control D dashboard Profiles with local Plans in PostgreSQL.
     """
     settings = get_settings()
-    
-    # Instantiate the proxy-aware OOP client
     cd_service = ControlDService(settings)
     
-    # Use the OOP client method to retrieve profiles
     profiles = await cd_service.fetch_controld_profiles()
     if not profiles:
         logger.warning("no_controld_profiles_found_or_sync_failed")
@@ -134,15 +148,11 @@ async def sync_plans_with_controld(session) -> None:
         profile_name = profile["name"]
         profile_desc = profile["description"] or "سرویس دی‌ان‌اس اختصاصی"
 
-        # Check if this profile is already registered as a plan in our DB
         stmt = select(Plan).where(Plan.controld_profile_id == profile_id)
         result = await session.execute(stmt)
-        
-        # Strictly use .first() to prevent multiple-row crashes
         existing_plan = result.scalars().first()
 
         if existing_plan is None:
-            # Create a brand new plan with default prices/durations
             new_plan = Plan(
                 title=profile_name,
                 description=profile_desc,
@@ -156,7 +166,6 @@ async def sync_plans_with_controld(session) -> None:
             session.add(new_plan)
             logger.info("synced_new_dns_plan", title=profile_name, id=profile_id)
         else:
-            # Update title and description if they were modified on the Control D dashboard
             existing_plan.title = profile_name
             if profile["description"]:
                 existing_plan.description = profile_desc
@@ -164,16 +173,17 @@ async def sync_plans_with_controld(session) -> None:
     await session.commit()
 
 
-async def expiration_scheduler_loop(bot: Bot | None = None, interval_seconds: int = 60) -> None:
+async def expiration_scheduler_loop(bot: Bot | None = None, interval_seconds: int = 3600) -> None:
     """
-    Background loop checking for expired subscriptions on a short interval.
+    Background automation worker that runs continuously [cite: 1].
+    Queries the database on a set interval (default: every hour / 3600 seconds) [cite: 1].
     """
     logger.info("starting_expiration_scheduler_loop", interval_seconds=interval_seconds)
     while True:
         try:
             processed = await cleanup_expired_dns_services(bot=bot)
             if processed:
-                logger.info("expired_dns_services_processed", count=processed)
+                logger.info("expired_personal_dns_services_processed", count=processed)
         except Exception as e:
             logger.error("expiration_scheduler_loop_error", error=str(e))
         

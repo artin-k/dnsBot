@@ -1,9 +1,8 @@
+# app/config.py
 from functools import lru_cache
-
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
-
-# ArtinVps2026
+import warnings
 
 class Settings(BaseSettings):
     controld_api_token: str = Field(default="", alias="CONTROLD_API_TOKEN")
@@ -33,6 +32,12 @@ class Settings(BaseSettings):
     wallet_min_withdraw_amount: int = Field(default=100000, alias="WALLET_MIN_WITHDRAW_AMOUNT")
     wallet_max_withdraw_amount: int = Field(default=0, alias="WALLET_MAX_WITHDRAW_AMOUNT")
 
+    controld_device_1: str = Field(default="", alias="CONTROLD_DEVICE_1")
+    controld_device_2: str = Field(default="", alias="CONTROLD_DEVICE_2")
+    controld_device_3: str = Field(default="", alias="CONTROLD_DEVICE_3")
+    controld_device_4: str = Field(default="", alias="CONTROLD_DEVICE_4")
+    controld_device_5: str = Field(default="", alias="CONTROLD_DEVICE_5")
+        
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -50,23 +55,6 @@ class Settings(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return init_settings, dotenv_settings, env_settings, file_secret_settings
-
-    @classmethod
-    def validate_bot_token(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("BOT_TOKEN environment variable must be set and non-empty")
-        # Validate Telegram bot token format (must contain ':' separator)
-        if ':' not in value:
-            raise ValueError("BOT_TOKEN format invalid: must be in format NUMERIC:ALPHANUMERIC")
-        return value.strip()
-
-    @classmethod
-    def validate_bot_token_format(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("BOT_TOKEN environment variable must be set and non-empty")
-        if ':' not in value:
-            raise ValueError("BOT_TOKEN format invalid: must be NUMERIC:ALPHANUMERIC (e.g., 123456789:ABCdefGHIjkl)")
-        return value.strip()
 
     @field_validator("redis_url", mode="after")
     @classmethod
@@ -104,12 +92,12 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_percent(cls, value: object) -> float:
         if value is None:
-            return 0
-        if isinstance(value, int | float):
+            return 0.0
+        if isinstance(value, (int, float)):
             return float(value)
         text = str(value).strip().replace("%", "")
         if not text:
-            return 0
+            return 0.0
         return float(text)
 
     @field_validator("affiliate_default_to_root", mode="before")
@@ -142,10 +130,9 @@ class Settings(BaseSettings):
         if value is None:
             return 3
         try:
-            parsed = int(str(value).strip())
+            return max(int(str(value).strip()), 0)
         except ValueError:
             return 3
-        return max(parsed, 0)
 
     @field_validator("wallet_min_withdraw_amount", "wallet_max_withdraw_amount", mode="before")
     @classmethod
@@ -153,10 +140,9 @@ class Settings(BaseSettings):
         if value is None:
             return 0
         try:
-            parsed = int(str(value).strip().replace(",", ""))
+            return max(int(str(value).strip().replace(",", "")), 0)
         except ValueError:
             return 0
-        return max(parsed, 0)
 
     @field_validator("commission_base", mode="after")
     @classmethod
@@ -168,12 +154,12 @@ class Settings(BaseSettings):
 
     @property
     def admin_ids(self) -> list[int]:
-        parsed, _invalid = self._parse_admin_ids()
+        parsed, _ = self._parse_admin_ids()
         return parsed
 
     @property
     def invalid_admin_ids(self) -> list[str]:
-        _parsed, invalid = self._parse_admin_ids()
+        _, invalid = self._parse_admin_ids()
         return invalid
 
     def _parse_admin_ids(self) -> tuple[list[int], list[str]]:
@@ -198,31 +184,56 @@ def get_settings() -> Settings:
 
 
 def _validate_settings(settings: Settings) -> None:
-    """Startup validation to catch configuration errors early with clear messages."""
     errors: list[str] = []
-    
-    # 1. Validate DATABASE_URL
     if not settings.database_url:
         errors.append("❌ DATABASE_URL is not set or empty")
     elif not settings.database_url.startswith(("postgresql://", "postgresql+asyncpg://")):
-        errors.append("❌ DATABASE_URL must be PostgreSQL (postgresql:// or postgresql+asyncpg://)")
+        errors.append("❌ DATABASE_URL must be PostgreSQL")
     
-    # 2. Validate FSM_STORAGE consistency
     if settings.fsm_storage == "redis" and not settings.redis_url:
         errors.append("❌ FSM_STORAGE=redis configured but REDIS_URL is empty")
     
-    # 3. Warn if using memory storage (state will be lost on restart)
     if settings.fsm_storage == "memory":
-        import warnings
         warnings.warn(
-            "⚠️  FSM_STORAGE=memory: User conversation state will be lost on bot restart. "
-            "For production, set REDIS_URL and FSM_STORAGE=redis",
+            "⚠️ FSM_STORAGE=memory: Conversation state will be lost on bot restart.",
             RuntimeWarning,
             stacklevel=3
         )
-    
-    # Raise error if critical validations failed
     if errors:
-        error_msg = "Configuration validation failed:\n\n" + "\n".join(errors)
-        error_msg += "\n\nPlease set missing environment variables in .env or system environment."
-        raise ValueError(error_msg)
+        raise ValueError("Configuration validation failed:\n\n" + "\n".join(errors))
+    
+# app/config.py
+# (Locate this dictionary at the very bottom of the file and replace it)
+
+SLOT_CONFIGS = {
+    1: {
+        "name": "🇩🇪 آلمان - فرانکفورت (Germany)",
+        "device_id": get_settings().controld_device_1,
+        "dns_primary": "76.76.2.22",        # Replace with your Slot 1 (German) legacy Primary IPv4 [cite: 1]
+        "dns_secondary": "76.76.10.22",     # Replace with your Slot 1 (German) legacy Secondary IPv4
+    },
+    2: {
+        "name": "🇫🇷 فرانسه - پاریس (France)",
+        "device_id": get_settings().controld_device_2,
+        "dns_primary": "76.76.2.22",        # Replace with your Slot 2 (France) legacy Primary IPv4 [cite: 1]
+        "dns_secondary": "76.76.10.22",     # Replace with your Slot 2 (France) legacy Secondary IPv4
+    },
+    3: {
+        "name": "🇬🇧 انگلستان - لندن (United Kingdom)",
+        "device_id": get_settings().controld_device_3,
+        "dns_primary": "76.76.2.22",        # Replace with your Slot 3 (England) legacy Primary IPv4 [cite: 1]
+        "dns_secondary": "76.76.10.22",     # Replace with your Slot 3 (England) legacy Secondary IPv4
+    },
+    4: {
+        "name": "🇦🇪 امارات متحده - دبی (United Arab Emirates)",
+        "device_id": get_settings().controld_device_4,
+        "dns_primary": "76.76.2.22",        # Replace with your Slot 4 (Dubai) legacy Primary IPv4 [cite: 1]
+        "dns_secondary": "76.76.10.22",     # Replace with your Slot 4 (Dubai) legacy Secondary IPv4
+    },
+    5: {
+        "name": "🇹🇷 ترکیه - استانبول (Turkey)",
+        "device_id": get_settings().controld_device_5,
+        "dns_primary": "76.76.2.22",        # Replace with your Slot 5 (Turk) legacy Primary IPv4 [cite: 1]
+        "dns_secondary": "76.76.10.22",     # Replace with your Slot 5 (Turk) legacy Secondary IPv4
+    }
+}

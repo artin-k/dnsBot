@@ -55,28 +55,13 @@ async def main() -> None:
             logger.error("failed_to_sync_controld_profiles", error=str(e))
 
     try:
-        # Start background loop
-        scheduler_task = asyncio.create_task(expiration_scheduler_loop(bot=bot, interval_seconds=60))
+        scheduler_task = asyncio.create_task(expiration_scheduler_loop(bot=bot, interval_seconds=3600))
         
-        # --- 2. Polling loop ---
-        retry_count = 5
-        for attempt in range(1, retry_count + 1):
-            try:
-                await dp.start_polling(bot)
-                break 
-            except TelegramNetworkError as exc:
-                logger.error(
-                    "telegram_network_error",
-                    attempt=attempt,
-                    max_attempts=retry_count,
-                    error=str(exc),
-                )
-                if attempt >= retry_count:
-                    raise
-                await asyncio.sleep(5)
+        # Start polling loop
+        await dp.start_polling(bot)
                 
     finally:
-        # --- 3. Safe cancellation ---
+        # Graceful cleanup on shutdown
         if scheduler_task is not None:
             scheduler_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -84,7 +69,6 @@ async def main() -> None:
                 
         await bot.session.close()
         await engine.dispose()
-        logger.info("bot_stopped")
 
 
 if __name__ == "__main__":

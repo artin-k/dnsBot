@@ -6,21 +6,16 @@ from app.database import engine
 
 logger = structlog.get_logger(__name__)
 
+# app/migrate.py
+
 async def run_migrations():
     print("Connecting to database and running table updates...")
     
     async with engine.begin() as conn:
-        # 1. Add column to 'plans' table
+        # Ensure column exists
         try:
-            await conn.execute(text("ALTER TABLE plans ADD COLUMN IF NOT EXISTS controld_profile_id VARCHAR(64);"))
-            print("✅ Successfully updated 'plans' table with 'controld_profile_id' column.")
-        except Exception as e:
-            print(f"❌ Error updating 'plans' table: {e}")
-
-        # 2. Add column to 'vpn_services' table
-        try:
-            await conn.execute(text("ALTER TABLE vpn_services ADD COLUMN IF NOT EXISTS controld_device_id VARCHAR(128);"))
-            print("✅ Successfully updated 'vpn_services' table with 'controld_device_id' column.")
+            await conn.execute(text("ALTER TABLE vpn_services ADD COLUMN IF NOT EXISTS authorized_ip VARCHAR(45);"))
+            print("✅ Successfully updated 'vpn_services' table with 'authorized_ip' column.")
         except Exception as e:
             print(f"❌ Error updating 'vpn_services' table: {e}")
 

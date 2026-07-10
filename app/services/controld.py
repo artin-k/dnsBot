@@ -1,12 +1,10 @@
 # app/services/controld.py
 import os
-
 import httpx
 import structlog
 import aiohttp
 import asyncio
 from datetime import datetime, timezone, timedelta
-
 from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -28,10 +26,9 @@ CATEGORY_MAP_FA = {
     "other": "🧩 سایر سرویس‌ها (Other)"
 }
 
+
 def get_category_label_fa(category_key: str) -> str:
-    """
-    Cleans and translates category keys dynamically (handles prefixes like 'native_') [1].
-    """
+    """Cleans and translates category keys dynamically (handles prefixes like 'native_') [1]."""
     clean_key = category_key.lower().replace("native_", "").strip()
     return CATEGORY_MAP_FA.get(clean_key, f"🧩 {clean_key.capitalize()}")
 
@@ -147,13 +144,14 @@ CITY_MAP_FA = {
 }
 
 
-# Replace this function in app/services/controld.py (Near the top)
+def get_category_label_fa(category_key: str) -> str:
+    """Cleans and translates category keys dynamically (handles prefixes like 'native_') [1]."""
+    clean_key = category_key.lower().replace("native_", "").strip()
+    return CATEGORY_MAP_FA.get(clean_key, f"🧩 {clean_key.capitalize()}")
+
 
 def get_country_name_fa(country_code: str, fallback_name: str | None = None) -> str:
-    """
-    Translates ISO country codes to Persian, falling back to full English name or code [1].
-    The fallback_name is now optional to prevent any router/notification TypeErrors [1].
-    """
+    """Translates ISO country codes to Persian, falling back to full English name or code [1]."""
     fallback = fallback_name or country_code.upper()
     return COUNTRY_MAP_FA.get(country_code.upper(), fallback)
 
@@ -162,13 +160,34 @@ def get_city_name_fa(city_name: str) -> str:
     """Translates the city name to Persian."""
     return CITY_MAP_FA.get(city_name, city_name)
 
+# --- FIXED: Moved get_flag_emoji here so it is defined sequentially before use [cite: 1] ---
+def get_flag_emoji(country_code: str) -> str:
+    """
+    Converts a 2-letter ISO country code (e.g., 'US') directly into its 
+    corresponding Unicode regional indicator flag emoji [1].
+    """
+    if not country_code or len(country_code) != 2:
+        return "📍"
+    base = 127397  # Regional Indicator Symbol Letter A offset [1]
+    try:
+        char1 = chr(ord(country_code[0].upper()) + base)
+        char2 = chr(ord(country_code[1].upper()) + base)
+        return f"{char1}{char2}"
+    except Exception:
+        return "📍"
+
 
 def _get_headers() -> dict:
-    return {
+    """Generates request headers, supporting dynamic sub-organizations impersonation [cite: 3.4.1]."""
+    headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
         "Content-Type": "application/json",
         "accept": "application/json"
     }
+    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
+    if org_id:
+        headers["X-Force-Org-Id"] = org_id
+    return headers
 
 
 def generate_dns_stamp(resolver_id: str) -> str:
@@ -201,10 +220,8 @@ async def create_dns_device(
     url = f"{BASE_URL}/devices"
     name = device_name or f"tg_user_{tg_user_id}"
     
-    # --- FIXED: Strip any metadata from the device name to prevent Control D API crashes [cite: 1] ---
     if name and "|" in name:
         name = name.split("|")[0].strip()
-    # -------------------------------------------------------------------------------------------------
 
     if name:
         name = name.replace("_", "-")
@@ -233,12 +250,9 @@ async def create_dns_device(
                 doh = resolver_info.get("doh") or resolver_info.get("dns_over_https")
                 dot = resolver_info.get("dot") or resolver_info.get("dns_over_tls")
                 
-                # Inside app/services/controld.py -> create_dns_device()
-
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 v6_list = resolver_info.get("v6") or resolver_info.get("legacy", {}).get("ipv6") or []
                 
-                # --- FIXED: Added standard Anycast DNS fallbacks to prevent 'ثبت نشده' [cite: 1] ---
                 ipv4_primary = v4_list[0] if len(v4_list) > 0 else "76.76.2.22"
                 ipv4_secondary = v4_list[1] if len(v4_list) > 1 else "76.76.10.22"
                 ipv6 = v6_list[0] if len(v6_list) > 0 else "2606:1a40::22"
@@ -327,16 +341,12 @@ async def fetch_controld_profiles() -> list[dict] | None:
             return None
 
 
-# Inside app/services/controld.py -> create_device()
-
 async def create_device(profile_id: str, device_name: str, duration_hours: int) -> dict | None:
     url = f"{BASE_URL}/devices"
     disable_ttl = int((datetime.now(timezone.utc) + timedelta(hours=duration_hours)).timestamp())
     
-    # --- FIXED: Strip any metadata from the device name to prevent Control D API crashes [cite: 1] ---
     if device_name and "|" in device_name:
         device_name = device_name.split("|")[0].strip()
-    # -------------------------------------------------------------------------------------------------
 
     if device_name:
         device_name = device_name.replace("_", "-")
@@ -348,7 +358,6 @@ async def create_device(profile_id: str, device_name: str, duration_hours: int) 
         "disable_ttl": disable_ttl,
         "legacy_ipv4_status": 1
     }
-    # ... rest of the function continues normally ...
     timeout = aiohttp.ClientTimeout(total=10)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -436,13 +445,11 @@ async def fetch_controld_proxies() -> list[dict] | None:
                     pop_id = p.get("PK") or p.get("id") or p.get("code") or p.get("pop") or p.get("location_code")
                     if not pop_id:
                         continue 
-                    
-                    # Update this part inside fetch_controld_proxies() in app/services/controld.py
 
                     result.append({
                         "code": pop_id,
                         "country_code": country_code,
-                        "flag": get_flag_emoji(country_code),  # <-- Added Unicode Flag [1]
+                        "flag": get_flag_emoji(country_code),
                         "country_name": get_country_name_fa(country_code, fallback_name),
                         "city_name": get_city_name_fa(p.get("city") or ""),
                         "city": p.get("city") or ""
@@ -453,23 +460,6 @@ async def fetch_controld_proxies() -> list[dict] | None:
             logger.error(f"Error fetching Control D proxies: {str(e)}")
             return None
 
-
-# app/services/controld.py (Paste below get_country_name_fa)
-
-def get_flag_emoji(country_code: str) -> str:
-    """
-    Converts a 2-letter ISO country code (e.g., 'US') directly into its 
-    corresponding Unicode regional indicator flag emoji [1].
-    """
-    if not country_code or len(country_code) != 2:
-        return "📍"
-    base = 127397  # Regional Indicator Symbol Letter A offset [1]
-    try:
-        char1 = chr(ord(country_code[0].upper()) + base)
-        char2 = chr(ord(country_code[1].upper()) + base)
-        return f"{char1}{char2}"
-    except Exception:
-        return "📍"
 
 async def update_service_route(profile_id: str, service_name: str, pop_code: str) -> bool:
     url = f"{BASE_URL}/profiles/{profile_id}/services/{service_name}"
@@ -487,13 +477,6 @@ async def update_service_route(profile_id: str, service_name: str, pop_code: str
             return False
 
 
-# app/services/controld.py
-
-# app/services/controld.py
-
-# app/services/controld.py
-
-# --- LOCATE THIS FUNCTION AND REPLACE IT ---
 async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
     """
     Updates the catch-all Default Rule for a profile.
@@ -507,7 +490,6 @@ async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
     }
     async with httpx.AsyncClient() as client:
         try:
-            # Reverted to PUT, which is the correct REST method for /default updates
             response = await client.put(url, json=payload, headers=_get_headers(), timeout=10.0)
             if response.status_code in (200, 201):
                 logger.info("controld_default_route_updated", profile_id=profile_id, pop_code=pop_code)
@@ -519,37 +501,20 @@ async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
             logger.error(f"Error updating profile default route: {str(e)}")
             return False
 
-def _get_headers() -> dict:
-    headers = {
-        "Authorization": f"Bearer {settings.controld_api_token}",
-        "Content-Type": "application/json",
-        "accept": "application/json"
-    }
-    
-    # Securely support Organization account impersonation (Sub-Organizations) [cite: 3.4.1]
-    # If CONTROLD_ORG_ID is set in your .env/settings, we inject the required X-Force-Org-Id header [cite: 3.4.1]
-    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
-    if org_id:
-        headers["X-Force-Org-Id"] = org_id
-        
-    return headers
 
 async def fetch_controld_services(profile_id: str) -> list[dict] | None:
     """
     Queries the complete, unfiltered catalog of services and games directly 
     from the target Control D Profile [1].
     """
-    # --- FIXED: Appended ?all=1 to retrieve the full catalog [1] ---
     url = f"{BASE_URL}/profiles/{profile_id}/services?all=1" 
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(url, headers=_get_headers(), timeout=10.0)
-            # ... rest of the code is unchanged ...
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", [])
                 
-                # Defensive dictionary-to-list parser [cite: 1]
                 services_list = []
                 if isinstance(body, dict):
                     raw_services = body.get("services") or body.get("apps") or {}
@@ -585,6 +550,113 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
 class ControlDService:
     def __init__(self, settings_obj=None) -> None:
         self.settings = settings_obj or settings
+
+    async def authorize_ip(self, device_id: str, ip: str) -> bool:
+        """
+        Authorizes an IP address on a specific Control D legacy endpoint [cite: 1].
+        POST https://api.controld.com/access
+        """
+        if not device_id or not ip:
+            logger.warning("authorize_ip_received_empty_parameters", device_id=device_id, ip=ip)
+            return False
+
+        url = f"{BASE_URL}/access"
+        payload = {
+            "device_id": device_id,
+            "ips": [ip],
+            "ips[]": [ip],  # Bracketed format required by Control D's backend [cite: 1]
+            "name": "Auto Registered"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(url, json=payload, headers=_get_headers(), timeout=10.0)
+                logger.info(
+                    "controld_ip_authorization_response",
+                    device_id=device_id,
+                    ip=ip,
+                    status_code=response.status_code,
+                    response_text=response.text
+                )
+                return response.status_code in (200, 201)
+            except Exception as e:
+                logger.error("failed_to_authorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
+                return False
+
+    async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
+        """
+        Removes/Deauthorizes an IP address from a Control D legacy endpoint [cite: 1].
+        DELETE https://api.controld.com/access
+        """
+        if not device_id or not ip:
+            logger.warning("deauthorize_ip_received_empty_parameters", device_id=device_id, ip=ip)
+            return True
+
+        url = f"{BASE_URL}/access"
+        payload = {
+            "device_id": device_id,
+            "ips": [ip],
+            "ips[]": [ip]  # Bracketed format required by Control D's backend [cite: 1]
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.request(
+                    "DELETE",
+                    url,
+                    json=payload,
+                    headers=_get_headers(),
+                    timeout=10.0
+                )
+                logger.info(
+                    "controld_ip_deauthorization_response",
+                    device_id=device_id,
+                    ip=ip,
+                    status_code=response.status_code,
+                    response_text=response.text
+                )
+                return response.status_code in (200, 201, 204)
+            except Exception as e:
+                logger.error("failed_to_deauthorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
+                return False
+
+# app/services/controld.py
+
+# --- LOCATE AND REPLACE THIS METHOD INSIDE THE ControlDService CLASS ---
+    async def get_active_ips(self, device_id: str) -> list[str]:
+        """
+        Retrieves all currently authorized IPs for a given endpoint [cite: 1].
+        GET https://api.controld.com/access?device_id={device_id}
+        """
+        url = f"{BASE_URL}/access?device_id={device_id}"
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, headers=_get_headers(), timeout=10.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    body = data.get("body") or {}
+                    
+                    # Seamlessly support both nested {"ips": [...]} and flat list formats
+                    raw_ips = []
+                    if isinstance(body, dict):
+                        raw_ips = body.get("ips", [])
+                    elif isinstance(body, list):
+                        raw_ips = body
+
+                    ips = []
+                    if isinstance(raw_ips, list):
+                        for item in raw_ips:
+                            if isinstance(item, str):
+                                ips.append(item)
+                            elif isinstance(item, dict):
+                                ip_val = item.get("ip")
+                                if ip_val:
+                                    ips.append(ip_val)
+                    return ips
+                return []
+            except Exception as e:
+                logger.error("failed_to_fetch_active_ips_from_controld", device_id=device_id, error=str(e))
+                return []
 
     async def create_dns_device(self, tg_user_id: int, profile_id: str, duration_hours: int, device_type: str = "mobile", device_name: str | None = None) -> dict | None:
         return await create_dns_device(
@@ -626,3 +698,19 @@ class ControlDService:
         """Exposes the overall profile default routing updater inside the class [cite: 1]."""
         from app.services.controld import update_profile_default_route
         return await update_profile_default_route(profile_id, pop_code)
+
+
+# ============================================================================
+# GLOBAL BACKWARD COMPATIBLE WRAPPERS (FOR LOCAL MODULE CALLS)
+# ============================================================================
+
+async def authorize_ip(device_id: str, ip: str) -> bool:
+    """Global module-level wrapper to prevent circular import crashes [cite: services.py]."""
+    service = ControlDService()
+    return await service.authorize_ip(device_id, ip)
+
+
+async def deauthorize_ip(device_id: str, ip: str) -> bool:
+    """Global module-level wrapper to prevent circular import crashes [cite: services.py]."""
+    service = ControlDService()
+    return await service.deauthorize_ip(device_id, ip)

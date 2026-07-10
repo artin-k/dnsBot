@@ -1,17 +1,14 @@
+# app/database.py
 from sqlalchemy.ext.asyncio import AsyncAttrs, async_sessionmaker, create_async_engine
 from sqlalchemy import make_url as sqlalchemy_make_url
 from sqlalchemy.orm import DeclarativeBase
-
 from app.config import get_settings
-
 
 class Base(AsyncAttrs, DeclarativeBase):
     pass
 
-
 settings = get_settings()
 
-# Configure database URL with connection timeouts
 db_url = sqlalchemy_make_url(settings.database_url)
 engine = create_async_engine(
     str(db_url),
