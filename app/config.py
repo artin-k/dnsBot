@@ -203,37 +203,36 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("Configuration validation failed:\n\n" + "\n".join(errors))
     
 # app/config.py
-# (Locate this dictionary at the very bottom of the file and replace it)
 
 SLOT_CONFIGS = {
     1: {
         "name": "🇩🇪 آلمان - فرانکفورت (Germany)",
         "device_id": get_settings().controld_device_1,
-        "dns_primary": "76.76.2.22",        # Replace with your Slot 1 (German) legacy Primary IPv4 [cite: 1]
-        "dns_secondary": "76.76.10.22",     # Replace with your Slot 1 (German) legacy Secondary IPv4
+        "dns_primary": "76.76.2.162",
+        "dns_secondary": "76.76.10.162",
     },
     2: {
         "name": "🇫🇷 فرانسه - پاریس (France)",
         "device_id": get_settings().controld_device_2,
-        "dns_primary": "76.76.2.22",        # Replace with your Slot 2 (France) legacy Primary IPv4 [cite: 1]
-        "dns_secondary": "76.76.10.22",     # Replace with your Slot 2 (France) legacy Secondary IPv4
+        "dns_primary": "76.76.2.129",
+        "dns_secondary": "76.76.10.129",
     },
     3: {
         "name": "🇬🇧 انگلستان - لندن (United Kingdom)",
         "device_id": get_settings().controld_device_3,
-        "dns_primary": "76.76.2.22",        # Replace with your Slot 3 (England) legacy Primary IPv4 [cite: 1]
-        "dns_secondary": "76.76.10.22",     # Replace with your Slot 3 (England) legacy Secondary IPv4
+        "dns_primary": "76.76.2.192",
+        "dns_secondary": "76.76.10.192",
     },
     4: {
         "name": "🇦🇪 امارات متحده - دبی (United Arab Emirates)",
         "device_id": get_settings().controld_device_4,
-        "dns_primary": "76.76.2.22",        # Replace with your Slot 4 (Dubai) legacy Primary IPv4 [cite: 1]
-        "dns_secondary": "76.76.10.22",     # Replace with your Slot 4 (Dubai) legacy Secondary IPv4
+        "dns_primary": "76.76.2.101",
+        "dns_secondary": "76.76.10.101",
     },
     5: {
         "name": "🇹🇷 ترکیه - استانبول (Turkey)",
         "device_id": get_settings().controld_device_5,
-        "dns_primary": "76.76.2.22",        # Replace with your Slot 5 (Turk) legacy Primary IPv4 [cite: 1]
-        "dns_secondary": "76.76.10.22",     # Replace with your Slot 5 (Turk) legacy Secondary IPv4
+        "dns_primary": "76.76.2.122",
+        "dns_secondary": "76.76.10.122",
     }
 }

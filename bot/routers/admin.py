@@ -236,9 +236,20 @@ def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# Inside bot/routers/admin.py (Near the top)
+# bot/routers/admin.py
 
 async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
+    """Retrieves Legacy DNS resolvers, preferring local static configurations over slow APIs."""
+    # 1. Search locally mapped configurations first
+    from app.config import SLOT_CONFIGS
+    for config in SLOT_CONFIGS.values():
+        if config["device_id"] == device_id:
+            return {
+                "ipv4_primary": config["dns_primary"],
+                "ipv4_secondary": config["dns_secondary"],
+            }
+
+    # 2. API fallback for trial or dynamic devices
     url = f"https://api.controld.com/devices/{device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
@@ -253,14 +264,16 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 resolver_info = body.get("resolvers") or body.get("resolver") or []
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
-                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.22",
-                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "76.76.10.22"
+                    "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.162",
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "76.76.10.162"
                 }
         except Exception:
             pass
+            
+    # Default fallback to the German slot
     return {
-        "ipv4_primary": "76.76.2.22",
-        "ipv4_secondary": "76.76.10.22"
+        "ipv4_primary": "76.76.2.162",
+        "ipv4_secondary": "76.76.10.162"
     }
 
 # Callback used for interactive order management
@@ -2938,7 +2951,7 @@ def _format_withdrawal_detail(withdrawal: WalletWithdrawalRequest) -> str:
 
 # bot/routers/admin.py
 
-# --- LOCATE AND REPLACE THE _show_services METHOD ---
+# --- LOCATE AND REPLACE THE _show_services METHOD (around line 1021) ---
 async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None:
     """
     Parses active subscription metadata on the fly, queries Control D in real-time
@@ -3007,17 +3020,14 @@ async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None
         if service.controld_device_id:
             try:
                 controld = ControlDService(settings)
-                # Fetch active IPs directly from Control D API in real-time [cite: 1]
                 active_ips = await controld.get_active_ips(service.controld_device_id)
                 if active_ips:
                     real_ip = active_ips[0]
-                    # Update local database if desynchronized [cite: 1]
                     if service.authorized_ip != real_ip:
                         service.authorized_ip = real_ip
                         await session.commit()
                     active_ip = real_ip
                 else:
-                    # Clear DB if no active IPs on Control D [cite: 1]
                     if service.authorized_ip:
                         service.authorized_ip = None
                         await session.commit()
@@ -3041,11 +3051,12 @@ async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None
 ━━━━━━━━━━━━━━━━━━━━━"""
         )
 
-        # Build clean buttons with country flags [cite: services.py, 1]
+        # Build clean buttons using correct Admin-level callback [cite: services.py]
         button_label = f"👤 {first_name[:10]} | {flag} {country_display.split(' - ')[0][:12]}"
         builder.button(
             text=button_label,
-            callback_data=ServiceActionCallback(action="status", service_id=service.id)
+            # FIXED: Uses AdminServiceCallback to route directly to the Admin details manager [cite: services.py]
+            callback_data=AdminServiceCallback(action="detail", service_id=service.id)
         )
 
     # Layout: Stacks user buttons cleanly
@@ -3054,7 +3065,6 @@ async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None
 
     text_content = "\n".join(lines)
     await _safe_edit_or_answer(callback, text_content, reply_markup=builder.as_markup())
-
     
 async def _show_service_detail(callback: CallbackQuery, service) -> None:
     await _safe_edit_or_answer(callback, _format_service_detail(service), reply_markup=service_detail_keyboard(service))

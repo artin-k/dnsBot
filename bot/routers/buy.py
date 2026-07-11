@@ -46,6 +46,7 @@ from app.utils.formatting import format_money
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
 from bot.keyboards.buy import PlanCallback, paystar_payment_keyboard
+from bot.routers.services import create_secure_ip_update_keyboard
 from bot.states.buy import BuyStates
 
 router = Router(name="buy")
@@ -471,7 +472,7 @@ async def handle_apply_test_loc(
 
     await callback.message.answer(
         success_text, 
-        reply_markup=_get_ip_registration_keyboard(device_id), 
+        markup = await create_secure_ip_update_keyboard(session, new_test_sub.id), # For test
         parse_mode="HTML"
     )
 
@@ -863,7 +864,7 @@ async def handle_pay_instant_wallet(
 
     await callback.message.answer(
         success_text, 
-        reply_markup=_get_ip_registration_keyboard(device_id), 
+        markup = await create_secure_ip_update_keyboard(session, new_subscription.id), # For wallet
         parse_mode="HTML"
     )
 

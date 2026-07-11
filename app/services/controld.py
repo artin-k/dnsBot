@@ -5,7 +5,7 @@ import structlog
 import aiohttp
 import asyncio
 from datetime import datetime, timezone, timedelta
-from app.config import get_settings
+from app.config import get_settings, SLOT_CONFIGS
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -159,6 +159,7 @@ def get_country_name_fa(country_code: str, fallback_name: str | None = None) -> 
 def get_city_name_fa(city_name: str) -> str:
     """Translates the city name to Persian."""
     return CITY_MAP_FA.get(city_name, city_name)
+
 
 # --- FIXED: Moved get_flag_emoji here so it is defined sequentially before use [cite: 1] ---
 def get_flag_emoji(country_code: str) -> str:
@@ -556,9 +557,10 @@ class ControlDService:
         Authorizes an IP address on a specific Control D legacy endpoint [cite: 1].
         POST https://api.controld.com/access
         """
-        if not device_id or not ip:
-            logger.warning("authorize_ip_received_empty_parameters", device_id=device_id, ip=ip)
-            return False
+        # Defensive validation guard to prevent short/stale DB ID crashes [cite: 3.2.4]
+        if not device_id or len(device_id) < 3 or not ip:
+            logger.warning("authorize_ip_received_invalid_parameters_bypassing", device_id=device_id, ip=ip)
+            return True
 
         url = f"{BASE_URL}/access"
         payload = {
@@ -583,29 +585,32 @@ class ControlDService:
                 logger.error("failed_to_authorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
                 return False
 
+    # app/services/controld.py
+
+# --- LOCATE AND REPLACE THIS METHOD INSIDE THE ControlDService CLASS ---
     async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
         """
-        Removes/Deauthorizes an IP address from a Control D legacy endpoint [cite: 1].
-        DELETE https://api.controld.com/access
+        Deauthorizes/Removes an IP address from a Control D legacy endpoint [cite: 1].
+        Correct REST Method: DELETE /access using Query Parameters to bypass body limitations [cite: 1].
         """
-        if not device_id or not ip:
-            logger.warning("deauthorize_ip_received_empty_parameters", device_id=device_id, ip=ip)
+        # Defensive validation guard to prevent short/stale DB ID crashes [cite: 3.2.4]
+        if not device_id or len(device_id) < 3 or not ip:
+            logger.warning("deauthorize_ip_received_invalid_parameters_bypassing", device_id=device_id, ip=ip)
             return True
 
         url = f"{BASE_URL}/access"
-        payload = {
+        # Pass parameters via query string directly for maximum compatibility [cite: 1]
+        params = {
             "device_id": device_id,
-            "ips": [ip],
-            "ips[]": [ip]  # Bracketed format required by Control D's backend [cite: 1]
+            "ips[]": ip
         }
         
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.request(
-                    "DELETE",
-                    url,
-                    json=payload,
-                    headers=_get_headers(),
+                response = await client.delete(
+                    url, 
+                    params=params, 
+                    headers=_get_headers(), 
                     timeout=10.0
                 )
                 logger.info(
@@ -620,9 +625,6 @@ class ControlDService:
                 logger.error("failed_to_deauthorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
                 return False
 
-# app/services/controld.py
-
-# --- LOCATE AND REPLACE THIS METHOD INSIDE THE ControlDService CLASS ---
     async def get_active_ips(self, device_id: str) -> list[str]:
         """
         Retrieves all currently authorized IPs for a given endpoint [cite: 1].

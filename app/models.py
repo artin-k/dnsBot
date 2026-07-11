@@ -549,3 +549,32 @@ class MandatoryChannel(TimestampMixin, Base):
     channel_name: Mapped[str] = mapped_column(String(255), nullable=False)
     invite_link: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+
+
+# app/models.py
+import uuid
+
+class IPAuthToken(TimestampMixin, Base):
+    """
+    Stores secure, single-use, 10-minute expiring tokens linked to 
+    specific active subscriptions [cite: 1].
+    """
+    __tablename__ = "ip_auth_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(
+        String(64), 
+        unique=True, 
+        index=True, 
+        default=lambda: str(uuid.uuid4()), 
+        nullable=False
+    )
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("vpn_services.id", ondelete="CASCADE"), 
+        index=True, 
+        nullable=False
+    )
+    is_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    service: Mapped[VPNService] = relationship()

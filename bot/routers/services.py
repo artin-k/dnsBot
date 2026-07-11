@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from app.config import Settings, get_settings, SLOT_CONFIGS
 from app.models import Plan, VPNService
@@ -22,7 +22,9 @@ from app.utils.formatting import format_datetime
 from bot import menu_actions
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
-from bot.keyboards.services import ServiceActionCallback
+import uuid
+
+from app.models import IPAuthToken
 
 router = Router(name="services")
 logger = structlog.get_logger(__name__)
@@ -30,12 +32,12 @@ logger = structlog.get_logger(__name__)
 WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 
 
-def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
-    """Generates the automatic and manual IP registration controls [cite: buy.py]."""
+def _get_ip_registration_keyboard(service_id: int) -> InlineKeyboardMarkup:
+    """Generates the automatic and manual IP registration using the secure database service_id [cite: buy.py, services.py]."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
-    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{device_id}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{service_id}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{service_id}")
+    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{service_id}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -54,7 +56,7 @@ def format_service_item_display(service: VPNService, index: int) -> str:
         parts = raw_username.split("|")
         username_part = parts[0]
         service_pk = parts[1] if len(parts) > 1 else "default"
-        slot_num_str = parts[2] if len(parts) > 2 else None
+        slot_num_str = parts[2] if len(parts) > 2 else "1"
         
         # Format game/service display name
         if service_pk != "default":
@@ -85,34 +87,26 @@ def format_service_item_display(service: VPNService, index: int) -> str:
 """
 
 
-def _get_service_manage_keyboard(service_id: int, device_id: str | None = None) -> InlineKeyboardMarkup:
-    """Generates active service management keyboard with side-by-side quick action pairings [cite: services.py]."""
+def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
+    """Generates active service management keyboard using secure string callbacks."""
     builder = InlineKeyboardBuilder()
-    
-    # Add quick IP registration actions directly in management panel [cite: buy.py]
-    if device_id:
-        builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
-        builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{device_id}")
-        
     builder.button(
         text="🔗 لینک‌های اتصال",
-        callback_data=ServiceActionCallback(action="link", service_id=service_id)
+        callback_data=f"manage_links:{service_id}"
     )
     builder.button(
         text="📊 وضعیت سرویس",
-        callback_data=ServiceActionCallback(action="status", service_id=service_id)
+        callback_data=f"manage_status:{service_id}"
     )
     builder.button(
-        # Rerouted to go directly to our static 5-slot location changer [cite: services.py, 1]
         text="🗺 تنظیمات لوکیشن سرور",
         callback_data=f"change_default_loc_select:{service_id}"
     )
-    
-    if device_id:
-        builder.adjust(1, 1, 1, 1, 1)
-    else:
-        builder.adjust(1)
-        
+    builder.button(
+        text="🔙 بازگشت به لیست",
+        callback_data="my_services_page:0"
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -150,15 +144,15 @@ async def _show_my_services_page(callback_or_message: CallbackQuery | Message, p
         raw_name = (service.username or "دستگاه").split("|")[0].strip()
         
         if service.status == "active":
-            # UX Masterpiece: Generate side-by-side quick buttons for active plans [cite: services.py]
+            # Side-by-Side: Quick IP Register | Management Panel [cite: services.py]
             builder.row(
                 InlineKeyboardButton(
                     text=f"✳️ ثبت آی‌پی سریع",
-                    url=f"{WEB_SERVER_BASE_URL}/update-ip/{service.controld_device_id}"
+                    url=f"{WEB_SERVER_BASE_URL}/update-ip/{service.id}"
                 ),
                 InlineKeyboardButton(
                     text=f"🛠 مدیریت",
-                    callback_data=ServiceActionCallback(action="status", service_id=service.id).pack()
+                    callback_data=f"manage_service:{service.id}" # Direct string callback [cite: services.py]
                 )
             )
         else:
@@ -166,7 +160,7 @@ async def _show_my_services_page(callback_or_message: CallbackQuery | Message, p
             builder.row(
                 InlineKeyboardButton(
                     text=f"❌ منقضی شده: {raw_name}",
-                    callback_data=ServiceActionCallback(action="status", service_id=service.id).pack()
+                    callback_data=f"manage_service:{service.id}"
                 )
             )
 
@@ -202,48 +196,65 @@ async def handle_my_services_page(callback: CallbackQuery, session: AsyncSession
     await _show_my_services_page(callback, page, session)
 
 
-@router.callback_query(ServiceActionCallback.filter(F.action.in_({"link", "status", "renew"})))
-async def service_action(
-    callback: CallbackQuery,
-    callback_data: ServiceActionCallback,
-    session: AsyncSession,
-) -> None:
+# ============================================================================
+# NEW ROBUST STRING-BASED SERVICE CONTROLLERS (REPLACES EXPIRED/BROKEN CLASSES)
+# ============================================================================
+
+@router.callback_query(F.data.startswith("manage_service:"), StateFilter("*"))
+async def handle_manage_service(callback: CallbackQuery, session: AsyncSession) -> None:
+    """Displays the administrative options for the subscription [cite: services.py, 1]."""
     await callback.answer()
-    if callback.from_user is None:
+    if callback.message is None:
         return
-
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-    if user is None:
-        await _safe_answer(callback, "ابتدا /start را ارسال کنید.")
-        return
-
-    service = await ServicesRepository(session).get_user_service(callback_data.service_id, user.id)
+    service_id = int(callback.data.split(":")[1])
+    service = await ServicesRepository(session).get(service_id)
     if service is None:
-        await _safe_answer(callback, "این سرویس پیدا نشد یا متعلق به حساب شما نیست.")
+        await callback.message.answer("❌ سرویس پیدا نشد.")
         return
 
-    if callback_data.action == "renew":
-        await _safe_answer(
-            callback,
-            "♻️ تمدید مستقیم سرویس در حال حاضر فعال نیست.\n\nبرای تمدید، لطفاً از بخش «خرید اشتراک» همان پلن را مجدداً خریداری کنید تا زمان آن به این سرویس افزوده شود.",
-        )
+    text = menu_actions.format_service_summary(service)
+    await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("manage_links:"), StateFilter("*"))
+async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) -> None:
+    """Generates the connection links and single-use expiring token on-the-fly [cite: services.py, 1]."""
+    await callback.answer()
+    if callback.message is None:
+        return
+    service_id = int(callback.data.split(":")[1])
+    service = await ServicesRepository(session).get(service_id)
+    if service is None:
+        await callback.message.answer("❌ سرویس پیدا نشد.")
         return
 
-    if callback_data.action == "link":
-        text = f"""🔗 لینک‌های سرویس <code>{escape(service.username.split("|")[0])}</code>
+    text = f"""🔗 لینک‌های اتصال سرویس <code>{escape(service.username.split("|")[0])}</code>
 
 <b>لینک اشتراک DoT:</b>
 <code>{escape(service.subscription_link or "ثبت نشده")}</code>
 
-<b>لینک کانگیف DoH:</b>
+<b>لینک کانفیگ DoH:</b>
 <code>{escape(service.config_link or "ثبت نشده")}</code>"""
-        
-        await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id, service.controld_device_id), parse_mode="HTML")
+    
+    # Generate the single-use, 10-minute expiring secure keyboard on-the-fly [cite: 1]
+    markup = await create_secure_ip_update_keyboard(session, service.id)
+    await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("manage_status:"), StateFilter("*"))
+async def handle_manage_status(callback: CallbackQuery, session: AsyncSession) -> None:
+    """Displays the live connection status of the service."""
+    await callback.answer()
+    if callback.message is None:
+        return
+    service_id = int(callback.data.split(":")[1])
+    service = await ServicesRepository(session).get(service_id)
+    if service is None:
+        await callback.message.answer("❌ سرویس پیدا نشد.")
         return
 
-    # Default action: status
     text = menu_actions.format_service_summary(service)
-    await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id, service.controld_device_id), parse_mode="HTML")
+    await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id), parse_mode="HTML")
 
 
 # ============================================================================
@@ -260,7 +271,7 @@ async def _show_default_loc_page(callback: CallbackQuery, service_id: int, page:
         )
     
     builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=ServiceActionCallback(action="status", service_id=service_id).pack()))
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"manage_service:{service_id}"))
 
     await callback.message.edit_text(
         "🗺 <b>تغییر لوکیشن سرور دی‌ان‌اس</b>\n\n"
@@ -279,10 +290,10 @@ async def handle_change_default_loc_select(callback: CallbackQuery, settings: Se
 
 # bot/routers/services.py
 
-# --- LOCATE AND REPLACE THE handle_apply_def_loc METHOD ---
+# --- LOCATE AND REPLACE THE handle_apply_def_loc HANDLER ---
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Migrates a user's IP registration from one static slot to another, wiping the old one [cite: services.py, 1]."""
+    """Migrates a user's IP registration from one static slot to another statically [cite: services.py, 1]."""
     await callback.answer()
     if callback.message is None:
         return
@@ -306,23 +317,35 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
     ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
 
-    # Prevent redundant migrations
+    # Avoid redundant migrations
     if service.controld_device_id == new_device_id:
         await callback.message.answer(f"ℹ️ اشتراک شما در حال حاضر روی سرور {new_pop_name} فعال است.")
         return
 
-    await callback.message.edit_text(f"⚙️ در حال انتقال لوکیشن اشتراک شما به سرور {new_pop_name}...")
+    # Disable the keyboard immediately to prevent multi-click/double-click race conditions
+    await callback.message.edit_text(
+        f"⚙️ در حال انتقال لوکیشن اشتراک شما به سرور {new_pop_name}...",
+        reply_markup=None
+    )
 
-    # Step 1: Self-Cleaning: Fetch and deauthorize ALL active IPs from their OLD permanent slot [cite: 1]
     controld = ControlDService(settings)
-    if service.controld_device_id:
+    old_device_id = service.controld_device_id
+
+    # Step 1: Query the Control D API dynamically to deauthorize ALL currently active IPs from the OLD slot [cite: 1]
+    if old_device_id:
         try:
-            active_ips = await controld.get_active_ips(service.controld_device_id)
-            logger.info("fetched_active_ips_for_migration_cleanup", device_id=service.controld_device_id, ips=active_ips)
-            for active_ip in active_ips:
-                await controld.deauthorize_ip(service.controld_device_id, active_ip)
+            active_ips = await controld.get_active_ips(old_device_id)
+            if active_ips:
+                for active_ip in active_ips:
+                    logger.info("deauthorizing_active_ip_from_old_slot", service_id=service.id, old_device_id=old_device_id, ip=active_ip)
+                    await controld.deauthorize_ip(old_device_id, active_ip)
+            
+            # Fallback: Safely clear the database recorded IP if it wasn't returned in the active list
+            if service.authorized_ip and service.authorized_ip not in active_ips:
+                logger.info("deauthorizing_db_ip_from_old_slot_fallback", service_id=service.id, old_device_id=old_device_id, ip=service.authorized_ip)
+                await controld.deauthorize_ip(old_device_id, service.authorized_ip)
         except Exception as exc:
-            logger.error("failed_to_clean_old_slot_ips_during_migration", device_id=service.controld_device_id, error=str(exc))
+            logger.warning("failed_to_dynamically_cleanup_old_slot_ips", service_id=service.id, old_device_id=old_device_id, error=str(exc))
 
     # Step 2: Authorize their IP on their NEW permanent slot [cite: 1]
     if service.authorized_ip:
@@ -345,9 +368,12 @@ Secondary: <code>{ipv4_secondary}</code>
 
 ⚠️ <i>در صورت عدم اتصال، لطفاً مجدداً روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید.</i>"""
 
+    # Generate the secure single-use, 10-minute expiring keyboard dynamically [cite: 1]
+    markup = await create_secure_ip_update_keyboard(session, service.id)
+
     await callback.message.answer(
         success_text,
-        reply_markup=_get_ip_registration_keyboard(new_device_id),
+        reply_markup=markup,
         parse_mode="HTML"
     )
 
@@ -372,3 +398,48 @@ async def handle_def_loc_page(callback: CallbackQuery, settings: Settings) -> No
     page = int(parts[2])
 
     await _show_default_loc_page(callback, service_id, page, settings)
+
+
+# ============================================================================
+# SECURE EXPIRING TOKEN INLINE MARUP GENERATOR [cite: 1]
+# ============================================================================
+
+# bot/routers/services.py
+
+
+async def create_secure_ip_update_keyboard(session: AsyncSession, service_id: int) -> InlineKeyboardMarkup:
+    """
+    Deletes older unused FSM links, generates a secure 10-minute expiring 32-char hex token,
+    stores it, and returns the secure registered markup.
+    """
+    # 1. Invalidate any existing unused tokens for this subscription
+    await session.execute(
+        delete(IPAuthToken).where(
+            IPAuthToken.service_id == service_id,
+            IPAuthToken.is_used == False
+        )
+    )
+
+    # 2. Generate secure 32-char compact hex UUID token (no hyphens)
+    secure_token = uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=10)  # 10 minutes lifetime
+
+    # 3. Store the token record asynchronously
+    new_token_record = IPAuthToken(
+        token=secure_token,
+        service_id=service_id,
+        expires_at=expires_at,
+        is_used=False
+    )
+    session.add(new_token_record)
+    await session.flush()  # Persist before rendering
+
+    # 4. Generate keyboard linking to the expiring route
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/capture-ip/{secure_token}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/capture-ip/{secure_token}")
+    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{service_id}")
+    builder.adjust(1)
+    
+    return builder.as_markup()
