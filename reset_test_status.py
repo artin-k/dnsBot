@@ -1,27 +1,23 @@
-# reset_test_status.py
 import asyncio
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from app.database import async_session_maker
-from app.models import VPNService, User
-
-# --- Put your real numerical Telegram ID here ---
-MY_TELEGRAM_ID = 271957957  
+from app.models import VPNService
 
 async def main():
     async with async_session_maker() as session:
-        # Find user ID
-        stmt = select(User).where(User.telegram_id == MY_TELEGRAM_ID)
-        res = await session.execute(stmt)
-        user = res.scalars().first()
-        if not user:
-            print("❌ کاربر در دیتابیس یافت نشد!")
-            return
+        # Delete all test subscription records for ALL users
+        # It is critical to filter by is_test_account == True so you don't wipe paid plans!
+        delete_stmt = delete(VPNService).where(VPNService.is_test_account == True)
         
-        # Delete test subscription records to reset your status [1]
-        delete_stmt = delete(VPNService).where(VPNService.user_id == user.id)
-        await session.execute(delete_stmt)
+        # Execute the deletion
+        result = await session.execute(delete_stmt)
         await session.commit()
-        print(f"✅ با موفقیت وضعیت تست برای کاربر {MY_TELEGRAM_ID} ریست شد!")
+        
+        # result.rowcount will tell you exactly how many test accounts were deleted
+        deleted_count = result.rowcount
+        
+        print(f"✅ با موفقیت وضعیت تست برای تمامی کاربران ریست شد!")
+        print(f"🗑 تعداد اکانت‌های تست پاک شده: {deleted_count}")
 
 if __name__ == "__main__":
     asyncio.run(main())

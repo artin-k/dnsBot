@@ -1,28 +1,24 @@
 # app/services/scheduler.py
 import asyncio
 from datetime import datetime, timezone
-
 import structlog
 from aiogram import Bot
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import joinedload
 
 from app.database import async_session_maker
 from app.config import get_settings
 from app.services.controld import ControlDService
-from app.models import Plan, VPNService, VPNServiceStatus
+from app.models import Plan, VPNService, VPNServiceStatus, IPAuthToken
 from app.utils.formatting import format_datetime
 
 logger = structlog.get_logger(__name__)
-
 
 async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
     """
     Finds expired active DNS services, calls Control D to deauthorize their mapped 
     IP address to cut off access immediately, and transitions their DB status to 'expired' [cite: 1].
-    Uses isolated savepoints to handle failures gracefully.
     """
-    # Standardize on timezone-aware UTC timestamps for comparison
     now = datetime.now(timezone.utc)
     settings = get_settings()
     cd_service = ControlDService(settings)
@@ -30,7 +26,6 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
 
     async with async_session_maker() as session:
         try:
-            # Query active services whose expiration time has passed
             stmt = (
                 select(VPNService)
                 .options(joinedload(VPNService.user))
@@ -55,9 +50,8 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
             logger.info("processing_personal_expiration", service_id=service.id, username=service.username)
             
             try:
-                # Isolate operations per user using a nested transaction
+                # Isolate operations using a nested transaction
                 async with session.begin_nested():
-                    # Timezone safety validation
                     service_expire = service.expire_at
                     if service_expire.tzinfo is None:
                         service_expire = service_expire.replace(tzinfo=timezone.utc)
@@ -75,7 +69,7 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
                             ip=service.authorized_ip,
                         )
                         try:
-                            # DELETE https://api.controld.com/access?device_id={device_id} [cite: 1]
+                            # Performs DELETE request to deauthorize IP [cite: 1]
                             success = await cd_service.deauthorize_ip(
                                 device_id=service.controld_device_id, 
                                 ip=service.authorized_ip
@@ -89,16 +83,18 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
                             success = False
 
                         if not success:
-                            # Log warning, but proceed with DB expiration to prevent infinite retries
                             logger.warning(
                                 "failed_to_deauthorize_expired_ip_remotely_proceeding_locally", 
                                 service_id=service.id
                             )
 
-                    # Mark subscription status as expired in the database [cite: 1]
+                    # Update local database status
                     service.status = VPNServiceStatus.EXPIRED.value
-                    # Optionally clear the authorized_ip column or preserve it for history
-                    # service.authorized_ip = None
+                    
+                    # Cascade delete any associated IP auth tokens so they can't be used after expiration
+                    await session.execute(
+                        delete(IPAuthToken).where(IPAuthToken.service_id == service.id)
+                    )
 
                 # Commit changes for this individual subscription
                 await session.commit()
@@ -107,10 +103,11 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
                 # Send Telegram notification to the user
                 if bot is not None and service.user is not None:
                     try:
+                        title_label = "اکانت تست" if service.is_test_account else "اشتراک"
                         await bot.send_message(
                             chat_id=service.user.telegram_id,
                             text=(
-                                "⏳ <b>اشتراک DNS شما به پایان رسید.</b>\n\n"
+                                f"⏳ <b>{title_label} DNS شما به پایان رسید.</b>\n\n"
                                 f"🗓 <b>تاریخ انقضاء:</b> {format_datetime(service.expire_at)}\n"
                                 "دسترسی شما غیرفعال و آی‌پی شما از پنل حذف شد. "
                                 "برای خرید مجدد یا تمدید می‌توانید از منوی اصلی اقدام کنید."
@@ -121,13 +118,11 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
                         logger.warning("failed_to_notify_expired_service_owner", service_id=service.id, error=str(exc))
 
             except Exception as e:
-                # Rollback changes within this savepoint only to keep session intact
                 await session.rollback()
                 logger.error("failed_to_expire_personal_service_individually", service_id=service.id, error=str(e))
                 continue
 
         return processed
-
 
 async def sync_plans_with_controld(session) -> None:
     """
