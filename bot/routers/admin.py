@@ -190,6 +190,8 @@ from aiogram.filters.callback_data import CallbackData
 
 import httpx  # Ensure httpx is imported at the top
 
+
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -3436,14 +3438,14 @@ def _format_service_detail(service) -> str:
 {escape(service.subscription_link or "-")}"""
 
 
-# Replace this inside bot/routers/admin.py
+# bot/routers/admin.py
 
 def _approved_message(
     result: ApprovedPaymentResult, 
     expire_at: datetime | None = None,
-    ipv4_primary: str = "94.183.166.203",
-    ipv4_secondary: str = "94.183.166.208",
-    custom_username: str | None = None  # <-- Added [1]
+    ipv4_primary: str = "76.76.2.162",
+    ipv4_secondary: str = "76.76.10.162",
+    custom_username: str | None = None
 ) -> str:
     if result.waiting_inventory:
         return "پرداخت شما تایید شد. پشتیبانی به‌زودی اطلاعات اشتراک شما را ارسال می‌کند."
@@ -3462,7 +3464,6 @@ def _approved_message(
 
     duration_text = calculate_remaining_time_fa(target_expire)
 
-    # --- METADATA LOCATION & SERVICE PARSER ---
     raw_username = custom_username or ""
     service_display = "کل ترافیک اینترنت (Default)"
     country_display = "پیش‌فرض"
@@ -3471,7 +3472,6 @@ def _approved_message(
         service_pk = parts[1] if len(parts) > 1 else "default"
         pop_code = parts[2] if len(parts) > 2 else None
         
-        # Format game display
         if service_pk == "default":
             service_display = "کل ترافیک اینترنت (Default)"
         else:
@@ -3485,7 +3485,6 @@ def _approved_message(
             except Exception:
                 service_display = service_pk.capitalize()
                 
-        # Format country display [1]
         if pop_code:
             from app.services.controld import get_country_name_fa
             country_display = f"{get_country_name_fa(pop_code)} ({pop_code})"
@@ -3508,6 +3507,17 @@ def _approved_message(
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
 
 📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
+
+
+def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
+    """Generates direct update-ip links to bypass capture-ip entirely [cite: controld_buy.py, run_web_ip_updater.py]."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{device_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
 
 def _manual_activation_user_message(
     *,

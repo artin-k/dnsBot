@@ -24,20 +24,18 @@ from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
 import uuid
 
-from app.models import IPAuthToken
-
 router = Router(name="services")
 logger = structlog.get_logger(__name__)
 
 WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 
 
-def _get_ip_registration_keyboard(service_id: int) -> InlineKeyboardMarkup:
-    """Generates the automatic and manual IP registration using the secure database service_id [cite: buy.py, services.py]."""
+def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
+    """Generates direct update-ip links to bypass capture-ip entirely [cite: controld_buy.py, run_web_ip_updater.py]."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{service_id}")
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{service_id}")
-    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{service_id}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/update-ip/{device_id}")
+    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{device_id}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -148,11 +146,11 @@ async def _show_my_services_page(callback_or_message: CallbackQuery | Message, p
             builder.row(
                 InlineKeyboardButton(
                     text=f"✳️ ثبت آی‌پی سریع",
-                    url=f"{WEB_SERVER_BASE_URL}/update-ip/{service.id}"
+                    url=f"{WEB_SERVER_BASE_URL}/update-ip/{service.controld_device_id}"  # Corrected to use device_id string [cite: admin.py]
                 ),
                 InlineKeyboardButton(
                     text=f"🛠 مدیریت",
-                    callback_data=f"manage_service:{service.id}" # Direct string callback [cite: services.py]
+                    callback_data=f"manage_service:{service.id}"
                 )
             )
         else:
@@ -218,7 +216,7 @@ async def handle_manage_service(callback: CallbackQuery, session: AsyncSession) 
 
 @router.callback_query(F.data.startswith("manage_links:"), StateFilter("*"))
 async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) -> None:
-    """Generates the connection links and single-use expiring token on-the-fly [cite: services.py, 1]."""
+    """Generates the connection links and update-ip buttons directly [cite: services.py, 1]."""
     await callback.answer()
     if callback.message is None:
         return
@@ -236,7 +234,6 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
 <b>لینک کانفیگ DoH:</b>
 <code>{escape(service.config_link or "ثبت نشده")}</code>"""
     
-    # Generate the single-use, 10-minute expiring secure keyboard on-the-fly [cite: 1]
     markup = await create_secure_ip_update_keyboard(session, service.id)
     await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
 
@@ -368,7 +365,6 @@ Secondary: <code>{ipv4_secondary}</code>
 
 ⚠️ <i>در صورت عدم اتصال، لطفاً مجدداً روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید.</i>"""
 
-    # Generate the secure single-use, 10-minute expiring keyboard dynamically [cite: 1]
     markup = await create_secure_ip_update_keyboard(session, service.id)
 
     await callback.message.answer(
@@ -401,45 +397,16 @@ async def handle_def_loc_page(callback: CallbackQuery, settings: Settings) -> No
 
 
 # ============================================================================
-# SECURE EXPIRING TOKEN INLINE MARUP GENERATOR [cite: 1]
+# RELIABLE DIRECT UPDATE-IP KEYBOARD GENERATOR
 # ============================================================================
 
 # bot/routers/services.py
 
-
 async def create_secure_ip_update_keyboard(session: AsyncSession, service_id: int) -> InlineKeyboardMarkup:
     """
-    Deletes older unused FSM links, generates a secure 10-minute expiring 32-char hex token,
-    stores it, and returns the secure registered markup.
+    Unified keyboard generator mapping directly to the operational /update-ip route.
+    Bypasses unstable database secure links entirely [cite: controld_buy.py, run_web_ip_updater.py].
     """
-    # 1. Invalidate any existing unused tokens for this subscription
-    await session.execute(
-        delete(IPAuthToken).where(
-            IPAuthToken.service_id == service_id,
-            IPAuthToken.is_used == False
-        )
-    )
-
-    # 2. Generate secure 32-char compact hex UUID token (no hyphens)
-    secure_token = uuid.uuid4().hex
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(minutes=10)  # 10 minutes lifetime
-
-    # 3. Store the token record asynchronously
-    new_token_record = IPAuthToken(
-        token=secure_token,
-        service_id=service_id,
-        expires_at=expires_at,
-        is_used=False
-    )
-    session.add(new_token_record)
-    await session.flush()  # Persist before rendering
-
-    # 4. Generate keyboard linking to the expiring route
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=f"{WEB_SERVER_BASE_URL}/capture-ip/{secure_token}")
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=f"{WEB_SERVER_BASE_URL}/capture-ip/{secure_token}")
-    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{service_id}")
-    builder.adjust(1)
-    
-    return builder.as_markup()
+    service = await session.get(VPNService, service_id)
+    device_id = service.controld_device_id if service else "unknown"
+    return _get_ip_registration_keyboard(device_id)
