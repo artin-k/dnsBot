@@ -256,115 +256,6 @@ async def buy_back_to_menu(callback: CallbackQuery) -> None:
 # 2. THE TEST ACCOUNT FLOW (RE-ROUTED TO STATIC BALANCER SLOTS)
 # ============================================================================
 
-# --- LOCATE AND REPLACE handle_get_test_account ---
-@router.callback_query(F.data == "get_test_account", StateFilter("*"))
-async def handle_get_test_account(
-    callback: CallbackQuery,
-    state: FSMContext,
-    session: AsyncSession,
-    settings: Settings,
-    answer_callback: bool = True,
-) -> None:
-    if callback.message is None or callback.from_user is None:
-        return
-
-    if answer_callback:
-        await callback.answer()
-
-    await state.clear()
-
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-    if user is None:
-        await callback.message.answer("ابتدا /start را ارسال کنید.")
-        return
-
-    now = datetime.now(timezone.utc).replace(microsecond=0)
-    active_test = await _get_active_test_service(session, user.id, now)
-    if active_test is not None:
-        await _safe_edit_or_reply(
-            callback,
-            "⚠️ شما قبلا یک اکانت تست فعال دارید.\n\n"
-            f"👤 نام دستگاه: <code>{escape(active_test.username.split('|')[0])}</code>\n"
-            f"🗓 تاریخ ایجاد: {format_datetime_fa(active_test.created_at)}\n"
-            f"🗓 تاریخ انقضا: {format_datetime_fa(active_test.expire_at)}\n"
-            f"⏳ زمان باقی‌مانده: {calculate_remaining_time_fa(active_test.expire_at)}",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    existing_test = await _get_latest_test_service(session, user.id)
-    if existing_test is not None:
-        await _safe_edit_or_reply(
-            callback,
-            "❌ شما قبلا از اکانت تست استفاده کرده‌اید و امکان دریافت مجدد وجود ندارد.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    # Strictly display only Default Traffic and Gaming Categories
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data="test_select_srv:default")
-    builder.button(text="🎮 بازی‌ها (Gaming)", callback_data="test_cat:gaming:0")
-    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
-    builder.adjust(1)
-
-    await _safe_edit_or_reply(
-        callback,
-        "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
-        "🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-    )
-
-
-@router.callback_query(F.data.startswith("test_cat:"), StateFilter("*"))
-async def handle_test_cat(callback: CallbackQuery, settings: Settings) -> None:
-    await callback.answer()
-    parts = callback.data.split(":")
-    category_key = parts[1]
-    page = int(parts[2])
-
-    controld = ControlDService(settings)
-    services = await controld.fetch_controld_services(settings.controld_profile_id)
-    if not services:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
-        return
-
-    filtered = [s for s in services if s["category"] == category_key]
-    filtered.sort(key=lambda x: (x["name"] or "").lower())
-
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_items = filtered[start_idx:end_idx]
-    has_next = len(filtered) > end_idx
-
-    builder = InlineKeyboardBuilder()
-    for s in page_items:
-        builder.button(
-            text=s["name"] or s["pk"],
-            callback_data=f"test_select_srv:{s['pk']}",
-        )
-
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"test_cat:{category_key}:{page - 1}"))
-    if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"test_cat:{category_key}:{page + 1}"))
-    if nav_buttons:
-        builder.row(*nav_buttons)
-
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data="get_test_account"))
-    builder.adjust(2)
-
-    category_label = get_category_label_fa(category_key)
-    await _safe_edit_or_reply(
-        callback,
-        f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
-        f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-    )
-
-
 # bot/routers/buy.py
 import uuid
 import secrets
@@ -378,45 +269,78 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton
 from app.config import SLOT_CONFIGS
 from app.models import IPAuthToken, VPNService, VPNServiceStatus
 from app.repositories.users import UsersRepository
-from bot.routers.services import create_secure_ip_update_keyboard
+
 
 # ============================================================================
-# STEP 1: USER PREFERENCE MENU (LOCATION SELECTION)
+# STEP 1: RENDER THE PREFERRED SERVER LOCATION MENU
 # ============================================================================
 
-@router.callback_query(F.data.startswith("test_select_srv:"), StateFilter("*"))
-async def handle_test_select_srv(
+@router.callback_query(F.data == "get_test_account", StateFilter("*"))
+async def handle_get_test_account(
     callback: CallbackQuery,
+    state: FSMContext,
     session: AsyncSession,
     settings: Settings,
+    answer_callback: bool = True,
 ) -> None:
-    """Renders the location selection menu displaying exactly your 5 static servers [cite: 1]."""
-    await callback.answer()
-    if callback.message is None:
+    """Prompts the user to select their preferred country/server slot for the 2-hour trial [cite: 1]."""
+    if callback.message is None or callback.from_user is None:
         return
 
-    service_pk = callback.data.split(":")[1]
+    if answer_callback:
+        await callback.answer()
 
+    await state.clear()
+
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if user is None:
+        await callback.message.answer("ابتدا /start را ارسال کنید.")
+        return
+
+    # Check for active tests
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    active_test = await _get_active_test_service(session, user.id, now)
+    if active_test is not None:
+        await _safe_edit_or_reply(
+            callback,
+            "⚠️ شما در حال حاضر یک اکانت تست فعال دارید.\n\n"
+            f"👤 نام دستگاه: <code>{escape(active_test.username.split('|')[0])}</code>\n"
+            f"🗓 تاریخ انقضا: {format_datetime_fa(active_test.expire_at)}\n"
+            f"⏳ زمان باقی‌مانده: {calculate_remaining_time_fa(active_test.expire_at)}",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # Check for used tests
+    existing_test = await _get_latest_test_service(session, user.id)
+    if existing_test is not None:
+        await _safe_edit_or_reply(
+            callback,
+            "❌ شما قبلا از اکانت تست استفاده کرده‌اید و امکان دریافت مجدد وجود ندارد.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # Dynamically build inline keyboard from your 5 static slots
     builder = InlineKeyboardBuilder()
     for slot_num, config in SLOT_CONFIGS.items():
         builder.button(
             text=config["name"],
-            callback_data=f"test_loc:{service_pk}:{slot_num}"  # Passing service key and slot selection
+            callback_data=f"test_loc:{slot_num}"  # Sends selected slot ID directly
         )
-
+    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
     builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت به منوی تست", callback_data="get_test_account"))
 
     await _safe_edit_or_reply(
         callback,
-        "🗺 <b>انتخاب لوکیشن سرور تست</b>\n\n"
-        "کشوری که می‌خواهید ترافیک اینترنت شما به سرور آن متصل شود را انتخاب کنید:",
-        reply_markup=builder.as_markup()
+        "🎁 <b>دریافت اکانت تست ۲ ساعته رایگان</b>\n\n"
+        "🗺 لطفاً کشور (سرور) مورد نظر خود را برای اکانت تست انتخاب کنید:",
+        reply_markup=builder.as_markup(),
     )
 
 
 # ============================================================================
-# STEP 2 & 3: HANDLE USER SELECTION, CREATE ACCOUNT, AND SECURE TOKENS
+# STEP 2 & 3: PROCESS SELECTION, CREATE TRIAL & RETURN WORKING DYNAMIC BUTTONS
 # ============================================================================
 
 @router.callback_query(F.data.startswith("test_loc:"), StateFilter("*"))
@@ -426,41 +350,32 @@ async def handle_test_loc_selection(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Processes user preferred location choice, creates the 2-hour subscription and generates secure tokens [cite: 1]."""
+    """Registers the 2-hour test on the chosen static server and issues secure IP registration link [cite: 1]."""
     await callback.answer()
     if callback.message is None or callback.from_user is None:
         return
 
     parts = callback.data.split(":")
-    service_pk = parts[1]
-    slot_num = int(parts[2])
+    slot_num = int(parts[1])
 
     user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
     if user is None:
         return
 
-    # Double check active subscription limits
+    # Validate active/used tests
     now = datetime.now(timezone.utc).replace(microsecond=0)
     active_test = await _get_active_test_service(session, user.id, now)
     if active_test is not None:
-        await callback.message.edit_text(
-            "⚠️ شما در حال حاضر یک اکانت تست فعال دارید.\n\n"
-            f"👤 نام دستگاه: <code>{escape(active_test.username.split('|')[0])}</code>\n"
-            f"🗓 تاریخ انقضا: {format_datetime_fa(active_test.expire_at)}",
-            reply_markup=None
-        )
+        await callback.message.edit_text("⚠️ شما در حال حاضر یک اکانت تست فعال دارید.", reply_markup=None)
         return
 
     existing_test = await _get_latest_test_service(session, user.id)
     if existing_test is not None:
-        await callback.message.edit_text(
-            "❌ شما قبلا از اکانت تست استفاده کرده‌اید و امکان دریافت مجدد وجود ندارد.",
-            reply_markup=None
-        )
+        await callback.message.edit_text("❌ شما قبلا از اکانت تست استفاده کرده‌اید.", reply_markup=None)
         return
 
-    # Immediate keyboard lock to prevent double-clicks
-    await callback.message.edit_text("⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما در لوکیشن انتخاب شده...", reply_markup=None)
+    # Disable buttons during processing to prevent rapid double-clicks
+    await callback.message.edit_text("⚙️ در حال ساخت دی‌ان‌اس تست ۲ ساعته شما...", reply_markup=None)
 
     if slot_num not in SLOT_CONFIGS:
         await callback.message.answer("❌ اسلات انتخاب شده معتبر نیست.")
@@ -469,15 +384,14 @@ async def handle_test_loc_selection(
     device_id = SLOT_CONFIGS[slot_num]["device_id"]
     ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
     ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
-    country_name = SLOT_CONFIGS[slot_num]["name"]
 
     expire_at = now + timedelta(hours=2)
     random_hex = secrets.token_hex(4)
     
     # Save custom metadata in username column: username|service_pk|slot_num
-    unique_device_name = f"tg-test-{user.telegram_id}-{random_hex}|{service_pk}|{slot_num}"
+    unique_device_name = f"tg-test-{user.telegram_id}-{random_hex}|default|{slot_num}"
 
-    # Insert test service record
+    # Create subscription record
     new_test_sub = VPNService(
         user_id=user.id,
         plan_id=None,
@@ -492,14 +406,15 @@ async def handle_test_loc_selection(
     session.add(new_test_sub)
     await session.flush()  # Populate Sub ID
 
-    # Generate Secure Phase 8 Token
+    # Secure Phase 8 Token Generation
+    # Clear stale unused tokens first
     await session.execute(
         delete(IPAuthToken).where(
             IPAuthToken.service_id == new_test_sub.id,
             IPAuthToken.is_used == False
         )
     )
-
+    
     secure_token = uuid.uuid4().hex
     token_record = IPAuthToken(
         token=secure_token,
@@ -511,38 +426,28 @@ async def handle_test_loc_selection(
     await session.commit()
     await state.clear()
 
-    # Formulate output metadata
+    # Success message card matching your Jalali formatting requirement
     duration_text = "۲ ساعت"
     expire_str = format_datetime_fa(expire_at)
 
-    service_display = "کل ترافیک اینترنت (Default)"
-    if service_pk != "default":
-        try:
-            from bot.routers.buy import CATEGORIES
-            for cat in CATEGORIES.values():
-                for s in cat["services"]:
-                    if s["pk"] == service_pk:
-                        service_display = s["name"]
-                        break
-        except Exception:
-            service_display = service_pk.capitalize()
+    success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
+🔷 زمان باقی‌مانده: {duration_text}
+دی ان اس اختصاصی شما :
 
-    success_text = f"""✅ <b>اکانت تست رایگان شما با موفقیت فعال شد!</b>
+🔷 Primary : <code>{ipv4_primary}</code>
+🔷 Secondary : <code>{ipv4_secondary}</code>
 
-🎮 <b>برنامه/بازی:</b> <code>{escape(service_display)}</code>
-🗺 <b>سرور (کشور) انتخابی شما:</b> {escape(country_name)}
-🕓 <b>مدت تست:</b> {duration_text}
-📅 <b>تاریخ انقضا:</b> <code>{escape(expire_str)}</code>
 
-🔐 <b>DNS اختصاصی شما:</b>
-Primary: <code>{ipv4_primary}</code>
-Secondary: <code>{ipv4_secondary}</code>
+مراحل ثبت آی‌پی :
+1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
+2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
-⚠️ <i>مراحل اتصال:</i>
-۱. بدون فیلترشکن روی دکمه «ثبت آی‌پی اتوماتیک» کلیک کنید تا دسترسی شما فعال شود.
-۲. دی‌ان‌اس‌ها را در بخش تنظیمات سیستم خود وارد کنید."""
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
 
-    # Generate Secure Token Keyboard
+    # Generate Phase 8 secure token keyboard dynamically
+    # Local import to safely prevent circular dependency bugs on bot initialization [cite: 1]
+    from bot.routers.services import create_secure_ip_update_keyboard
     markup = await create_secure_ip_update_keyboard(session, new_test_sub.id)
 
     await callback.message.answer(

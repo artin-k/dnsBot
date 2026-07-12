@@ -1,4 +1,4 @@
-# run_web_ip_updater.py
+# ip_server.py
 import secrets
 import logging
 import re
@@ -30,7 +30,6 @@ from app.services.vpn_panel import VPNPanelService
 from app.services.paystar import PaystarService
 from app.services.ip_manager import update_device_ip_safe
 from bot.loader import create_bot
-from ip_server import _success_html
 
 app = FastAPI(title="Control D Auto-IP & Payment Gateway")
 settings = get_settings()
@@ -74,11 +73,8 @@ def _parse_purchase_metadata(raw_username: str | None) -> tuple[str, str, str | 
     return username, service_pk, pop_code
 
 
-# run_web_ip_updater.py
-
 async def get_controld_device_ips(device_id: str, settings_obj) -> dict:
-    """Retrieves Legacy DNS resolvers, preferring local static configurations over slow APIs."""
-    # 1. Search locally mapped configurations first
+    """Retrieves Legacy DNS resolvers, preferring local static configurations over slow APIs [cite: 1]."""
     from app.config import SLOT_CONFIGS
     for config in SLOT_CONFIGS.values():
         if config["device_id"] == device_id:
@@ -86,8 +82,7 @@ async def get_controld_device_ips(device_id: str, settings_obj) -> dict:
                 "ipv4_primary": config["dns_primary"],
                 "ipv4_secondary": config["dns_secondary"],
             }
-
-    # 2. API fallback for trial or dynamic devices
+            
     url = f"https://api.controld.com/devices/{device_id}"
     headers = {
         "Authorization": f"Bearer {settings_obj.controld_api_token}",
@@ -107,8 +102,6 @@ async def get_controld_device_ips(device_id: str, settings_obj) -> dict:
                 }
         except Exception:
             pass
-            
-    # Default fallback to the German slot
     return {
         "ipv4_primary": "76.76.2.162",
         "ipv4_secondary": "76.76.10.162",
@@ -167,8 +160,8 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
         pass
 
     ips = await get_controld_device_ips(service.controld_device_id, settings_obj) if service.controld_device_id else {
-        "ipv4_primary": "94.183.166.203",
-        "ipv4_secondary": "94.183.166.208",
+        "ipv4_primary": "76.76.2.162",
+        "ipv4_secondary": "76.76.10.162",
     }
 
     expire_at = service.expire_at
@@ -502,6 +495,75 @@ async def capture_ip(request: Request, token: str):
             )
 
 
+@app.get("/update-ip/{device_id}", response_class=HTMLResponse)
+async def update_device_ip(request: Request, device_id: str):
+    # Safe Proxy client IP parsing
+    client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    token = settings.controld_api_token
+    if not token:
+        return "<h3>خطا: توکن API در تنظیمات یافت نشد.</h3>"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "accept": "application/json"
+    }
+
+    async with httpx.AsyncClient() as client:
+        device_url = f"https://api.controld.com/devices/{device_id}"
+        profile_id = None
+        try:
+            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
+            if device_resp.status_code == 200:
+                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
+        except Exception:
+            pass
+
+        if not profile_id:
+            profile_id = settings.controld_profile_id
+
+        if not profile_id:
+            return "<h3>خطا: شناسه پروفایل برای این دستگاه یافت نشد.</h3>"
+
+        access_url = "https://api.controld.com/access"
+        payload = {
+            "ips": [client_ip],
+            "name": "Auto Registered"
+        }
+
+        try:
+            response = await client.post(f"{access_url}?device_id={device_id}", json=payload, headers=headers, timeout=10.0)
+            if response.status_code in (200, 201):
+                return f"""
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <title>ثبت آی‌پی موفقیت‌آمیز</title>
+                    <style>
+                        body {{ font-family: Tahoma, Arial, sans-serif; background-color: #f4f6f9; text-align: center; padding: 50px; direction: rtl; }}
+                        .card {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: inline-block; }}
+                        h1 {{ color: #2ecc71; }}
+                        p {{ color: #333; font-size: 18px; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="card">
+                        <h1>✅ ثبت آی‌پی با موفقیت انجام شد!</h1>
+                        <p>آی‌پی شناسایی‌شده شما: <b>{escape(client_ip)}</b></p>
+                        <p>اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود روی دستگاه خود استفاده کنید.</p>
+                    </div>
+                </body>
+                </html>
+                """
+            else:
+                return f"<h3>خطا در ثبت آی‌پی در پنل کنترل دی: {response.text}</h3>"
+        except Exception as e:
+            return f"<h3>خطا در برقراری ارتباط با سرور: {str(e)}</h3>"
+
+
 # ============================================================================
 # WEB ADMIN DASHBOARD
 # ============================================================================
@@ -784,3 +846,26 @@ def _failed_html(reason: str) -> HTMLResponse:
     </html>
     """
     return HTMLResponse(content=html_content, status_code=200)
+
+
+def _success_html(message: str) -> HTMLResponse:
+    html_content = f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>اقدام با موفقیت</title>
+        <style>
+            body {{ font-family: Tahoma, Arial, sans-serif; background-color: #f4f6f9; text-align: center; padding: 50px; direction: rtl; }}
+            .card {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: inline-block; }}
+            h1 {{ color: #2ecc71; }}
+            p {{ color: #333; font-size: 18px; }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>✅ {escape(message)}</h1>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
