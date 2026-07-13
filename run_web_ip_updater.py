@@ -506,11 +506,20 @@ async def update_device_ip(request: Request, device_id: str):
     if not token:
         return "<h3>خطا: توکن API در تنظیمات یافت نشد.</h3>"
 
+    # Inside ip_server.py and run_web_ip_updater.py
+# (Locate the @app.get("/update-ip/{device_id}") endpoint)
+
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "accept": "application/json"
     }
+
+    # ADD THIS BLOCK TO SUPPORT SUB-ORGANIZATIONS IN THE WEB ROUTE
+    import os
+    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
+    if org_id:
+        headers["X-Force-Org-Id"] = org_id
 
     async with httpx.AsyncClient() as client:
         device_url = f"https://api.controld.com/devices/{device_id}"

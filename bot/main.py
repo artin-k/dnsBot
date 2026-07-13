@@ -44,15 +44,21 @@ async def main() -> None:
     if settings.invalid_admin_ids:
         logger.warning("invalid_admin_ids_ignored", values=settings.invalid_admin_ids)
         
+    # main.py
+
     async with async_session_maker() as session:
         await AppSettingsService(session).ensure_defaults()
         await session.commit()
 
+        # --- UPDATE THIS BLOCK TO RESTRICT ENDPOINTS ON STARTUP ---
         try:
-            from app.services.scheduler import sync_plans_with_controld
+            from app.services.scheduler import sync_plans_with_controld, restrict_all_shared_slots
+            # Sync plans
             await sync_plans_with_controld(session)
+            # Force secure IP restricted whitelisting on your 5 permanent endpoints [cite: 1]
+            await restrict_all_shared_slots()
         except Exception as e:
-            logger.error("failed_to_sync_controld_profiles", error=str(e))
+            logger.error("failed_to_perform_startup_controld_sync", error=str(e))
 
     try:
         scheduler_task = asyncio.create_task(expiration_scheduler_loop(bot=bot, interval_seconds=3600))

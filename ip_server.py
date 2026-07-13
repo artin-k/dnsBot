@@ -512,6 +512,11 @@ async def update_device_ip(request: Request, device_id: str):
         "accept": "application/json"
     }
 
+    import os
+    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
+    if org_id:
+        headers["X-Force-Org-Id"] = org_id
+
     async with httpx.AsyncClient() as client:
         device_url = f"https://api.controld.com/devices/{device_id}"
         profile_id = None

@@ -124,6 +124,25 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
 
         return processed
 
+# app/services/scheduler.py (Add this at the bottom)
+
+async def restrict_all_shared_slots() -> None:
+    """
+    Finds your 5 permanent shared device slots and enforces restricted whitelisting
+    mode on each of them during bot startup [cite: 1].
+    """
+    settings = get_settings()
+    controld = ControlDService(settings)
+    
+    from app.config import SLOT_CONFIGS
+    logger.info("initiating_automated_endpoint_restriction_check")
+    
+    for slot_num, config in SLOT_CONFIGS.items():
+        device_id = config["device_id"]
+        if device_id and len(device_id) > 3:
+            logger.info("enforcing_restricted_whitelisting_on_slot", slot=slot_num, device_id=device_id)
+            await controld.restrict_device(device_id)
+
 async def sync_plans_with_controld(session) -> None:
     """
     Synchronizes your Control D dashboard Profiles with local Plans in PostgreSQL.

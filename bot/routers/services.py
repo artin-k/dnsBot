@@ -284,13 +284,17 @@ async def handle_change_default_loc_select(callback: CallbackQuery, settings: Se
     service_id = int(callback.data.split(":")[1])
     await _show_default_loc_page(callback, service_id, page=0, settings=settings)
 
-
 # bot/routers/services.py
 
 # --- LOCATE AND REPLACE THE handle_apply_def_loc HANDLER ---
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Migrates a user's IP registration from one static slot to another statically [cite: services.py, 1]."""
+    """
+    Dynamically migrates a user's IP registration from an old static slot to a new one statically.
+    1. Deauthorizes the OLD IP from the OLD slot (DELETE /access) [cite: 1].
+    2. Authorizes the OLD IP on the NEW slot (POST /access) [cite: 1].
+    3. Updates the database record and commits atomically [cite: 1].
+    """
     await callback.answer()
     if callback.message is None:
         return
@@ -299,6 +303,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     service_id = int(parts[1])
     slot_num = int(parts[2])
 
+    # 1. Retrieve the service details
     service = await ServicesRepository(session).get(service_id)
     if service is None:
         await callback.message.answer("❌ سرویس یافت نشد.")
@@ -306,7 +311,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
 
     from app.config import SLOT_CONFIGS
     if slot_num not in SLOT_CONFIGS:
-        await callback.message.answer("❌ اسلات نامعتبر است.")
+        await callback.message.answer("❌ اسلات انتخاب شده معتبر نیست.")
         return
 
     new_device_id = SLOT_CONFIGS[slot_num]["device_id"]
@@ -319,44 +324,58 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         await callback.message.answer(f"ℹ️ اشتراک شما در حال حاضر روی سرور {new_pop_name} فعال است.")
         return
 
-    # Disable the keyboard immediately to prevent multi-click/double-click race conditions
+    # Map the old slot name for a friendly confirmation message
+    old_device_id = service.controld_device_id
+    old_location_name = "سرور قبلی"
+    for config in SLOT_CONFIGS.values():
+        if config["device_id"] == old_device_id:
+            old_location_name = config["name"]
+            break
+
+    # Disable the inline keyboard to prevent double clicks
     await callback.message.edit_text(
         f"⚙️ در حال انتقال لوکیشن اشتراک شما به سرور {new_pop_name}...",
         reply_markup=None
     )
 
     controld = ControlDService(settings)
-    old_device_id = service.controld_device_id
+    user_ip = service.authorized_ip
 
-    # Step 1: Query the Control D API dynamically to deauthorize ALL currently active IPs from the OLD slot [cite: 1]
-    if old_device_id:
+    # Step 2: Surgically deauthorize the user's IP from the old slot (DELETE) [cite: 1]
+    if old_device_id and user_ip:
         try:
-            active_ips = await controld.get_active_ips(old_device_id)
-            if active_ips:
-                for active_ip in active_ips:
-                    logger.info("deauthorizing_active_ip_from_old_slot", service_id=service.id, old_device_id=old_device_id, ip=active_ip)
-                    await controld.deauthorize_ip(old_device_id, active_ip)
-            
-            # Fallback: Safely clear the database recorded IP if it wasn't returned in the active list
-            if service.authorized_ip and service.authorized_ip not in active_ips:
-                logger.info("deauthorizing_db_ip_from_old_slot_fallback", service_id=service.id, old_device_id=old_device_id, ip=service.authorized_ip)
-                await controld.deauthorize_ip(old_device_id, service.authorized_ip)
+            logger.info("surgically_deauthorizing_old_slot_ip", service_id=service.id, old_device_id=old_device_id, ip=user_ip)
+            await controld.deauthorize_ip(old_device_id, user_ip)
         except Exception as exc:
-            logger.warning("failed_to_dynamically_cleanup_old_slot_ips", service_id=service.id, old_device_id=old_device_id, error=str(exc))
+            # Log warning but do NOT block provisioning of the new slot
+            logger.warning("old_slot_ip_deauthorization_failed_proceeding", service_id=service.id, error=str(exc))
 
-    # Step 2: Authorize their IP on their NEW permanent slot [cite: 1]
-    if service.authorized_ip:
-        logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=service.authorized_ip)
-        await controld.authorize_ip(new_device_id, service.authorized_ip)
+    # Step 3: Authorize the user's IP on the new slot (POST) [cite: 1]
+    if user_ip:
+        try:
+            logger.info("authorizing_ip_on_new_slot", service_id=service.id, new_device_id=new_device_id, ip=user_ip)
+            await controld.authorize_ip(new_device_id, user_ip)
+        except Exception as exc:
+            logger.error("new_slot_ip_authorization_failed", service_id=service.id, error=str(exc))
 
-    # Step 3: Update local DB record with new slot assignment and metadata [cite: services.py, 1]
-    raw_username = service.username.split("|")[0]
-    service.username = f"{raw_username}|default|{slot_num}"
-    service.controld_device_id = new_device_id
-    await session.commit()
+    # Step 4: Update database and commit atomically [cite: 1]
+    try:
+        # Reconstruct the metadata string
+        raw_username = service.username.split("|")[0]
+        service.username = f"{raw_username}|default|{slot_num}"
+        service.controld_device_id = new_device_id
+        
+        await session.commit()
+    except Exception as exc:
+        await session.rollback()
+        logger.error("failed_to_commit_location_switch_db_transaction", service_id=service.id, error=str(exc))
+        await callback.message.answer("❌ خطای پایگاه داده در ذخیره‌سازی لوکیشن جدید. تغییرات لغو شد.")
+        return
 
+    # Step 5: Send Success Telegram Message
     success_text = f"""✅ <b>لوکیشن اشتراک شما با موفقیت تغییر یافت!</b>
 
+🔄 <b>سرور قبلی:</b> {escape(old_location_name)}
 🗺 <b>سرور جدید:</b> {escape(new_pop_name)}
 
 🔐 <b>دی‌ان‌اس‌های اختصاصی سرور جدید:</b>
@@ -365,14 +384,15 @@ Secondary: <code>{ipv4_secondary}</code>
 
 ⚠️ <i>در صورت عدم اتصال، لطفاً مجدداً روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید.</i>"""
 
-    markup = await create_secure_ip_update_keyboard(session, service.id)
+    # Generate the direct /update-ip/{device_id} keyboard cleanly
+    from bot.routers.services import _get_ip_registration_keyboard
+    markup = _get_ip_registration_keyboard(new_device_id)
 
     await callback.message.answer(
         success_text,
         reply_markup=markup,
         parse_mode="HTML"
     )
-
 
 async def _safe_answer(callback: CallbackQuery, text: str) -> None:
     if callback.message:

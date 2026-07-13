@@ -547,32 +547,72 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
             logger.error(f"Error fetching Control D services: {str(e)}")
             return None
 
+# app/services/controld.py
+
+    async def restrict_device(self, device_id: str) -> bool:
+        """
+        Updates the Control D endpoint setting "restricted" to 1.
+        This forces the endpoint to ONLY resolve DNS for whitelisted IPs in the /access list [cite: 1].
+        PUT https://api.controld.com/devices/{device_id}
+        """
+        if not device_id or len(device_id) < 3:
+            logger.warning("restrict_device_received_invalid_id", device_id=device_id)
+            return False
+
+        url = f"{BASE_URL}/devices/{device_id}"
+        payload = {
+            "restricted": 1  # 1 enables restricted mode, 0 disables it
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.put(
+                    url,
+                    json=payload,
+                    headers=_get_headers(),
+                    timeout=10.0
+                )
+                logger.info(
+                    "controld_restrict_device_response",
+                    device_id=device_id,
+                    status_code=response.status_code,
+                    response_text=response.text
+                )
+                return response.status_code in (200, 201)
+            except Exception as e:
+                logger.error("failed_to_restrict_device_on_controld", device_id=device_id, error=str(e))
+                return False
+
 
 class ControlDService:
     def __init__(self, settings_obj=None) -> None:
         self.settings = settings_obj or settings
 
+# app/services/controld.py
+
     async def authorize_ip(self, device_id: str, ip: str) -> bool:
         """
-        Authorizes an IP address on a specific Control D legacy endpoint [cite: 1].
-        POST https://api.controld.com/access
+        Surgically authorizes an IP address on a shared Control D endpoint.
+        POST https://api.controld.com/access with a JSON body payload [cite: 1].
         """
-        # Defensive validation guard to prevent short/stale DB ID crashes [cite: 3.2.4]
         if not device_id or len(device_id) < 3 or not ip:
-            logger.warning("authorize_ip_received_invalid_parameters_bypassing", device_id=device_id, ip=ip)
+            logger.warning("authorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
             return True
 
         url = f"{BASE_URL}/access"
         payload = {
             "device_id": device_id,
-            "ips": [ip],
-            "ips[]": [ip],  # Bracketed format required by Control D's backend [cite: 1]
-            "name": "Auto Registered"
+            "ips[]": [ip]  # Array of strings as specified by Barry
         }
         
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.post(url, json=payload, headers=_get_headers(), timeout=10.0)
+                response = await client.post(
+                    url,
+                    json=payload,
+                    headers=_get_headers(),
+                    timeout=10.0
+                )
                 logger.info(
                     "controld_ip_authorization_response",
                     device_id=device_id,
@@ -585,29 +625,23 @@ class ControlDService:
                 logger.error("failed_to_authorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
                 return False
 
-# app/services/controld.py
-
     async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
         """
-        Surgically deauthorizes/removes a single user's IP from a shared Control D endpoint.
-        Sends a DELETE request with a JSON body matching Barry's API specifications.
+        Surgically removes an IP address from a shared Control D endpoint.
+        DELETE https://api.controld.com/access with a JSON body payload [cite: 1].
         """
-        # Defensive guard to prevent empty or corrupted data crashes
         if not device_id or len(device_id) < 3 or not ip:
             logger.warning("deauthorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
             return True
 
         url = f"{BASE_URL}/access"
-        
-        # Exact JSON body payload format matching Barry's API specifications
         payload = {
             "device_id": device_id,
-            "ips[]": [ip]  # Expected as an array of strings
+            "ips[]": [ip]  # Array of strings as specified by Barry
         }
         
         async with httpx.AsyncClient() as client:
             try:
-                # Using client.request to explicitly send a JSON body payload with the DELETE method
                 response = await client.request(
                     method="DELETE",
                     url=url,
@@ -615,7 +649,6 @@ class ControlDService:
                     headers=_get_headers(),
                     timeout=10.0
                 )
-                
                 logger.info(
                     "controld_ip_deauthorization_response",
                     device_id=device_id,
@@ -719,3 +752,5 @@ async def deauthorize_ip(device_id: str, ip: str) -> bool:
     """Global module-level wrapper to prevent circular import crashes [cite: services.py]."""
     service = ControlDService()
     return await service.deauthorize_ip(device_id, ip)
+
+
