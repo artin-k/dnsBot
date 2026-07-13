@@ -585,34 +585,37 @@ class ControlDService:
                 logger.error("failed_to_authorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
                 return False
 
-    # app/services/controld.py
+# app/services/controld.py
 
-# --- LOCATE AND REPLACE THIS METHOD INSIDE THE ControlDService CLASS ---
     async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
         """
-        Deauthorizes/Removes an IP address from a Control D legacy endpoint [cite: 1].
-        Correct REST Method: DELETE /access using Query Parameters to bypass body limitations [cite: 1].
+        Surgically deauthorizes/removes a single user's IP from a shared Control D endpoint.
+        Sends a DELETE request with a JSON body matching Barry's API specifications.
         """
-        # Defensive validation guard to prevent short/stale DB ID crashes [cite: 3.2.4]
+        # Defensive guard to prevent empty or corrupted data crashes
         if not device_id or len(device_id) < 3 or not ip:
-            logger.warning("deauthorize_ip_received_invalid_parameters_bypassing", device_id=device_id, ip=ip)
+            logger.warning("deauthorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
             return True
 
         url = f"{BASE_URL}/access"
-        # Pass parameters via query string directly for maximum compatibility [cite: 1]
-        params = {
+        
+        # Exact JSON body payload format matching Barry's API specifications
+        payload = {
             "device_id": device_id,
-            "ips[]": ip
+            "ips[]": [ip]  # Expected as an array of strings
         }
         
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.delete(
-                    url, 
-                    params=params, 
-                    headers=_get_headers(), 
+                # Using client.request to explicitly send a JSON body payload with the DELETE method
+                response = await client.request(
+                    method="DELETE",
+                    url=url,
+                    json=payload,
+                    headers=_get_headers(),
                     timeout=10.0
                 )
+                
                 logger.info(
                     "controld_ip_deauthorization_response",
                     device_id=device_id,
