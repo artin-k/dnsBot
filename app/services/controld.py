@@ -769,3 +769,31 @@ async def deauthorize_ip(device_id: str, ip: str) -> bool:
     return await service.deauthorize_ip(device_id, ip)
 
 
+async def restrict_device(self, device_id: str) -> bool:
+        if not device_id or len(device_id) < 3:
+            logger.warning("restrict_device_received_invalid_id", device_id=device_id)
+            return False
+
+        url = f"{BASE_URL}/devices/{device_id}"
+        payload = {
+            "restricted": 1
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.put(
+                    url,
+                    json=payload,
+                    headers=_get_headers(),
+                    timeout=10.0
+                )
+                logger.info(
+                    "controld_restrict_device_response",
+                    device_id=device_id,
+                    status_code=response.status_code,
+                    response_text=response.text
+                )
+                return response.status_code in (200, 201)
+            except Exception as e:
+                logger.error("failed_to_restrict_device_on_controld", device_id=device_id, error=str(e))
+                return False
