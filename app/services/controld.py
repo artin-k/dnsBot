@@ -73,7 +73,7 @@ COUNTRY_MAP_FA = {
     "IN": "هند",
     "JP": "ژاپن",
     "KR": "کره جنوبی",
-    "ZA": "آفریقای جنوبی",
+    "ZA": "آفریقای جنوب",
     "HK": "هنگ کنگ",
     "HU": "مجارستان",
     "IS": "ایسلند",
@@ -161,7 +161,6 @@ def get_city_name_fa(city_name: str) -> str:
     return CITY_MAP_FA.get(city_name, city_name)
 
 
-# --- FIXED: Moved get_flag_emoji here so it is defined sequentially before use [cite: 1] ---
 def get_flag_emoji(country_code: str) -> str:
     """
     Converts a 2-letter ISO country code (e.g., 'US') directly into its 
@@ -254,8 +253,8 @@ async def create_dns_device(
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 v6_list = resolver_info.get("v6") or resolver_info.get("legacy", {}).get("ipv6") or []
                 
-                ipv4_primary = v4_list[0] if len(v4_list) > 0 else "76.76.2.22"
-                ipv4_secondary = v4_list[1] if len(v4_list) > 1 else "76.76.10.22"
+                ipv4_primary = v4_list[0] if len(v4_list) > 0 else "76.76.2.162"
+                ipv4_secondary = v4_list[1] if len(v4_list) > 1 else "76.76.10.162"
                 ipv6 = v6_list[0] if len(v6_list) > 0 else "2606:1a40::22"
                 
                 resolver_id = resolver_info.get("uid") or resolver_info.get("id") or device_pk
@@ -547,7 +546,10 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
             logger.error(f"Error fetching Control D services: {str(e)}")
             return None
 
-# app/services/controld.py
+
+class ControlDService:
+    def __init__(self, settings_obj=None) -> None:
+        self.settings = settings_obj or settings
 
     async def restrict_device(self, device_id: str) -> bool:
         """
@@ -583,25 +585,16 @@ async def fetch_controld_services(profile_id: str) -> list[dict] | None:
                 logger.error("failed_to_restrict_device_on_controld", device_id=device_id, error=str(e))
                 return False
 
-
-class ControlDService:
-    def __init__(self, settings_obj=None) -> None:
-        self.settings = settings_obj or settings
-
-# app/services/controld.py
-
     async def authorize_ip(self, device_id: str, ip: str) -> bool:
         """
         Surgically authorizes an IP address on a shared Control D endpoint.
-        POST https://api.controld.com/access with a robust JSON body payload [cite: 1].
+        POST https://api.controld.com/access with a JSON body payload [cite: 1].
         """
         if not device_id or len(device_id) < 3 or not ip:
             logger.warning("authorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
             return True
 
         url = f"{BASE_URL}/access"
-        
-        # Dual-delivery JSON keys to ensure compatibility with both bracketed and standard parsers [cite: 1]
         payload = {
             "device_id": device_id,
             "ips": [ip],      # Standard JSON key expected by POST body parser [cite: 1]
@@ -627,7 +620,6 @@ class ControlDService:
             except Exception as e:
                 logger.error("failed_to_authorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
                 return False
-# app/services/controld.py
 
     async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
         """
@@ -641,14 +633,12 @@ class ControlDService:
 
         url = f"{BASE_URL}/access"
         
-        # 1. JSON Body Payload (including both bracketed and standard array formats) [cite: 1]
         payload = {
             "device_id": device_id,
             "ips": [ip],
             "ips[]": [ip]
         }
         
-        # 2. URL Query Parameters (as a fallback in case the proxy strips the body) [cite: 1]
         params = {
             "device_id": device_id,
             "ips[]": ip
@@ -767,31 +757,3 @@ async def deauthorize_ip(device_id: str, ip: str) -> bool:
     """Global module-level wrapper to prevent circular import crashes [cite: services.py]."""
     service = ControlDService()
     return await service.deauthorize_ip(device_id, ip)
-async def restrict_device(self, device_id: str) -> bool:
-     if not device_id or len(device_id) < 3:
-         logger.warning("restrict_device_received_invalid_id", device_id=device_id)
-         return False
-
-     url = f"{BASE_URL}/devices/{device_id}"
-     payload = {
-         "restricted": 1
-     }
-     
-     async with httpx.AsyncClient() as client:
-         try:
-             response = await client.put(
-                 url,
-                 json=payload,
-                 headers=_get_headers(),
-                 timeout=10.0
-             )
-             logger.info(
-                 "controld_restrict_device_response",
-                 device_id=device_id,
-                 status_code=response.status_code,
-                 response_text=response.text
-             )
-             return response.status_code in (200, 201)
-         except Exception as e:
-             logger.error("failed_to_restrict_device_on_controld", device_id=device_id, error=str(e))
-             return False
