@@ -767,8 +767,6 @@ async def deauthorize_ip(device_id: str, ip: str) -> bool:
     """Global module-level wrapper to prevent circular import crashes [cite: services.py]."""
     service = ControlDService()
     return await service.deauthorize_ip(device_id, ip)
-
-
 async def restrict_device(self, device_id: str) -> bool:
      if not device_id or len(device_id) < 3:
          logger.warning("restrict_device_received_invalid_id", device_id=device_id)
