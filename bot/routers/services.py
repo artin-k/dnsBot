@@ -24,6 +24,8 @@ from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
 import uuid
 
+from app.models import IPAuthToken
+
 router = Router(name="services")
 logger = structlog.get_logger(__name__)
 
@@ -284,9 +286,7 @@ async def handle_change_default_loc_select(callback: CallbackQuery, settings: Se
     service_id = int(callback.data.split(":")[1])
     await _show_default_loc_page(callback, service_id, page=0, settings=settings)
 
-# bot/routers/services.py
 
-# --- LOCATE AND REPLACE THE handle_apply_def_loc HANDLER ---
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     """
@@ -332,7 +332,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
             old_location_name = config["name"]
             break
 
-    # Disable the inline keyboard to prevent double clicks
+    # Disable the inline keyboard immediately to prevent double-click race conditions
     await callback.message.edit_text(
         f"⚙️ در حال انتقال لوکیشن اشتراک شما به سرور {new_pop_name}...",
         reply_markup=None
@@ -341,7 +341,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     controld = ControlDService(settings)
     user_ip = service.authorized_ip
 
-    # Step 2: Surgically deauthorize the user's IP from the old slot (DELETE) [cite: 1]
+    # Step 1: Surgically deauthorize the user's IP from the old slot (DELETE) [cite: 1]
     if old_device_id and user_ip:
         try:
             logger.info("surgically_deauthorizing_old_slot_ip", service_id=service.id, old_device_id=old_device_id, ip=user_ip)
@@ -350,7 +350,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
             # Log warning but do NOT block provisioning of the new slot
             logger.warning("old_slot_ip_deauthorization_failed_proceeding", service_id=service.id, error=str(exc))
 
-    # Step 3: Authorize the user's IP on the new slot (POST) [cite: 1]
+    # Step 2: Authorize the user's IP on the new slot (POST) [cite: 1]
     if user_ip:
         try:
             logger.info("authorizing_ip_on_new_slot", service_id=service.id, new_device_id=new_device_id, ip=user_ip)
@@ -358,7 +358,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         except Exception as exc:
             logger.error("new_slot_ip_authorization_failed", service_id=service.id, error=str(exc))
 
-    # Step 4: Update database and commit atomically [cite: 1]
+    # Step 3: Update database and commit atomically [cite: 1]
     try:
         # Reconstruct the metadata string
         raw_username = service.username.split("|")[0]
@@ -393,6 +393,7 @@ Secondary: <code>{ipv4_secondary}</code>
         reply_markup=markup,
         parse_mode="HTML"
     )
+
 
 async def _safe_answer(callback: CallbackQuery, text: str) -> None:
     if callback.message:

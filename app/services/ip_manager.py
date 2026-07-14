@@ -14,6 +14,9 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
     2. Authorizes the NEW IP on the ControlD device slot (POST /access) [cite: 1].
     3. Saves changes to the database and commits atomically [cite: 1].
     """
+    device_id = service.controld_device_id
+    old_ip = service.authorized_ip
+
     settings = get_settings()
     controld = ControlDService(settings)
     device_id = service.controld_device_id

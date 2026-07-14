@@ -495,9 +495,12 @@ async def capture_ip(request: Request, token: str):
             )
 
 
+# ip_server.py & run_web_ip_updater.py
+
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse)
 async def update_device_ip(request: Request, device_id: str):
-    # Safe Proxy client IP parsing
+    """Detects, registers, and synchronizes the client public IP to the local database [cite: 1]."""
+    # Detect the client's real public IP address (handling proxies safely)
     client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
     if client_ip and "," in client_ip:
         client_ip = client_ip.split(",")[0].strip()
@@ -512,6 +515,7 @@ async def update_device_ip(request: Request, device_id: str):
         "accept": "application/json"
     }
 
+    # Add support for Sub-Organizations in the web route
     import os
     org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
     if org_id:
@@ -536,12 +540,31 @@ async def update_device_ip(request: Request, device_id: str):
         access_url = "https://api.controld.com/access"
         payload = {
             "ips": [client_ip],
+            "ips[]": [client_ip],
             "name": "Auto Registered"
         }
 
         try:
             response = await client.post(f"{access_url}?device_id={device_id}", json=payload, headers=headers, timeout=10.0)
             if response.status_code in (200, 201):
+                
+                # ============================================================
+                # DATABASE SYNCHRONIZATION HOOK
+                # ============================================================
+                try:
+                    async with async_session_maker() as db_session:
+                        # Find the active subscription matching this ControlD device_id
+                        stmt = select(VPNService).where(VPNService.controld_device_id == device_id).limit(1)
+                        res = await db_session.execute(stmt)
+                        service = res.scalars().first()
+                        if service:
+                            service.authorized_ip = client_ip
+                            await db_session.commit()
+                            logger.info("web_updater_synced_registered_ip_to_db", device_id=device_id, ip=client_ip)
+                except Exception as db_exc:
+                    logger.error("web_updater_failed_to_sync_registered_ip_to_db", device_id=device_id, error=str(db_exc))
+                # ============================================================
+
                 return f"""
                 <html>
                 <head>
@@ -567,8 +590,6 @@ async def update_device_ip(request: Request, device_id: str):
                 return f"<h3>خطا در ثبت آی‌پی در پنل کنترل دی: {response.text}</h3>"
         except Exception as e:
             return f"<h3>خطا در برقراری ارتباط با سرور: {str(e)}</h3>"
-
-
 # ============================================================================
 # WEB ADMIN DASHBOARD
 # ============================================================================

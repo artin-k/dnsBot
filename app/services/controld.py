@@ -593,16 +593,19 @@ class ControlDService:
     async def authorize_ip(self, device_id: str, ip: str) -> bool:
         """
         Surgically authorizes an IP address on a shared Control D endpoint.
-        POST https://api.controld.com/access with a JSON body payload [cite: 1].
+        POST https://api.controld.com/access with a robust JSON body payload [cite: 1].
         """
         if not device_id or len(device_id) < 3 or not ip:
             logger.warning("authorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
             return True
 
         url = f"{BASE_URL}/access"
+        
+        # Dual-delivery JSON keys to ensure compatibility with both bracketed and standard parsers [cite: 1]
         payload = {
             "device_id": device_id,
-            "ips[]": [ip]  # Array of strings as specified by Barry
+            "ips": [ip],      # Standard JSON key expected by POST body parser [cite: 1]
+            "ips[]": [ip]     # Bracketed fallback
         }
         
         async with httpx.AsyncClient() as client:
@@ -624,20 +627,31 @@ class ControlDService:
             except Exception as e:
                 logger.error("failed_to_authorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
                 return False
+# app/services/controld.py
 
     async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
         """
         Surgically removes an IP address from a shared Control D endpoint.
-        DELETE https://api.controld.com/access with a JSON body payload [cite: 1].
+        Sends parameters in both the JSON body and URL query string to guarantee
+        delivery regardless of client/proxy body stripping on DELETE requests [cite: 1].
         """
         if not device_id or len(device_id) < 3 or not ip:
             logger.warning("deauthorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
             return True
 
         url = f"{BASE_URL}/access"
+        
+        # 1. JSON Body Payload (including both bracketed and standard array formats) [cite: 1]
         payload = {
             "device_id": device_id,
-            "ips[]": [ip]  # Array of strings as specified by Barry
+            "ips": [ip],
+            "ips[]": [ip]
+        }
+        
+        # 2. URL Query Parameters (as a fallback in case the proxy strips the body) [cite: 1]
+        params = {
+            "device_id": device_id,
+            "ips[]": ip
         }
         
         async with httpx.AsyncClient() as client:
@@ -646,6 +660,7 @@ class ControlDService:
                     method="DELETE",
                     url=url,
                     json=payload,
+                    params=params,
                     headers=_get_headers(),
                     timeout=10.0
                 )
