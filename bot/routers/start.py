@@ -39,14 +39,9 @@ async def start(message: Message, session: AsyncSession, settings: Settings) -> 
     )
     await session.commit()
 
+    # Dynamically read the custom welcome text you configured inside bot/texts.py
     await message.answer(
-        f"""👋 سلام <b>{escape(message.from_user.first_name)}</b> عزیز، به ربات دی‌ان‌اس اختصاصی خوش آمدید! 🌐
-
-با دی‌ان‌اس‌های اختصاصی ما، پینگ پایدار در بازی‌ها و دسترسی آسان به ابزارهای تحریم‌شده را بدون نیاز به فیلترشکن تجربه کنید.
-
-🎁 جهت بررسی کیفیت سرویس، می‌توانید همین حالا یک <b>اکانت تست رایگان</b> فعال کنید.
-
-👇 برای دریافت تست یا خرید اشتراک، از گزینه‌های زیر استفاده کنید:""",
+        texts.welcome_text(message.from_user.first_name),
         reply_markup=main_menu_keyboard(is_admin=is_user_admin(user, settings)),
     )
 
