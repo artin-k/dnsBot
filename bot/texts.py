@@ -3,7 +3,7 @@ BTN_BUY = "🔐 خرید اشتراک DNS"
 BTN_RENEW = "♻️ تمدید DNS"
 BTN_TEST_ACCOUNT = "🔑 دی‌ان‌اس تست"
 BTN_LUCKY_WHEEL = "🎲 گردونه شانس"
-BTN_MY_SERVICES = "🛍 اشتراک‌های من"
+BTN_MY_SERVICES = "🛍 اشتراک‌های من و تغییر لوکیشن"
 BTN_WALLET = "🏦 کیف پول + شارژ"
 BTN_REFERRAL = "👥 زیرمجموعه‌گیری"
 BTN_TARIFFS = "💰 تعرفه اشتراک‌ها"
@@ -41,7 +41,7 @@ MAIN_MENU_BUTTONS = {
     BTN_ADMIN_PANEL,
     BTN_BACK,
     BTN_MAIN_MENU,
-    "🛍 اشتراک‌های من",
+    "🛍 اشتراک‌های من و تغییر لوکیشن",
     "🛍 سرویس‌های من",
     "🛍 سرویس های من",
     "💰 تعرفه اشتراک ها",
