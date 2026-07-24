@@ -869,29 +869,33 @@ async def handle_pay_instant_wallet(
         )
         session.add(new_subscription)
         
+# bot/routers/buy.py
+# (Inside handle_pay_instant_wallet)
+
     else:
         # Renewal - Simply extend time, avoid setting a custom TTL on Control D [cite: buy.py, 1]
         current_expire = current_sub.expire_at
         if current_expire.tzinfo is None:
             current_expire = current_expire.replace(timezone.utc)
 
-        expire_at = current_expire + timedelta(hours=plan.duration_hours)
+        # FIX: If the subscription has already expired, add the duration to 'now' [cite: buy.py, 1]
+        base_time = current_expire if current_expire > now else now
+        expire_at = base_time + timedelta(hours=plan.duration_hours)
+        
         current_sub.expire_at = expire_at
         current_sub.plan_id = plan.id
-
-        device_id = current_sub.controld_device_id
+        current_sub.status = "active"  # Safely reactivate the service status
         
-        # Apply chosen routing country directly [cite: buy.py]
-        # controld_service = ControlDService(settings)
-        # if service_pk == "default":
-        #     await controld_service.update_profile_default(profile_id, pop_code)  
-        # else:
-        #     await controld_service.update_service_route(profile_id, service_pk, pop_code)  
+        # 🛠 CRITICAL DEFINITION: Define device_id for the dynamic DNS lookup below
+        device_id = current_sub.controld_device_id
 
         # Fetch DNS resolvers [cite: 1]
         device_data = await get_controld_device_ips(device_id, settings)
         ipv4_primary = device_data["ipv4_primary"]
         ipv4_secondary = device_data["ipv4_secondary"]
+
+# bot/routers/buy.py
+# (Inside handle_pay_instant_wallet, from line 925 onwards)
 
     # Balance deduction  
     user.wallet_balance -= final_price
@@ -919,9 +923,16 @@ async def handle_pay_instant_wallet(
 
 📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
 
+    # 🛠 Safely retrieve the active subscription ID for both new purchases and renewals [cite: 1]
+    active_sub_id = new_subscription.id if current_sub is None else current_sub.id
+
+    # Generate the registration inline keyboard dynamically [cite: 1]
+    markup = await create_secure_ip_update_keyboard(session, active_sub_id)
+
+    # 🛠 FIX: Pass the pre-calculated 'markup' to 'reply_markup' [cite: 1]
     await callback.message.answer(
         success_text, 
-        markup = await create_secure_ip_update_keyboard(session, new_subscription.id), # For wallet
+        reply_markup=markup,
         parse_mode="HTML"
     )
 
