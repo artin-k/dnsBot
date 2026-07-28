@@ -158,7 +158,15 @@ async def _get_latest_test_service(session: AsyncSession, user_id: int) -> VPNSe
 
 
 async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
-    """Queries Control D to retrieve legacy IPv4 endpoint resolvers."""
+    """Retrieves Legacy DNS resolvers, preferring local static configurations first."""
+    from app.config import SLOT_CONFIGS
+    for config in SLOT_CONFIGS.values():
+        if config["device_id"] == device_id:
+            return {
+                "ipv4_primary": config["dns_primary"],
+                "ipv4_secondary": config["dns_secondary"],
+            }
+
     url = f"https://api.controld.com/devices/{device_id}"
     headers = {
         "Authorization": f"Bearer {settings.controld_api_token}",
@@ -166,7 +174,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
     }
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, headers=headers, timeout=10.0)
+            response = await client.get(url, headers=headers, timeout=3.0) # Reduced timeout
             if response.status_code == 200:
                 data = response.json()
                 body = data.get("body", {})
@@ -174,7 +182,7 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
                 v4_list = resolver_info.get("v4") or resolver_info.get("legacy", {}).get("ipv4") or []
                 return {
                     "ipv4_primary": v4_list[0] if len(v4_list) > 0 else "76.76.2.22",
-                    "ipv4_secondary": v4_list[1]  if len(v4_list) > 1 else "76.76.10.22"
+                    "ipv4_secondary": v4_list[1] if len(v4_list) > 1 else "76.76.10.22"
                 }
         except Exception:
             pass
@@ -529,7 +537,7 @@ async def handle_apply_test_loc(
 
     await callback.message.answer(
         success_text, 
-        markup = await create_secure_ip_update_keyboard(session, new_test_sub.id), # For test
+        reply_markup = await create_secure_ip_update_keyboard(session, new_test_sub.id), # For test
         parse_mode="HTML"
     )
 
