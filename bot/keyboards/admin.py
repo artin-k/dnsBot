@@ -77,65 +77,6 @@ class AdminInventoryCallback(CallbackData, prefix="adm_inv"):
     page: int = 0
     status: str = "all"
 
-
-# Assuming you attach this to an existing admin router
-admin_router = Router(name="admin_commands")
-
-@admin_router.message(Command("reset_tests"))
-async def handle_reset_test_status(
-    message: Message, 
-    session: AsyncSession, 
-    settings: Settings
-) -> None:
-    """
-    Admin command to wipe all active test accounts securely.
-    """
-    # 1. Security Check: Ensure the user is an authorized admin
-    user_id = message.from_user.id
-    admin_ids = set(settings.admin_ids)
-    if settings.root_admin_telegram_id is not None:
-        admin_ids.add(settings.root_admin_telegram_id)
-        
-    if user_id not in admin_ids:
-        # Silently ignore unauthorized users, or send a warning
-        return
-
-    # 2. Provide immediate feedback that the process started
-    processing_msg = await message.answer("⚙️ در حال پاکسازی دیتابیس از اکانت‌های تست. لطفاً صبر کنید...")
-
-    try:
-        # 3. Execute the Backend Deletion Logic
-        # Fetch test service IDs first
-        stmt = select(VPNService.id).where(VPNService.is_test_account == True)
-        res = await session.execute(stmt)
-        test_service_ids = res.scalars().all()
-
-        deleted_count = 0
-        if test_service_ids:
-            # Delete linked tokens first to satisfy foreign key constraints
-            await session.execute(
-                delete(IPAuthToken).where(IPAuthToken.service_id.in_(test_service_ids))
-            )
-            
-            # Delete test subscription records
-            delete_stmt = delete(VPNService).where(VPNService.id.in_(test_service_ids))
-            result = await session.execute(delete_stmt)
-            await session.commit()
-            
-            deleted_count = result.rowcount
-
-        # 4. Send Success Result
-        await processing_msg.edit_text(
-            f"✅ عملیات با موفقیت انجام شد!\n\n"
-            f"🗑 تعداد اکانت‌های تست پاک شده: <code>{deleted_count}</code>",
-            parse_mode="HTML"
-        )
-        
-    except Exception as exc:
-        await session.rollback()
-        await processing_msg.edit_text(f"❌ خطایی در دیتابیس رخ داد:\n<code>{str(exc)}</code>", parse_mode="HTML")
-
-
 def admin_main_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📦 فروش و تعرفه‌های DNS", callback_data=AdminActionCallback(action="cat_sales"))
@@ -630,3 +571,5 @@ def broadcast_confirm_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="❌ لغو", callback_data=AdminActionCallback(action="cancel_broadcast"))
     builder.adjust(2)
     return builder.as_markup()
+
+

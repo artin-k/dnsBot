@@ -25,6 +25,7 @@ from app.models import (
     AffiliateCommissionStatus,
     ConfigInventory,
     ConfigInventoryStatus,
+    IPAuthToken,
     Order,
     OrderKind,
     OrderStatus,       # <-- Added
@@ -3729,3 +3730,49 @@ async def cmd_admin_web(message: Message, settings: Settings) -> None:
         reply_markup=builder.as_markup(),
         parse_mode="HTML"
     )
+
+
+
+@router.message(Command("reset_tests"))
+async def handle_reset_test_status(
+    message: Message, 
+    session: AsyncSession, 
+    settings: Settings
+) -> None:
+    # 1. Security Check
+    user_id = message.from_user.id
+    admin_ids = set(settings.admin_ids)
+    if settings.root_admin_telegram_id is not None:
+        admin_ids.add(settings.root_admin_telegram_id)
+        
+    if user_id not in admin_ids:
+        return
+
+    processing_msg = await message.answer("⚙️ در حال پاکسازی دیتابیس از اکانت‌های تست. لطفاً صبر کنید...")
+
+    try:
+        stmt = select(VPNService.id).where(VPNService.is_test_account == True)
+        res = await session.execute(stmt)
+        test_service_ids = res.scalars().all()
+
+        deleted_count = 0
+        if test_service_ids:
+            # Delete linked tokens first to satisfy foreign key constraints
+            await session.execute(
+                delete(IPAuthToken).where(IPAuthToken.service_id.in_(test_service_ids))
+            )
+            
+            # Delete test subscription records
+            result = await session.execute(delete(VPNService).where(VPNService.id.in_(test_service_ids)))
+            await session.commit()
+            deleted_count = result.rowcount
+
+        await processing_msg.edit_text(
+            f"✅ عملیات با موفقیت انجام شد!\n\n"
+            f"🗑 تعداد اکانت‌های تست پاک شده: <code>{deleted_count}</code>",
+            parse_mode="HTML"
+        )
+        
+    except Exception as exc:
+        await session.rollback()
+        await processing_msg.edit_text(f"❌ خطایی در دیتابیس رخ داد:\n<code>{str(exc)}</code>", parse_mode="HTML")
