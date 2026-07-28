@@ -9,7 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.config import Settings
 from app.database import async_session_maker
-
+from aiogram.client.session.aiohttp import AiohttpSession
 from bot.middlewares.db import DbSessionMiddleware
 from bot.middlewares.mandatory_channels import DynamicMandatoryJoinMiddleware
 from bot.routers import admin, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet 
