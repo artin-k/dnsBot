@@ -2,6 +2,7 @@
 from html import escape
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
+import jdatetime  # Added for safe Shamsi calculations
 import httpx
 import structlog
 
@@ -30,6 +31,28 @@ router = Router(name="services")
 logger = structlog.get_logger(__name__)
 
 WEB_SERVER_BASE_URL = get_settings().public_web_base_url
+
+
+def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
+    """Dynamically calculates remaining days/hours from expire_at."""
+    if not expire_at:
+        return "۳۰ روز"
+    now = datetime.now(timezone.utc)
+    if expire_at.tzinfo is None:
+        expire_at = expire_at.replace(tzinfo=timezone.utc)
+    
+    delta = expire_at - now
+    total_seconds = delta.total_seconds()
+    if total_seconds <= 0:
+        return "پایان یافته"
+    
+    total_hours = int(total_seconds // 3600)
+    if total_hours >= 24:
+        return f"{total_hours // 24} روز"
+    if total_hours > 0:
+        return f"{total_hours} ساعت"
+    total_minutes = int(total_seconds // 60)
+    return f"{total_minutes} دقیقه"
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
@@ -216,6 +239,7 @@ async def handle_manage_service(callback: CallbackQuery, session: AsyncSession) 
     await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id), parse_mode="HTML")
 
 
+# --- LOCATE AND REPLACE THE handle_manage_links METHOD ---
 @router.callback_query(F.data.startswith("manage_links:"), StateFilter("*"))
 async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) -> None:
     """Generates the connection links and update-ip buttons directly [cite: services.py, 1]."""
@@ -228,13 +252,64 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
         await callback.message.answer("❌ سرویس پیدا نشد.")
         return
 
-    text = f"""🔗 لینک‌های اتصال سرویس <code>{escape(service.username.split("|")[0])}</code>
+    # Parse metadata to show actual friendly game display name [cite: services.py]
+    raw_username = service.username or ""
+    device_name = raw_username.split("|")[0].strip()
+    service_display = "کل ترافیک اینترنت (Default)"
+    
+    if "|" in raw_username:
+        parts = raw_username.split("|")
+        service_pk = parts[1] if len(parts) > 1 else "default"
+        if service_pk != "default":
+            try:
+                from bot.routers.buy import CATEGORIES
+                for cat in CATEGORIES.values():
+                    for s in cat["services"]:
+                        if s["pk"] == service_pk:
+                            service_display = s["name"]
+                            break
+            except Exception:
+                service_display = service_pk.capitalize()
 
-<b>لینک اشتراک DoT:</b>
-<code>{escape(service.subscription_link or "ثبت نشده")}</code>
+    # Map the current slot settings dynamically from your local config (no slow API requests) [cite: 1]
+    ipv4_primary = "76.76.2.162"
+    ipv4_secondary = "76.76.10.162"
+    country_name = "پیش‌فرض"
+    for num, config in SLOT_CONFIGS.items():
+        if config["device_id"] == service.controld_device_id:
+            ipv4_primary = config["dns_primary"]
+            ipv4_secondary = config["dns_secondary"]
+            country_name = config["name"]
+            break
 
-<b>لینک کانفیگ DoH:</b>
-<code>{escape(service.config_link or "ثبت نشده")}</code>"""
+    # Calculate Shamsi Expiration and Remaining Time dynamically
+    expire_at = service.expire_at
+    if expire_at.tzinfo is None:
+        expire_at = expire_at.replace(tzinfo=timezone.utc)
+    tehran_tz = ZoneInfo("Asia/Tehran")
+    tehran_expire = expire_at.astimezone(tehran_tz)
+    try:
+        naive_tehran = tehran_expire.replace(tzinfo=None)
+        expire_str = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
+    except Exception:
+        expire_str = tehran_expire.strftime("%Y-%m-%d %H:%M:%S")
+
+    remaining_time = calculate_remaining_time_fa(service.expire_at)
+
+    text = f"""📊 <b>لینک‌های اتصال سرویس {escape(device_name)}</b>
+
+🔹 <b>تاریخ انقضاء پلن :</b> <code>{escape(expire_str)}</code>
+🔷 <b>زمان باقی‌مانده:</b> {escape(remaining_time)}
+🎮 <b>برنامه/بازی:</b> <code>{escape(service_display)}</code>
+🗺 <b>سرور (کشور) فعلی:</b> {escape(country_name)}
+
+🔐 <b>دی‌ان‌اس‌های اختصاصی شما:</b>
+Primary: <code>{escape(ipv4_primary)}</code>
+Secondary: <code>{escape(ipv4_secondary)}</code>
+
+⚠️ <i>مراحل اتصال:</i>
+۱. بدون فیلترشکن روی دکمه «ثبت آی‌پی اتوماتیک» کلیک کنید تا دسترسی شما فعال شود.
+۲. دی‌ان‌اس‌ها را در بخش تنظیمات سیستم خود وارد کنید."""
     
     markup = await create_secure_ip_update_keyboard(session, service.id)
     await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
@@ -287,14 +362,12 @@ async def handle_change_default_loc_select(callback: CallbackQuery, settings: Se
     await _show_default_loc_page(callback, service_id, page=0, settings=settings)
 
 
+# bot/routers/services.py
+
+# --- LOCATE AND REPLACE THE handle_apply_def_loc HANDLER ---
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """
-    Dynamically migrates a user's IP registration from an old static slot to a new one statically.
-    1. Deauthorizes the OLD IP from the OLD slot (DELETE /access) [cite: 1].
-    2. Authorizes the OLD IP on the NEW slot (POST /access) [cite: 1].
-    3. Updates the database record and commits atomically [cite: 1].
-    """
+    """Migrates a user's IP registration from one static slot to another statically [cite: services.py, 1]."""
     await callback.answer()
     if callback.message is None:
         return
@@ -303,7 +376,6 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     service_id = int(parts[1])
     slot_num = int(parts[2])
 
-    # 1. Retrieve the service details
     service = await ServicesRepository(session).get(service_id)
     if service is None:
         await callback.message.answer("❌ سرویس یافت نشد.")
@@ -311,7 +383,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
 
     from app.config import SLOT_CONFIGS
     if slot_num not in SLOT_CONFIGS:
-        await callback.message.answer("❌ اسلات انتخاب شده معتبر نیست.")
+        await callback.message.answer("❌ اسلات نامعتبر است.")
         return
 
     new_device_id = SLOT_CONFIGS[slot_num]["device_id"]
@@ -324,24 +396,16 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         await callback.message.answer(f"ℹ️ اشتراک شما در حال حاضر روی سرور {new_pop_name} فعال است.")
         return
 
-    # Map the old slot name for a friendly confirmation message
-    old_device_id = service.controld_device_id
-    old_location_name = "سرور قبلی"
-    for config in SLOT_CONFIGS.values():
-        if config["device_id"] == old_device_id:
-            old_location_name = config["name"]
-            break
-
-    # Disable the inline keyboard immediately to prevent double-click race conditions
+    # Disable the keyboard immediately to prevent multi-click/double-click race conditions
     await callback.message.edit_text(
         f"⚙️ در حال انتقال لوکیشن اشتراک شما به سرور {new_pop_name}...",
         reply_markup=None
     )
 
     controld = ControlDService(settings)
-    user_ip = service.authorized_ip
+    old_device_id = service.controld_device_id
 
-    # Step 1: Surgically deauthorize the user's IP from the old slot (DELETE) [cite: 1]
+    # Step 1: Query the Control D API dynamically to deauthorize ALL currently active IPs from the OLD slot [cite: 1]
     if old_device_id and user_ip:
         try:
             logger.info("surgically_deauthorizing_old_slot_ip", service_id=service.id, old_device_id=old_device_id, ip=user_ip)
@@ -350,32 +414,19 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
             # Log warning but do NOT block provisioning of the new slot
             logger.warning("old_slot_ip_deauthorization_failed_proceeding", service_id=service.id, error=str(exc))
 
-    # Step 2: Authorize the user's IP on the new slot (POST) [cite: 1]
-    if user_ip:
-        try:
-            logger.info("authorizing_ip_on_new_slot", service_id=service.id, new_device_id=new_device_id, ip=user_ip)
-            await controld.authorize_ip(new_device_id, user_ip)
-        except Exception as exc:
-            logger.error("new_slot_ip_authorization_failed", service_id=service.id, error=str(exc))
+    # Step 2: Authorize their IP on their NEW permanent slot [cite: 1]
+    if service.authorized_ip:
+        logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=service.authorized_ip)
+        await controld.authorize_ip(new_device_id, service.authorized_ip)
 
-    # Step 3: Update database and commit atomically [cite: 1]
-    try:
-        # Reconstruct the metadata string
-        raw_username = service.username.split("|")[0]
-        service.username = f"{raw_username}|default|{slot_num}"
-        service.controld_device_id = new_device_id
-        
-        await session.commit()
-    except Exception as exc:
-        await session.rollback()
-        logger.error("failed_to_commit_location_switch_db_transaction", service_id=service.id, error=str(exc))
-        await callback.message.answer("❌ خطای پایگاه داده در ذخیره‌سازی لوکیشن جدید. تغییرات لغو شد.")
-        return
+    # Step 3: Update local DB record with new slot assignment and metadata [cite: services.py, 1]
+    raw_username = service.username.split("|")[0]
+    service.username = f"{raw_username}|default|{slot_num}"
+    service.controld_device_id = new_device_id
+    await session.commit()
 
-    # Step 5: Send Success Telegram Message
     success_text = f"""✅ <b>لوکیشن اشتراک شما با موفقیت تغییر یافت!</b>
 
-🔄 <b>سرور قبلی:</b> {escape(old_location_name)}
 🗺 <b>سرور جدید:</b> {escape(new_pop_name)}
 
 🔐 <b>دی‌ان‌اس‌های اختصاصی سرور جدید:</b>
@@ -384,9 +435,7 @@ Secondary: <code>{ipv4_secondary}</code>
 
 ⚠️ <i>در صورت عدم اتصال، لطفاً مجدداً روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید.</i>"""
 
-    # Generate the direct /update-ip/{device_id} keyboard cleanly
-    from bot.routers.services import _get_ip_registration_keyboard
-    markup = _get_ip_registration_keyboard(new_device_id)
+    markup = await create_secure_ip_update_keyboard(session, service.id)
 
     await callback.message.answer(
         success_text,
