@@ -1,7 +1,6 @@
 # app/services/payment_service.py
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
@@ -16,6 +15,7 @@ from app.models import (
     VPNServiceStatus,
     WalletTransactionStatus,
     WalletTransactionType,
+    VPNService,
 )
 from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.services import ServicesRepository
@@ -23,29 +23,23 @@ from app.repositories.wallet_transactions import WalletTransactionsRepository
 from app.services.affiliate_service import AffiliateService
 from app.services.controld import ControlDService
 from app.services.order_service import OrderService
-from app.services.referral_service import ReferralService
 from app.services.settings_service import AppSettingsService
 from app.services.slot_manager import get_least_populated_personal_slot
-
 
 class PaymentApprovalError(Exception):
     pass
 
-
 class PaymentExpiredError(PaymentApprovalError):
     pass
 
-
 class PaymentAlreadyProcessedError(PaymentApprovalError):
     pass
-
 
 class InsufficientWalletBalanceError(PaymentApprovalError):
     def __init__(self, *, required_amount: int, wallet_balance: int) -> None:
         self.required_amount = required_amount
         self.wallet_balance = wallet_balance
         super().__init__("Insufficient wallet balance")
-
 
 @dataclass(frozen=True)
 class ApprovedPaymentResult:
@@ -65,7 +59,6 @@ class ApprovedPaymentResult:
     stamp: str | None = None
     ipv4: str | None = None
     ipv6: str | None = None
-
 
 @dataclass(frozen=True)
 class RejectedPaymentResult:
@@ -244,9 +237,6 @@ class PaymentService:
             approved_at=now,
         )
 
-# app/services/payment_service.py
-
-# --- LOCATE AND REPLACE THE ENTIRE _complete_purchase METHOD ---
     async def _complete_purchase(self, order: Order, now: datetime) -> ApprovedPaymentResult:
         plan = order.plan
         user = order.user
@@ -280,7 +270,7 @@ class PaymentService:
             config_link="sdns://placeholder",
             subscription_link="sdns://placeholder",
             volume_gb=plan.volume_gb,
-            duration_days=plan.duration_hours,
+            duration_days=plan.duration_hours // 24 if plan.duration_hours >= 24 else 1,
             expire_at=expire_at,
             status=VPNServiceStatus.ACTIVE.value,
         )
@@ -294,7 +284,7 @@ class PaymentService:
             service_username=username,
             plan_title=plan.title,
             volume_gb=plan.volume_gb,
-            duration_days=plan.duration_hours,
+            duration_days=plan.duration_hours // 24 if plan.duration_hours >= 24 else 1,
             config_link="Dynamic Web Link Provided",
             subscription_link="Dynamic Web Link Provided",
             plan_id=plan.id,
@@ -334,7 +324,7 @@ class PaymentService:
             service_username=service.username,
             plan_title=plan.title,
             volume_gb=plan.volume_gb,
-            duration_days=plan.duration_hours,
+            duration_days=plan.duration_hours // 24 if plan.duration_hours >= 24 else 1,
             config_link=service.config_link,
             subscription_link=service.subscription_link,
             new_expire_at=new_expire_at,

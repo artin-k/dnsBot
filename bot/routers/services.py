@@ -2,7 +2,7 @@
 from html import escape
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-import jdatetime  # Added for safe Shamsi calculations
+import jdatetime
 import httpx
 import structlog
 
@@ -239,7 +239,6 @@ async def handle_manage_service(callback: CallbackQuery, session: AsyncSession) 
     await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id), parse_mode="HTML")
 
 
-# --- LOCATE AND REPLACE THE handle_manage_links METHOD ---
 @router.callback_query(F.data.startswith("manage_links:"), StateFilter("*"))
 async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) -> None:
     """Generates the connection links and update-ip buttons directly [cite: services.py, 1]."""
@@ -404,6 +403,9 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
 
     controld = ControlDService(settings)
     old_device_id = service.controld_device_id
+    
+    # 🛠 FIX: Safely retrieve and define user_ip BEFORE utilizing it [cite: 1]
+    user_ip = service.authorized_ip
 
     # Step 1: Query the Control D API dynamically to deauthorize ALL currently active IPs from the OLD slot [cite: 1]
     if old_device_id and user_ip:
@@ -415,9 +417,12 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
             logger.warning("old_slot_ip_deauthorization_failed_proceeding", service_id=service.id, error=str(exc))
 
     # Step 2: Authorize their IP on their NEW permanent slot [cite: 1]
-    if service.authorized_ip:
-        logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=service.authorized_ip)
-        await controld.authorize_ip(new_device_id, service.authorized_ip)
+    if user_ip:
+        try:
+            logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=user_ip)
+            await controld.authorize_ip(new_device_id, user_ip)
+        except Exception as exc:
+            logger.error("new_slot_ip_authorization_failed", service_id=service.id, error=str(exc))
 
     # Step 3: Update local DB record with new slot assignment and metadata [cite: services.py, 1]
     raw_username = service.username.split("|")[0]
