@@ -224,12 +224,24 @@ def _render_paystar_success_html(order: Order, payment: Payment, context: dict[s
     return HTMLResponse(content=html_content)
 
 
+# ip_server.py & run_web_ip_updater.py
+
 async def _send_paystar_success_message(order: Order, payment: Payment, context: dict[str, str]) -> None:
-    # Import secure keyboard generator [cite: 1]
+    """Sends the checkout completion notification with secure direct update-ip buttons [cite: 1]."""
     from bot.routers.services import create_secure_ip_update_keyboard
+    
     async with async_session_maker() as session:
-        # Generate the single-use, 10-minute expiring secure keyboard on-the-fly [cite: 1]
-        markup = await create_secure_ip_update_keyboard(session, order.vpn_service.id)
+        # 🛠 FIX: Directly query VPNService to avoid SQLAlchemy DetachedInstanceError [cite: 1.2.2]
+        stmt = select(VPNService).where(VPNService.order_id == order.id).limit(1)
+        res = await session.execute(stmt)
+        vpn_service = res.scalars().first()
+
+        if vpn_service is None:
+            logger.error("send_paystar_success_message_failed_missing_service", order_id=order.id)
+            return
+
+        # Safely generate the inline keyboard
+        markup = await create_secure_ip_update_keyboard(session, vpn_service.id)
 
     success_telegram_text = f"""✅ <b>پرداخت آنلاین شما تایید و اشتراک فعال شد!</b>
 
@@ -257,7 +269,6 @@ Secondary: <code>{escape(context["ipv4_secondary"])}</code>
         )
     except Exception as exc:
         logger.warning("paystar_notification_failed", order_id=order.id, payment_id=payment.id, error=str(exc))
-
 
 # ============================================================================
 # AUTO-REGISTRATION ENDPOINT & HELPERS
