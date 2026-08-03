@@ -64,11 +64,11 @@ def buy_renew_menu_keyboard() -> InlineKeyboardMarkup:
 def features_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="💰 تعرفه اشتراک‌ها", callback_data=MENU_TARIFFS_CALLBACK)
-    builder.button(text="📦 پیگیری سفارش", callback_data=MENU_TRACK_CALLBACK)
+    # builder.button(text="📦 پیگیری سفارش", callback_data=MENU_TRACK_CALLBACK)
     builder.button(text="👥 زیرمجموعه‌گیری", callback_data=MENU_REFERRAL_CALLBACK)
     builder.button(text="📚 آموزش", callback_data=MENU_TUTORIALS_CALLBACK)
     builder.button(text="🏦 کیف پول + شارژ", callback_data=MENU_WALLET_CALLBACK)
-    builder.button(text="🎲 گردونه شانس", callback_data=MENU_DICE_CALLBACK)
+    # builder.button(text="🎲 گردونه شانس", callback_data=MENU_DICE_CALLBACK)
     builder.button(text=texts.BTN_BACK, callback_data=MENU_MAIN_CALLBACK)
     builder.adjust(1)
     return builder.as_markup()

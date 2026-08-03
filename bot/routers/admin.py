@@ -3448,6 +3448,7 @@ def _approved_message(
     ipv4_secondary: str = "76.76.10.162",
     custom_username: str | None = None
 ) -> str:
+    """Generates the subscription purchase success message with exact DNS IP resolvers."""
     if result.waiting_inventory:
         return "پرداخت شما تایید شد. پشتیبانی به‌زودی اطلاعات اشتراک شما را ارسال می‌کند."
         
@@ -3500,14 +3501,53 @@ def _approved_message(
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
 
-مراحل ثبت آی‌پی :
-1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
-2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
-❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+مراحل ثبت آی‌پی (بسیار مهم):
+1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
+2️⃣ : فیلترشکن خود را خاموش کرده و روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
+❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
 
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
 
 📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
+
+
+def _manual_activation_user_message(
+    *,
+    plan_title: str,
+    duration_hours: int,
+    expire_at: datetime,
+    ipv4_primary: str = "76.76.2.162",
+    ipv4_secondary: str = "76.76.10.162"
+) -> str:
+    """Generates the manual activation message with static DNS IP resolvers."""
+    try:
+        if expire_at.tzinfo is None:
+            expire_at = expire_at.replace(tzinfo=timezone.utc)
+        tehran_tz = ZoneInfo("Asia/Tehran")
+        tehran_expire = expire_at.astimezone(tehran_tz)
+        naive_tehran = tehran_expire.replace(tzinfo=None)
+        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran)
+        expire_str = shamsi_expire.strftime("%Y/%m/%d - %H:%M:%S")
+    except Exception:
+        expire_str = expire_at.strftime("%Y-%m-%d %H:%M:%S")
+
+    days = duration_hours // 24 if duration_hours >= 24 and duration_hours % 24 == 0 else duration_hours
+    unit = "روز" if duration_hours >= 24 and duration_hours % 24 == 0 else "ساعت"
+
+    return f"""🔹 تاریخ انقضاء پلن : {expire_str}
+🔷 زمان باقی‌مانده: {days} {unit}
+دی ان اس اختصاصی شما :
+
+🔷 Primary : <code>{ipv4_primary}</code>
+🔷 Secondary : <code>{ipv4_secondary}</code>
+
+
+مراحل ثبت آی‌پی (بسیار مهم):
+1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
+2️⃣ : فیلترشکن خود را خاموش کرده و روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
+❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
+
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
