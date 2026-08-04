@@ -9,7 +9,10 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-PAYSTAR_BASE_URL = "https://core.paystar.ir/api/pardakht"
+# app/services/paystar.py
+
+# 🛠 FIX: Replaced core.paystar.ir with core.paystar.click
+PAYSTAR_BASE_URL = "https://core.paystar.click/api/pardakht"
 
 class PaystarService:
     def __init__(self) -> None:

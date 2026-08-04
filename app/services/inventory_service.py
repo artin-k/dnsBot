@@ -103,41 +103,32 @@ async def mark_config_sold(session: AsyncSession, order_id: int, user_id: int) -
     return item
 
 
-async def release_expired_reservations(session: AsyncSession) -> int:
-    """Expire unpaid purchase orders and release their reserved configs.
+# app/services/inventory_service.py
 
-    Important PostgreSQL note:
-    Do not eager-load Order.payment with joinedload() in the same SELECT that uses
-    FOR UPDATE. SQLAlchemy renders a LEFT OUTER JOIN for the one-to-one payment
-    relationship, and PostgreSQL rejects FOR UPDATE on the nullable side of an
-    outer join. Lock orders first, then load/lock matching payments separately.
-    """
+async def release_expired_reservations(session: AsyncSession) -> int:
+    """Expires standard unpaid orders but protects manual card-to-card pending orders from automatic release [cite: 1]."""
     now = datetime.now(timezone.utc)
-    result = await session.scalars(
+    
+    # 🛠 FIX: Join with Payment and filter out Payment.method == 'manual'
+    result = await session.execute(
         select(Order)
+        .join(Payment, Order.id == Payment.order_id)
         .where(
             Order.order_kind == OrderKind.PURCHASE.value,
             Order.status == OrderStatus.PENDING_PAYMENT.value,
             Order.expires_at.is_not(None),
             Order.expires_at < now,
+            Payment.method != "manual",  # Protect manual orders
         )
         .with_for_update(of=Order)
     )
-    expired_orders = list(result.all())
+    expired_orders = list(result.scalars().all())
 
     for order in expired_orders:
         order.status = OrderStatus.EXPIRED.value
-
-        payment = await session.scalar(
-            select(Payment)
-            .where(
-                Payment.order_id == order.id,
-                Payment.status == PaymentStatus.PENDING.value,
-            )
-            .with_for_update(of=Payment)
-        )
-        if payment is not None:
-            payment.status = PaymentStatus.EXPIRED.value
+        
+        if order.payment and order.payment.status == PaymentStatus.PENDING.value:
+            order.payment.status = PaymentStatus.EXPIRED.value
 
         await release_reserved_config(session, order.id)
 

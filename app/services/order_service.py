@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+from fastapi import logger
+from fastapi import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -66,7 +68,15 @@ class OrderService:
 
         return order, payment
 
+    # app/services/order_service.py
+
     async def expire_order_if_unpaid(self, order: Order) -> bool:
+        """Expires pending payment orders unless the chosen payment method is manual (کارت به کارت) [cite: 1]."""
+        # 🛠 FIX: Bypass expiration completely for card-to-card manual payments
+        if order.payment and order.payment.method == "manual":
+            logger.info("bypassing_expiration_for_manual_card_payment", order_id=order.id)
+            return False
+
         if not self.is_order_expired(order):
             return False
         if order.status != OrderStatus.PENDING_PAYMENT.value:
@@ -75,8 +85,6 @@ class OrderService:
         if order.payment and order.payment.status == PaymentStatus.PENDING.value:
             order.payment.status = PaymentStatus.EXPIRED.value
             
-        # --- REMOVED: Release inventory config ---
-        
         await self.session.commit()
         return True
 

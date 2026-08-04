@@ -692,12 +692,15 @@ async def handle_buy_loc_page(callback: CallbackQuery, settings: Settings) -> No
     await _show_buy_loc_page(callback, plan_id, service_pk, page, settings)
 
 
+# bot/routers/buy.py
+
 @router.callback_query(F.data.startswith("buy_plan_loc:"), StateFilter("*"))
 async def handle_buy_plan_loc(
     callback: CallbackQuery,
     session: AsyncSession,
     settings: Settings,
 ) -> None:
+    """Generates the billing pre-invoice cleanly without any automated renewal discounts."""
     await callback.answer()
     if callback.message is None or callback.from_user is None:
         return
@@ -745,19 +748,9 @@ async def handle_buy_plan_loc(
     duration_hours = plan.duration_hours or 720
     duration_text = format_duration_fa(duration_hours)
 
-    active_stmt = select(VPNService).where(
-        VPNService.user_id == user.id,
-        VPNService.status == "active"
-    )
-    active_result = await session.execute(active_stmt)
-    current_sub = active_result.scalars().first()
-
+    # 🛠 FIX: Automatic 10% renewal discounts are completely removed.
+    # Direct, standard flat pricing is enforced.
     final_price = plan.price
-    discount_msg = ""
-    if current_sub is not None:
-        discount_amount = int(plan.price * 0.1)
-        final_price = plan.price - discount_amount
-        discount_msg = f"🎁 تخفیف تمدید فعال: {discount_amount:,} تومان\n"
 
     invoice_text = f"""🧾 پیش‌فاکتور خرید اشتراک DNS
 
@@ -765,8 +758,7 @@ async def handle_buy_plan_loc(
 🗓 مدت اعتبار: {duration_text}
 🎮 برنامه/بازی: <b>{escape(service_display)}</b>
 🗺 سرور (کشور): <b>{escape(country_display)}</b>
-💵 قیمت طرح: {plan.price:,} تومان
-{discount_msg}💵 قیمت نهایی شما: {final_price:,} تومان
+💵 قیمت طرح: {final_price:,} تومان
 🏦 موجودی فعلی شما: {user.wallet_balance:,} تومان
 
 آیا مایل هستید این طرح را خریداری کنید؟"""
@@ -779,7 +771,6 @@ async def handle_buy_plan_loc(
     builder.adjust(1)
 
     await _safe_edit_or_reply(callback, invoice_text, reply_markup=builder.as_markup())
-
 
 # ============================================================================
 # 4. INSTANT PAYMENT FROM WALLET (RE-ROUTED TO STATIC BALANCER SLOTS)
@@ -821,9 +812,7 @@ async def handle_pay_instant_wallet(
     active_result = await session.execute(active_stmt)
     current_sub = active_result.scalars().first()
 
-    final_price = plan.price
-    if current_sub is not None:
-        final_price = plan.price - int(plan.price * 0.1)
+    final_price = plan.price  # 🛠 FIX: No 10% discount
 
     if user.wallet_balance < final_price:
         await callback.message.answer(
@@ -979,22 +968,21 @@ async def handle_pay_manual_card(
     active_result = await session.execute(active_stmt)
     current_sub = active_result.scalars().first()
 
-    final_price = plan.price
-    if current_sub is not None:
-        final_price = plan.price - int(plan.price * 0.1)
+    # bot/routers/buy.py
+# (Inside handle_pay_manual_card)
 
-    # Append chosen location (POP code) and game_pk directly into order custom_username
+    final_price = plan.price  # 🛠 FIX: No 10% discount
+
     custom_username = f"dns_user_{user.telegram_id}|{service_pk}|{pop_code}"
 
-    # Build database order & payment records
     order_service = OrderService(session, settings)
     order, payment = await order_service.create_order_with_payment(
         user=user,
         plan=plan,
         custom_username=custom_username,
         discount_code=None,
-        discount_percent=10 if current_sub is not None else 0,
-        discount_amount=int(plan.price * 0.1) if current_sub is not None else 0,
+        discount_percent=0,  # 🛠 FIX: Set to 0
+        discount_amount=0,   # 🛠 FIX: Set to 0
     )
 
     await state.set_state(BuyStates.waiting_receipt)
@@ -1057,9 +1045,10 @@ async def handle_pay_online_paystar(
     active_result = await session.execute(active_stmt)
     current_sub = active_result.scalars().first()
 
-    final_price = plan.price
-    if current_sub is not None:
-        final_price = plan.price - int(plan.price * 0.1)
+    # bot/routers/buy.py
+# (Inside handle_pay_online_paystar)
+
+    final_price = plan.price  # 🛠 FIX: No 10% discount
 
     custom_username = f"dns_user_{user.telegram_id}|{service_pk}|{pop_code}"
     order_service = OrderService(session, settings)
@@ -1068,8 +1057,8 @@ async def handle_pay_online_paystar(
         plan=plan,
         custom_username=custom_username,
         discount_code=None,
-        discount_percent=10 if current_sub is not None else 0,
-        discount_amount=int(plan.price * 0.1) if current_sub is not None else 0,
+        discount_percent=0,   # 🛠 FIX: Set to 0
+        discount_amount=0,    # 🛠 FIX: Set to 0
         payment_method="paystar",
         commit=False,
     )

@@ -737,6 +737,9 @@ async def paystar_redirect(token: str):
         if payment.status == PaymentStatus.APPROVED.value or payment.order.status == OrderStatus.COMPLETED.value:
             return _success_html("این سفارش قبلاً با موفقیت نهایی شده است.")
 
+    # ip_server.py & run_web_ip_updater.py
+
+    # ... (inside paystar_redirect)
     html_content = f"""
     <html>
     <head>
@@ -752,13 +755,15 @@ async def paystar_redirect(token: str):
         <div style="text-align: center; margin-top: 100px; font-family: Tahoma, sans-serif;">
             <h3>در حال انتقال به درگاه پرداخت بانکی شاپرک...</h3>
             <p>لطفاً شکیبا باشید.</p>
-            <form id="paystar_form" action="https://core.paystar.ir/api/pardakht/payment" method="POST">
+            <!-- 🛠 FIX: Replaced core.paystar.ir with core.paystar.click action URL -->
+            <form id="paystar_form" action="https://core.paystar.click/api/pardakht/payment" method="POST">
                 <input type="hidden" name="token" value="{token}" />
             </form>
         </div>
     </body>
     </html>
     """
+    
     return HTMLResponse(content=html_content)
 
 
