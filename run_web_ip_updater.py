@@ -726,20 +726,25 @@ async def admin_add_ip(
 # PAYSTAR REDIRECT PROXY
 # ============================================================================
 
+# ip_server.py & run_web_ip_updater.py
+
 @app.get("/paystar/redirect", response_class=HTMLResponse)
 async def paystar_redirect(token: str):
-    async with async_session_maker() as session:
-        payment = await PaymentsRepository(session).get_by_token_with_details(token)
-        if payment is None or payment.order is None or payment.user is None:
-            return _failed_html("توکن پرداخت معتبر نیست.")
-        if payment.method != "paystar":
-            return _failed_html("این لینک برای پرداخت آنلاین ثبت نشده است.")
-        if payment.status == PaymentStatus.APPROVED.value or payment.order.status == OrderStatus.COMPLETED.value:
-            return _success_html("این سفارش قبلاً با موفقیت نهایی شده است.")
+    """Bypasses 500 errors gracefully and logs exact database exceptions during token redirect [cite: 1]."""
+    try:
+        async with async_session_maker() as session:
+            payment = await PaymentsRepository(session).get_by_token_with_details(token)
+            if payment is None or payment.order is None or payment.user is None:
+                return _failed_html("توکن پرداخت معتبر نیست.")
+            if payment.method != "paystar":
+                return _failed_html("این لینک برای پرداخت آنلاین ثبت نشده است.")
+            if payment.status == PaymentStatus.APPROVED.value or payment.order.status == OrderStatus.COMPLETED.value:
+                return _success_html("این سفارش قبلاً با موفقیت نهایی شده است.")
+    except Exception as exc:
+        logger.exception("failed_to_process_paystar_redirect_route", token=token)
+        return _failed_html(f"خطای داخلی سرور در انتقال به درگاه پرداخت: {str(exc)}")
 
-    # ip_server.py & run_web_ip_updater.py
-
-    # ... (inside paystar_redirect)
+    # Proceed to submit form to core.paystar.click
     html_content = f"""
     <html>
     <head>
@@ -755,7 +760,6 @@ async def paystar_redirect(token: str):
         <div style="text-align: center; margin-top: 100px; font-family: Tahoma, sans-serif;">
             <h3>در حال انتقال به درگاه پرداخت بانکی شاپرک...</h3>
             <p>لطفاً شکیبا باشید.</p>
-            <!-- 🛠 FIX: Replaced core.paystar.ir with core.paystar.click action URL -->
             <form id="paystar_form" action="https://core.paystar.click/api/pardakht/payment" method="POST">
                 <input type="hidden" name="token" value="{token}" />
             </form>
@@ -763,9 +767,7 @@ async def paystar_redirect(token: str):
     </body>
     </html>
     """
-    
     return HTMLResponse(content=html_content)
-
 
 # ============================================================================
 # PAYSTAR GATEWAY CALLBACK

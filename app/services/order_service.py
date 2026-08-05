@@ -13,6 +13,9 @@ from app.utils.tracking import generate_tracking_code
 
 from app.models import PaymentStatus
 
+import structlog
+logger = structlog.get_logger(__name__)
+
 class OrderService:
     def __init__(self, session: AsyncSession, settings: Settings) -> None:
         self.session = session
