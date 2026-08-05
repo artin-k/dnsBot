@@ -729,7 +729,7 @@ async def admin_add_ip(
 
 @app.get("/paystar/redirect", response_class=HTMLResponse)
 async def paystar_redirect(token: str):
-    """Gracefully handles redirects using a highly-styled dark card and a robust manual submit fallback."""
+    """Gracefully handles redirects using a highly-styled dark card and a robust manual submit fallback [cite: 1]."""
     try:
         async with async_session_maker() as session:
             payment = await PaymentsRepository(session).get_by_token_with_details(token)
@@ -805,6 +805,7 @@ async def paystar_redirect(token: str):
             <p class="mb-4 text-secondary" style="font-size: 15px; line-height: 1.8;">
                 لطفاً شکیبا باشید. در صورتی که مرورگر شما به طور خودکار منتقل نشد، روی دکمه زیر کلیک کنید:
             </p>
+            <!-- 🛠 FORCED ACTION URL TO CORE.PAYSTAR.CLICK FOR COMPLETE FIREWALL BYPASS -->
             <form id="paystar_form" action="https://core.paystar.click/api/pardakht/payment" method="POST">
                 <input type="hidden" name="token" value="{token}" />
                 <button type="submit" class="btn btn-submit py-2 px-4 rounded-3 text-decoration-none">انتقال دستی به درگاه بانکی</button>
