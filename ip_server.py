@@ -246,22 +246,27 @@ async def _send_paystar_success_message(order: Order, payment: Payment, context:
         markup = await create_secure_ip_update_keyboard(session, vpn_service.id)
 
     success_telegram_text = f"""✅ <b>پرداخت آنلاین شما تایید و اشتراک فعال شد!</b>
-
-🛒 <b>کد پیگیری سفارش:</b> <code>{escape(order.tracking_code)}</code>
-🧾 <b>کد پیگیری تراکنش:</b> <code>{escape(payment.ref_id or "-")}</code>
-🕓 <b>مدت اعتبار:</b> {escape(context["duration_text"])}
-📅 <b>تاریخ انقضا:</b> {escape(context["expire_str"])}
-🎮 <b>برنامه/بازی:</b> {escape(context["service_display"])}
-🗺 <b>سرور (کشور):</b> {escape(context["country_display"])}
-
-🔐 <b>DNS اختصاصی شما:</b>
-Primary: <code>{escape(context["ipv4_primary"])}</code>
-Secondary: <code>{escape(context["ipv4_secondary"])}</code>
-
-⚠️ <i>در صورت عدم اتصال DNSها، لطفاً وضعیت اتصال اینترنت خود را بررسی کنید.</i>
-
-📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
-
+    
+    🛒 <b>کد پیگیری سفارش:</b> <code>{escape(order.tracking_code)}</code>
+    🧾 <b>کد پیگیری تراکنش:</b> <code>{escape(payment.ref_id or "-")}</code>
+    🕓 <b>مدت اعتبار:</b> {escape(context["duration_text"])}
+    📅 <b>تاریخ انقضا:</b> {escape(context["expire_str"])}
+    🎮 <b>برنامه/بازی:</b> {escape(context["service_display"])}
+    🗺 <b>سرور (کشور):</b> {escape(context["country_display"])}
+    
+    🔐 <b>DNS اختصاصی شما:</b>
+    Primary: <code>{escape(context["ipv4_primary"])}</code>
+    Secondary: <code>{escape(context["ipv4_secondary"])}</code>
+    
+    مراحل ثبت آی‌پی :
+    1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
+    2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+    ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+    
+    ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
+    
+    📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
+    
     try:
         await bot.send_message(
             chat_id=order.user.telegram_id,

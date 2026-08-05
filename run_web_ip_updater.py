@@ -1,4 +1,5 @@
 # ip_server.py
+import asyncio
 import secrets
 import logging
 import re
@@ -258,9 +259,15 @@ async def _send_paystar_success_message(order: Order, payment: Payment, context:
 Primary: <code>{escape(context["ipv4_primary"])}</code>
 Secondary: <code>{escape(context["ipv4_secondary"])}</code>
 
-⚠️ <i>در صورت عدم اتصال DNSها، لطفاً وضعیت اتصال اینترنت خود را بررسی کنید.</i>
+مراحل ثبت آی‌پی :
+1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
+2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
 
 📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
+
 
     try:
         await bot.send_message(
