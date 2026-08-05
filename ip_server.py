@@ -724,12 +724,11 @@ async def admin_add_ip(
 # ============================================================================
 # PAYSTAR REDIRECT PROXY
 # ============================================================================
-
 # ip_server.py & run_web_ip_updater.py
 
 @app.get("/paystar/redirect", response_class=HTMLResponse)
 async def paystar_redirect(token: str):
-    """Bypasses 500 errors gracefully and logs exact database exceptions during token redirect [cite: 1]."""
+    """Gracefully handles redirects using a highly-styled dark card and a robust manual submit fallback."""
     try:
         async with async_session_maker() as session:
             payment = await PaymentsRepository(session).get_by_token_with_details(token)
@@ -743,12 +742,55 @@ async def paystar_redirect(token: str):
         logger.exception("failed_to_process_paystar_redirect_route", token=token)
         return _failed_html(f"خطای داخلی سرور در انتقال به درگاه پرداخت: {str(exc)}")
 
-    # Proceed to submit form to core.paystar.click
+    # Proceed to submit form to core.paystar.click with custom style and manual action fallback [cite: 1]
     html_content = f"""
-    <html>
+    <!DOCTYPE html>
+    <html lang="fa" dir="rtl">
     <head>
         <meta charset="utf-8">
-        <title>در حال انتقال به درگاه بانکی...</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>در حال انتقال به درگاه پرداخت...</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+            body {{
+                font-family: 'Vazirmatn', Tahoma, sans-serif;
+                background-color: #0f172a;
+                color: #f8fafc;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+            }}
+            .redirect-card {{
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 16px;
+                padding: 40px;
+                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+                max-width: 500px;
+                width: 100%;
+                text-align: center;
+            }}
+            .spinner-border {{
+                color: #38bdf8;
+                width: 3rem;
+                height: 3rem;
+            }}
+            .btn-submit {{
+                background-color: #10b981;
+                color: #ffffff;
+                border: none;
+                font-weight: bold;
+                transition: all 0.2s ease-in-out;
+            }}
+            .btn-submit:hover {{
+                background-color: #059669;
+                transform: translateY(-1px);
+                color: #ffffff;
+            }}
+        </style>
         <script>
             window.onload = function() {{
                 document.getElementById('paystar_form').submit();
@@ -756,11 +798,15 @@ async def paystar_redirect(token: str):
         </script>
     </head>
     <body>
-        <div style="text-align: center; margin-top: 100px; font-family: Tahoma, sans-serif;">
-            <h3>در حال انتقال به درگاه پرداخت بانکی شاپرک...</h3>
-            <p>لطفاً شکیبا باشید.</p>
+        <div class="redirect-card">
+            <div class="spinner-border mb-4" role="status"></div>
+            <h1 class="h4 mb-3 fw-bold">در حال انتقال به درگاه پرداخت شاپرک...</h1>
+            <p class="mb-4 text-secondary" style="font-size: 15px; line-height: 1.8;">
+                لطفاً شکیبا باشید. در صورتی که مرورگر شما به طور خودکار منتقل نشد، روی دکمه زیر کلیک کنید:
+            </p>
             <form id="paystar_form" action="https://core.paystar.click/api/pardakht/payment" method="POST">
                 <input type="hidden" name="token" value="{token}" />
+                <button type="submit" class="btn btn-submit py-2 px-4 rounded-3 text-decoration-none">انتقال دستی به درگاه بانکی</button>
             </form>
         </div>
     </body>
