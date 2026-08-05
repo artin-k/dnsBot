@@ -429,7 +429,6 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     service.username = f"{raw_username}|default|{slot_num}"
     service.controld_device_id = new_device_id
     await session.commit()
-
     success_text = f"""✅ <b>لوکیشن اشتراک شما با موفقیت تغییر یافت!</b>
 
 🗺 <b>سرور جدید:</b> {escape(new_pop_name)}
@@ -438,7 +437,9 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
 Primary: <code>{ipv4_primary}</code>
 Secondary: <code>{ipv4_secondary}</code>
 
-⚠️ <i>در صورت عدم اتصال، لطفاً مجدداً روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید.</i>"""
+📌 از این لحظه، DNS اشتراک شما تغییر کرده است. لطفاً DNSهای جدید را در دستگاه موردنظر خود وارد کنید.
+
+⚠️ <i>اگر پس از تغییر DNS اتصال برقرار نشد، یک بار روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید و سپس مجدداً اتصال را بررسی کنید.</i>"""
 
     markup = await create_secure_ip_update_keyboard(session, service.id)
 
