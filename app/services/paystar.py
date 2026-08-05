@@ -1,6 +1,7 @@
 # app/services/paystar.py
 import hmac
 import hashlib
+import os
 import httpx
 import logging
 import asyncio  # Imported for sleep/delay [cite: 1]
@@ -88,9 +89,12 @@ class PaystarService:
 
         return None
 
+    # app/services/paystar.py
+
     async def verify_payment(self, amount_toman: int, ref_num: str, card_number: str, tracking_code: str) -> bool:
         """
         Verifies a successful transaction directly with the Paystar API [cite: 5.4.1].
+        Now fully integrated with the dynamic proxy bypass block [cite: 1].
         """
         if not self.gateway_id or not self.sign_key:
             logger.error("Paystar gateway credentials are not configured")
@@ -111,10 +115,16 @@ class PaystarService:
             "sign": signature
         }
 
-        # Apply a 2-attempt retry loop on verification as well for extreme database stability [cite: 1]
+        # 🛠 FIX: Load the proxy settings for verification as well! [cite: 1]
+        proxy_url = os.getenv("FORWARD_PROXY_URL") or getattr(settings, "forward_proxy_url", None)
+        client_kwargs = {}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+            logger.info("routing_paystar_verification_request_through_proxy", proxy=proxy_url)
+
         max_retries = 2
         for attempt in range(1, max_retries + 1):
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 try:
                     response = await client.post(f"{PAYSTAR_BASE_URL}/verify", json=payload, headers=headers, timeout=8.0)
                     if response.status_code == 200:

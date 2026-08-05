@@ -819,100 +819,106 @@ async def paystar_redirect(token: str):
 # PAYSTAR GATEWAY CALLBACK
 # ============================================================================
 
+# ip_server.py & run_web_ip_updater.py
+
 @app.api_route("/paystar/callback", methods=["GET", "POST"], response_class=HTMLResponse)
 async def paystar_callback(request: Request):
-    if request.method.upper() == "POST":
-        payload = await request.form()
-    else:
-        payload = request.query_params
-
+    """Bypasses 500 errors gracefully, logs callbacks, and confirms transactions [cite: 1]."""
     try:
-        status = int(payload.get("status", 0))
-    except (TypeError, ValueError):
-        status = 0
+        if request.method.upper() == "POST":
+            payload = await request.form()
+        else:
+            payload = request.query_params
 
-    order_id = str(payload.get("order_id", "")).strip()
-    ref_num = str(payload.get("ref_num", "")).strip()
-    card_number = str(payload.get("card_number", "")).strip()
-    tracking_code = str(payload.get("tracking_code", "")).strip()
+        try:
+            status = int(payload.get("status", 0))
+        except (TypeError, ValueError):
+            status = 0
 
-    if not order_id or not ref_num:
-        return _failed_html("اطلاعات برگشتی درگاه ناقص است.")
+        order_id = str(payload.get("order_id", "")).strip()
+        ref_num = str(payload.get("ref_num", "")).strip()
+        card_number = str(payload.get("card_number", "")).strip()
+        tracking_code = str(payload.get("tracking_code", "")).strip()
 
-    async with async_session_maker() as session:
-        order = await OrdersRepository(session).get_by_tracking_code_with_details(order_id)
-        payment = order.payment if order else None
+        if not order_id or not ref_num:
+            return _failed_html("اطلاعات برگشتی درگاه ناقص است.")
 
-        if order is None or payment is None or order.user is None or order.plan is None:
-            return _failed_html("سفارش مرتبط با این تراکنش پیدا نشد.")
+        async with async_session_maker() as session:
+            order = await OrdersRepository(session).get_by_tracking_code_with_details(order_id)
+            payment = order.payment if order else None
 
-        if payment.status == PaymentStatus.APPROVED.value and order.status == OrderStatus.COMPLETED.value:
+            if order is None or payment is None or order.user is None or order.plan is None:
+                return _failed_html("سفارش مرتبط با این تراکنش پیدا نشد.")
+
+            if payment.status == PaymentStatus.APPROVED.value and order.status == OrderStatus.COMPLETED.value:
+                service_stmt = select(VPNService).options(joinedload(VPNService.plan)).where(VPNService.order_id == order.id).limit(1)
+                service_res = await session.execute(service_stmt)
+                service = service_res.scalars().first()
+                if service is None:
+                    return _success_html("پرداخت این سفارش قبلاً ثبت شده است.")
+                context = await _build_paystar_context(order, service, settings)
+                return _render_paystar_success_html(order, payment, context)
+
+            if status != 1:
+                return _failed_html("پرداخت توسط کاربر لغو شد یا درگاه آن را ناموفق ثبت کرد.")
+
+            paystar = PaystarService()
+            try:
+                is_verified = await paystar.verify_payment(
+                    amount_toman=order.amount,
+                    ref_num=ref_num,
+                    card_number=card_number,
+                    tracking_code=tracking_code,
+                )
+            except Exception as exc:
+                logger.exception("paystar_verify_failed", order_id=order_id, error=str(exc))
+                return _failed_html("خطا در ارتباط با سرویس تایید درگاه پرداخت.")
+
+            if not is_verified:
+                return _failed_html("خطا در تایید اصالت تراکنش درگاه بانکی.")
+
+            payment.method = "paystar"
+            payment.ref_id = ref_num
+            payment.authority = tracking_code or payment.authority
+
+            payment_service = PaymentService(session, VPNPanelService(), settings)
+            try:
+                await payment_service.approve_payment(payment.id)
+            except PaymentAlreadyProcessedError:
+                service_stmt = select(VPNService).options(joinedload(VPNService.plan)).where(VPNService.order_id == order.id).limit(1)
+                service_res = await session.execute(service_stmt)
+                service = service_res.scalars().first()
+                if service is None:
+                    return _success_html("پرداخت قبلاً ثبت شده است.")
+                context = await _build_paystar_context(order, service, settings)
+                return _render_paystar_success_html(order, payment, context)
+            except PaymentExpiredError:
+                return _failed_html("این سفارش منقضی شده است.")
+            except PaymentApprovalError as exc:
+                logger.exception("paystar_approval_failed", order_id=order_id, error=str(exc))
+                return _failed_html("پرداخت تایید شد اما در ساخت سرویس خطا رخ داد.")
+
             service_stmt = select(VPNService).options(joinedload(VPNService.plan)).where(VPNService.order_id == order.id).limit(1)
             service_res = await session.execute(service_stmt)
             service = service_res.scalars().first()
             if service is None:
-                return _success_html("پرداخت این سفارش قبلاً ثبت شده است.")
+                return _failed_html("سرویس پس از پرداخت پیدا نشد.")
+
+            try:
+                await _apply_purchase_route(order, service, settings)
+            except Exception as exc:
+                logger.warning("paystar_route_update_failed", order_id=order_id, error=str(exc))
+
             context = await _build_paystar_context(order, service, settings)
+            try:
+                await _send_paystar_success_message(order, payment, context)
+            except Exception:
+                pass
+
             return _render_paystar_success_html(order, payment, context)
-
-        if status != 1:
-            return _failed_html("پرداخت توسط کاربر لغو شد یا درگاه آن را ناموفق ثبت کرد.")
-
-        paystar = PaystarService()
-        try:
-            is_verified = await paystar.verify_payment(
-                amount_toman=order.amount,
-                ref_num=ref_num,
-                card_number=card_number,
-                tracking_code=tracking_code,
-            )
-        except Exception as exc:
-            logger.exception("paystar_verify_failed", order_id=order_id, error=str(exc))
-            return _failed_html("خطا در ارتباط با سرویس تایید درگاه پرداخت.")
-
-        if not is_verified:
-            return _failed_html("خطا در تایید اصالت تراکنش درگاه بانکی.")
-
-        payment.method = "paystar"
-        payment.ref_id = ref_num
-        payment.authority = tracking_code or payment.authority
-
-        payment_service = PaymentService(session, VPNPanelService(), settings)
-        try:
-            await payment_service.approve_payment(payment.id)
-        except PaymentAlreadyProcessedError:
-            service_stmt = select(VPNService).options(joinedload(VPNService.plan)).where(VPNService.order_id == order.id).limit(1)
-            service_res = await session.execute(service_stmt)
-            service = service_res.scalars().first()
-            if service is None:
-                return _success_html("پرداخت قبلاً ثبت شده است.")
-            context = await _build_paystar_context(order, service, settings)
-            return _render_paystar_success_html(order, payment, context)
-        except PaymentExpiredError:
-            return _failed_html("این سفارش منقضی شده است.")
-        except PaymentApprovalError as exc:
-            logger.exception("paystar_approval_failed", order_id=order_id, error=str(exc))
-            return _failed_html("پرداخت تایید شد اما در ساخت سرویس خطا رخ داد.")
-
-        service_stmt = select(VPNService).options(joinedload(VPNService.plan)).where(VPNService.order_id == order.id).limit(1)
-        service_res = await session.execute(service_stmt)
-        service = service_res.scalars().first()
-        if service is None:
-            return _failed_html("سرویس پس از پرداخت پیدا نشد.")
-
-        try:
-            await _apply_purchase_route(order, service, settings)
-        except Exception as exc:
-            logger.warning("paystar_route_update_failed", order_id=order_id, error=str(exc))
-
-        context = await _build_paystar_context(order, service, settings)
-        try:
-            await _send_paystar_success_message(order, payment, context)
-        except Exception:
-            pass
-
-        return _render_paystar_success_html(order, payment, context)
-
+    except Exception as global_exc:
+        logger.exception("global_unhandled_callback_exception")
+        return _failed_html(f"خطای داخلی سرور در تایید نهایی پرداخت: {str(global_exc)}")
 
 def _failed_html(reason: str) -> HTMLResponse:
     html_content = f"""
