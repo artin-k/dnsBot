@@ -132,6 +132,8 @@ async def _apply_purchase_route(order: Order, service: VPNService, settings_obj)
     return service_pk, slot_num_str
 
 
+# ip_server.py & run_web_ip_updater.py
+
 async def _build_paystar_context(order: Order, service: VPNService, settings_obj) -> dict[str, str]:
     raw_username, service_pk, pop_code = _parse_purchase_metadata(order.custom_username)
     username = raw_username or f"user{order.user_id}"
@@ -171,23 +173,23 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
         naive_tehran = tehran_expire.replace(tzinfo=None)
-        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
+        # 🛠 FIX: Defined expire_str directly to resolve the UnboundLocalError [cite: 1]
+        expire_str = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
     except Exception:
-        shamsi_expire = expire_at.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S")
+        expire_str = expire_at.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S")
 
     return {
         "username": username,
         "service_display": service_display,
         "country_display": country_display,
         "duration_text": calculate_remaining_time_fa(expire_at),
-        "expire_str": shamsi_expire,
+        "expire_str": expire_str,  # Now guaranteed to be populated
         "device_id": service.controld_device_id or "",
         "ipv4_primary": ips["ipv4_primary"],
         "ipv4_secondary": ips["ipv4_secondary"],
         "service_pk": service_pk,
         "pop_code": pop_code or "",
     }
-
 
 def _render_paystar_success_html(order: Order, payment: Payment, context: dict[str, str]) -> HTMLResponse:
     html_content = f"""

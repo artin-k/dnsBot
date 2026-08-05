@@ -131,15 +131,23 @@ async def _apply_purchase_route(order: Order, service: VPNService, settings_obj)
     return service_pk, slot_num_str
 
 
+# ip_server.py & run_web_ip_updater.py
+
 async def _build_paystar_context(order: Order, service: VPNService, settings_obj) -> dict[str, str]:
     raw_username, service_pk, pop_code = _parse_purchase_metadata(order.custom_username)
     username = raw_username or f"user{order.user_id}"
 
     service_display = service_pk.capitalize() if service_pk != "default" else "🌐 کل ترافیک اینترنت"
-    if service.plan and service.plan.controld_profile_id:
+    
+    # Fast non-blocking lookups with short timeout guards
+    if service.plan and service.plan.controld_profile_id and service_pk != "default":
         try:
             controld_service = ControlDService(settings_obj)
-            services = await controld_service.fetch_controld_services(service.plan.controld_profile_id)
+            # Ensure fetch_controld_services internally uses short timeouts (<= 3s)
+            services = await asyncio.wait_for(
+                controld_service.fetch_controld_services(service.plan.controld_profile_id), 
+                timeout=2.0
+            )
             if services:
                 for item in services:
                     if item.get("pk") == service_pk and item.get("name"):
@@ -149,16 +157,8 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
             pass
 
     country_display = pop_code or "پیش‌فرض"
-    try:
-        proxies = await ControlDService(settings_obj).fetch_controld_proxies()
-        if proxies and pop_code:
-            for proxy in proxies:
-                if proxy.get("code") == pop_code:
-                    country_display = f"{proxy['country_name']} - {proxy['city_name']} ({proxy['code']})"
-                    break
-    except Exception:
-        pass
 
+    # Fast IP lookup from local SLOT_CONFIGS
     ips = await get_controld_device_ips(service.controld_device_id, settings_obj) if service.controld_device_id else {
         "ipv4_primary": "76.76.2.162",
         "ipv4_secondary": "76.76.10.162",
@@ -167,11 +167,13 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
     expire_at = service.expire_at
     if expire_at.tzinfo is None:
         expire_at = expire_at.replace(tzinfo=timezone.utc)
+        
     try:
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
         naive_tehran = tehran_expire.replace(tzinfo=None)
-        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
+        # 🛠 FIX: Defined expire_str directly to resolve the UnboundLocalError [cite: 1]
+        expire_str = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
     except Exception:
         expire_str = expire_at.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -180,7 +182,7 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
         "service_display": service_display,
         "country_display": country_display,
         "duration_text": calculate_remaining_time_fa(expire_at),
-        "expire_str": expire_str,
+        "expire_str": expire_str,  # Now guaranteed to be populated
         "device_id": service.controld_device_id or "",
         "ipv4_primary": ips["ipv4_primary"],
         "ipv4_secondary": ips["ipv4_secondary"],
