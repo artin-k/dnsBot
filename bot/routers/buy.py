@@ -829,30 +829,24 @@ async def handle_pay_instant_wallet(
     profile_id = plan.controld_profile_id or settings.controld_profile_id
 
     if current_sub is None:
-        # Allocate slot from permanent balancer pool [cite: 1]
+        # 🛠 FIX: Extract the chosen slot number from 'pop_code' instead of load-balancing! [cite: 1]
         try:
-            device_id = await get_least_populated_personal_slot(session)
-        except Exception as exc:
-            await callback.message.answer(f"❌ خطا در تخصیص اسلات دی‌ان‌اس: {str(exc)}")
-            return
+            slot_num = int(pop_code) if pop_code.isdigit() else 1
+        except ValueError:
+            slot_num = 1
+
+        from app.config import SLOT_CONFIGS
+        if slot_num not in SLOT_CONFIGS:
+            slot_num = 1
+
+        # Allocate the selected location's device ID and DNS IPs [cite: 1]
+        device_id = SLOT_CONFIGS[slot_num]["device_id"]
+        ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
+        ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
 
         expire_at = now + timedelta(hours=plan.duration_hours)
         random_hex = secrets.token_hex(4)
-        
-        # Save persistent metadata string to DB for correct dashboard rendering [cite: services.py]
         unique_device_name = f"tg-user-{user.telegram_id}-{random_hex}|{service_pk}|{pop_code}"
-
-        # Fetch DNS resolvers [cite: 1]
-        device_data = await get_controld_device_ips(device_id, settings)
-        ipv4_primary = device_data["ipv4_primary"]
-        ipv4_secondary = device_data["ipv4_secondary"]
-
-        # Apply chosen routing country directly [cite: buy.py]
-        # controld_service = ControlDService(settings)
-        # if service_pk == "default":
-        #     await controld_service.update_profile_default(profile_id, pop_code)  
-        # else:
-        #     await controld_service.update_service_route(profile_id, service_pk, pop_code)  
 
         new_subscription = VPNService(
             user_id=user.id,
@@ -869,28 +863,29 @@ async def handle_pay_instant_wallet(
 # bot/routers/buy.py
 # (Inside handle_pay_instant_wallet)
 
+    # bot/routers/buy.py
+# (Inside handle_pay_instant_wallet)
+
     else:
         # Renewal - Simply extend time, avoid setting a custom TTL on Control D [cite: buy.py, 1]
         current_expire = current_sub.expire_at
         if current_expire.tzinfo is None:
             current_expire = current_expire.replace(timezone.utc)
 
-        # FIX: If the subscription has already expired, add the duration to 'now' [cite: buy.py, 1]
-        base_time = current_expire if current_expire > now else now
+        # 🛠 CHANGE: Set base_time to 'now' to disable cumulative rollover [cite: 1]
+        base_time = now 
         expire_at = base_time + timedelta(hours=plan.duration_hours)
         
         current_sub.expire_at = expire_at
         current_sub.plan_id = plan.id
         current_sub.status = "active"  # Safely reactivate the service status
         
-        # 🛠 CRITICAL DEFINITION: Define device_id for the dynamic DNS lookup below
         device_id = current_sub.controld_device_id
 
         # Fetch DNS resolvers [cite: 1]
         device_data = await get_controld_device_ips(device_id, settings)
         ipv4_primary = device_data["ipv4_primary"]
         ipv4_secondary = device_data["ipv4_secondary"]
-
 # bot/routers/buy.py
 # (Inside handle_pay_instant_wallet, from line 925 onwards)
 

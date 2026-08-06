@@ -301,14 +301,15 @@ class PaymentService:
         if service is None:
             raise PaymentApprovalError("Renewal service not found")
 
+        # app/services/payment_service.py
+# (Inside _complete_renewal)
+
         current_expire = service.expire_at
         if current_expire.tzinfo is None:
-            current_expire = current_expire.replace(tzinfo=timezone.utc)
+            current_expire = current_expire.replace(timezone.utc)
 
-        if current_expire > now:
-            new_expire_at = current_expire + timedelta(hours=plan.duration_hours)
-        else:
-            new_expire_at = now + timedelta(hours=plan.duration_hours)
+        # 🛠 CHANGE: Always calculate the new expiration starting from 'now' [cite: 1]
+        new_expire_at = now + timedelta(hours=plan.duration_hours)
 
         service.expire_at = new_expire_at
         service.status = VPNServiceStatus.ACTIVE.value
