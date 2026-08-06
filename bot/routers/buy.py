@@ -776,6 +776,8 @@ async def handle_buy_plan_loc(
 # 4. INSTANT PAYMENT FROM WALLET (RE-ROUTED TO STATIC BALANCER SLOTS)
 # ============================================================================
 
+# bot/routers/buy.py
+
 @router.callback_query(F.data.startswith("pay_instant_wallet:"), StateFilter("*"))
 async def handle_pay_instant_wallet(
     callback: CallbackQuery,
@@ -783,7 +785,7 @@ async def handle_pay_instant_wallet(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Processes wallet checkouts by allocating slot from permanent load balancer [cite: buy.py, 1]."""
+    """Processes wallet checkouts by dynamically allocating/migrating the user's chosen location [cite: 1]."""
     await callback.answer()
     if callback.message is None or callback.from_user is None:
         return
@@ -812,7 +814,7 @@ async def handle_pay_instant_wallet(
     active_result = await session.execute(active_stmt)
     current_sub = active_result.scalars().first()
 
-    final_price = plan.price  # 🛠 FIX: No 10% discount
+    final_price = plan.price
 
     if user.wallet_balance < final_price:
         await callback.message.answer(
@@ -828,22 +830,22 @@ async def handle_pay_instant_wallet(
     now = datetime.now(timezone.utc)
     profile_id = plan.controld_profile_id or settings.controld_profile_id
 
+    # 1. Resolve target slot configurations dynamically based on pop_code [cite: 1]
+    try:
+        slot_num = int(pop_code) if pop_code.isdigit() else 1
+    except ValueError:
+        slot_num = 1
+
+    from app.config import SLOT_CONFIGS
+    if slot_num not in SLOT_CONFIGS:
+        slot_num = 1
+
+    target_device_id = SLOT_CONFIGS[slot_num]["device_id"]
+    ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
+    ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
+
     if current_sub is None:
-        # 🛠 FIX: Extract the chosen slot number from 'pop_code' instead of load-balancing! [cite: 1]
-        try:
-            slot_num = int(pop_code) if pop_code.isdigit() else 1
-        except ValueError:
-            slot_num = 1
-
-        from app.config import SLOT_CONFIGS
-        if slot_num not in SLOT_CONFIGS:
-            slot_num = 1
-
-        # Allocate the selected location's device ID and DNS IPs [cite: 1]
-        device_id = SLOT_CONFIGS[slot_num]["device_id"]
-        ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
-        ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
-
+        # Case A: Brand new purchase [cite: 1]
         expire_at = now + timedelta(hours=plan.duration_hours)
         random_hex = secrets.token_hex(4)
         unique_device_name = f"tg-user-{user.telegram_id}-{random_hex}|{service_pk}|{pop_code}"
@@ -851,7 +853,7 @@ async def handle_pay_instant_wallet(
         new_subscription = VPNService(
             user_id=user.id,
             plan_id=plan.id,
-            controld_device_id=device_id,
+            controld_device_id=target_device_id,
             config_link="sdns://placeholder",
             subscription_link="sdns://placeholder",
             username=unique_device_name,
@@ -859,35 +861,42 @@ async def handle_pay_instant_wallet(
             status="active"
         )
         session.add(new_subscription)
+        device_id = target_device_id
         
-# bot/routers/buy.py
-# (Inside handle_pay_instant_wallet)
-
-    # bot/routers/buy.py
-# (Inside handle_pay_instant_wallet)
-
     else:
-        # Renewal - Simply extend time, avoid setting a custom TTL on Control D [cite: buy.py, 1]
+        # Case B: Renewal - Simply extend time, but migrate slot if country choice changed [cite: 1]
         current_expire = current_sub.expire_at
         if current_expire.tzinfo is None:
             current_expire = current_expire.replace(timezone.utc)
 
-        # 🛠 CHANGE: Set base_time to 'now' to disable cumulative rollover [cite: 1]
-        base_time = now 
+        base_time = current_expire if current_expire > now else now
         expire_at = base_time + timedelta(hours=plan.duration_hours)
         
+        old_device_id = current_sub.controld_device_id
+        user_ip = current_sub.authorized_ip
+
+        # 🛠 DYNAMIC LOCATION SWAP ON RENEWAL [cite: 1]:
+        # If user renewed and selected a different server slot, surgically migrate their IP!
+        if old_device_id and old_device_id != target_device_id and user_ip:
+            controld = ControlDService(settings)
+            try:
+                logger.info("surgically_deauthorizing_old_slot_during_renewal", old_device_id=old_device_id, ip=user_ip)
+                await controld.deauthorize_ip(old_device_id, user_ip)
+            except Exception as exc:
+                logger.warning("failed_to_deauthorize_old_slot_during_renewal", error=str(exc))
+            try:
+                logger.info("authorizing_new_slot_during_renewal", new_device_id=target_device_id, ip=user_ip)
+                await controld.authorize_ip(target_device_id, user_ip)
+            except Exception as exc:
+                logger.error("failed_to_authorize_new_slot_during_renewal", error=str(exc))
+
+        # Sync database with the new slot allocation
         current_sub.expire_at = expire_at
         current_sub.plan_id = plan.id
-        current_sub.status = "active"  # Safely reactivate the service status
+        current_sub.controld_device_id = target_device_id  # Save new slot ID [cite: 1]
+        current_sub.status = "active"
         
-        device_id = current_sub.controld_device_id
-
-        # Fetch DNS resolvers [cite: 1]
-        device_data = await get_controld_device_ips(device_id, settings)
-        ipv4_primary = device_data["ipv4_primary"]
-        ipv4_secondary = device_data["ipv4_secondary"]
-# bot/routers/buy.py
-# (Inside handle_pay_instant_wallet, from line 925 onwards)
+        device_id = target_device_id
 
     # Balance deduction  
     user.wallet_balance -= final_price
@@ -906,22 +915,21 @@ async def handle_pay_instant_wallet(
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
 
-مراحل ثبت آی‌پی :
-1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
-2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
-❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+مراحل ثبت آی‌پی (بسیار مهم):
+1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
+2️⃣ : فیلترشکن خود را خاموش کرده و روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
+❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
 
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
 
 📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
 
-    # 🛠 Safely retrieve the active subscription ID for both new purchases and renewals [cite: 1]
+    # Safely retrieve the active subscription ID for both new purchases and renewals [cite: 1]
     active_sub_id = new_subscription.id if current_sub is None else current_sub.id
 
     # Generate the registration inline keyboard dynamically [cite: 1]
     markup = await create_secure_ip_update_keyboard(session, active_sub_id)
 
-    # 🛠 FIX: Pass the pre-calculated 'markup' to 'reply_markup' [cite: 1]
     await callback.message.answer(
         success_text, 
         reply_markup=markup,
