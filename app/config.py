@@ -226,13 +226,13 @@ SLOT_CONFIGS = {
     4: {
         "name": "🇦🇪 امارات متحده - دبی (United Arab Emirates)",
         "device_id": get_settings().controld_device_4,
-        "dns_primary": "76.76.2.101",
-        "dns_secondary": "76.76.10.101",
+        "dns_primary": "76.76.2.116",
+        "dns_secondary": "76.76.10.116",
     },
     5: {
         "name": "🇹🇷 ترکیه - استانبول (Turkey)",
         "device_id": get_settings().controld_device_5,
-        "dns_primary": "76.76.2.122",
-        "dns_secondary": "76.76.10.122",
+        "dns_primary": "76.76.2.175",
+        "dns_secondary": "76.76.10.175",
     }
 }
