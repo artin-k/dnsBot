@@ -438,6 +438,9 @@ async def handle_test_loc_selection(
     duration_text = "۲ ساعت"
     expire_str = format_datetime_fa(expire_at)
 
+    # bot/routers/buy.py
+# (Inside handle_test_loc_selection, around line 212)
+
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
 🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
@@ -445,14 +448,17 @@ async def handle_test_loc_selection(
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
+📱 دی ان اس مخصوص موبایل :
+🔷 <code>76.76.2.22</code>
 
-مراحل ثبت آی‌پی :
-1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
-2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
-❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
+
+مراحل ثبت آی‌پی (بسیار مهم):
+1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
+2️⃣ : فیلترشکن خود را خاموش کرده و روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
+❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
 
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
-
+    
     # Generate Phase 8 secure token keyboard dynamically
     # Local import to safely prevent circular dependency bugs on bot initialization [cite: 1]
     from bot.routers.services import create_secure_ip_update_keyboard
@@ -525,6 +531,8 @@ async def handle_apply_test_loc(
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
+📱 دی ان اس مخصوص موبایل :
+🔷 <code>76.76.2.22</code>
 
 مراحل ثبت آی‌پی :
 1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
@@ -547,6 +555,46 @@ async def handle_apply_test_loc(
 # ============================================================================
 
 # --- LOCATE AND REPLACE handle_buy_plan_select ---
+# @router.callback_query(PlanCallback.filter(), StateFilter("*"))
+# async def handle_buy_plan_select(
+#     callback: CallbackQuery,
+#     callback_data: PlanCallback,
+#     session: AsyncSession,
+#     settings: Settings,
+# ) -> None:
+#     await callback.answer()
+#     if callback.message is None or callback.from_user is None:
+#         return
+
+#     plan_id = callback_data.plan_id
+#     stmt = select(Plan).where(Plan.id == plan_id)
+#     result = await session.execute(stmt)
+#     plan = result.scalars().first()
+
+#     if plan is None or not plan.is_active:
+#         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
+#         return
+
+#     # Strictly display only Default Traffic and Gaming Categories
+#     builder = InlineKeyboardBuilder()
+#     builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
+#     builder.button(text="🎮 بازی‌ها (Gaming)", callback_data=f"srv_cat:{plan.id}:gaming:0")
+#     builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
+#     builder.adjust(1)
+
+#     await _safe_edit_or_reply(
+#         callback,
+#         f"⚡ پلن انتخاب شده: <b>{escape(plan.title)}</b>\n\n"
+#         f"🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
+#         reply_markup=builder.as_markup()
+#     )
+
+# bot/routers/buy.py
+
+# ============================================================================
+# 3. DIRECT 3-STEP CHECKOUT FLOW (PLAN -> LOCATION -> CHECKOUT)
+# ============================================================================
+
 @router.callback_query(PlanCallback.filter(), StateFilter("*"))
 async def handle_buy_plan_select(
     callback: CallbackQuery,
@@ -554,6 +602,7 @@ async def handle_buy_plan_select(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
+    """Bypasses Category and App selection completely, redirecting the user straight to the location menu [cite: 1]."""
     await callback.answer()
     if callback.message is None or callback.from_user is None:
         return
@@ -567,99 +616,11 @@ async def handle_buy_plan_select(
         await callback.message.answer("❌ این طرح دیگر فعال نیست.")
         return
 
-    # Strictly display only Default Traffic and Gaming Categories
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🌐 کل ترافیک اینترنت (Default)", callback_data=f"buy_plan_srv:{plan.id}:default")
-    builder.button(text="🎮 بازی‌ها (Gaming)", callback_data=f"srv_cat:{plan.id}:gaming:0")
-    builder.button(text="🔙 بازگشت", callback_data="buy_back_to_plans")
-    builder.adjust(1)
-
-    await _safe_edit_or_reply(
-        callback,
-        f"⚡ پلن انتخاب شده: <b>{escape(plan.title)}</b>\n\n"
-        f"🗺 ابتدا دسته‌بندی ترافیکی مورد نظر خود را انتخاب کنید:",
-        reply_markup=builder.as_markup()
-    )
+    # 🛠 FIX: Skip the intermediate category/game menus.
+    # Route directly to the 5 location slots, defaulting 'service_pk' to "default" [cite: 1].
+    await _show_buy_loc_page(callback, plan.id, "default", page=0, settings=settings)
 
 
-@router.callback_query(F.data.startswith("srv_cat:"), StateFilter("*"))
-async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    await callback.answer()
-    parts = callback.data.split(":")
-    plan_id = int(parts[1])
-    category_key = parts[2]
-    page = int(parts[3])
-    
-    profile_id = settings.controld_profile_id or "default"
-    controld = ControlDService(settings)
-    services = await controld.fetch_controld_services(profile_id)
-    if not services:
-        await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
-        return
-        
-    filtered = [s for s in services if s["category"] == category_key]
-    filtered.sort(key=lambda x: (x["name"] or "").lower())
-    
-    limit = 10
-    start_idx = page * limit
-    end_idx = start_idx + limit
-    page_items = filtered[start_idx:end_idx]
-    has_next = len(filtered) > end_idx
-
-    builder = InlineKeyboardBuilder()
-    for s in page_items:
-        builder.button(
-            text=s["name"] or s["pk"],
-            callback_data=f"buy_plan_srv:{plan_id}:{s['pk']}"
-        )
-    
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"srv_cat:{plan_id}:{category_key}:{page - 1}"))
-    if has_next:
-        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"srv_cat:{plan_id}:{category_key}:{page + 1}"))
-    if nav_buttons:
-        builder.row(*nav_buttons)
-        
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=PlanCallback(plan_id=plan_id).pack()))
-    builder.adjust(2)
-    
-    from app.services.controld import get_category_label_fa
-    category_label = get_category_label_fa(category_key)
-    await _safe_edit_or_reply(
-        callback,
-        f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
-        f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
-        reply_markup=builder.as_markup()
-    )
-
-
-@router.callback_query(F.data.startswith("buy_plan_srv:"), StateFilter("*"))
-async def handle_buy_plan_srv(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    settings: Settings,
-) -> None:
-    await callback.answer()
-    if callback.message is None:
-        return
-
-    parts = callback.data.split(":")
-    plan_id = int(parts[1])
-    service_pk = parts[2]
-
-    controld_service = ControlDService(settings)
-    proxies = await controld_service.fetch_controld_proxies()
-    
-    if not proxies:
-        await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
-        return
-
-    await _show_buy_loc_page(callback, plan_id, service_pk, page=0, settings=settings)
-
-
-
-# --- LOCATE AND REPLACE _show_buy_loc_page ---
 async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: str, page: int, settings: Settings) -> None:
     """Renders the selection menu showing exactly your 5 premium static servers [cite: 1]."""
     from app.config import SLOT_CONFIGS
@@ -668,11 +629,13 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
     for slot_num, config in SLOT_CONFIGS.items():
         builder.button(
             text=config["name"],
-            callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{slot_num}" # We pass the Slot Number!
+            callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{slot_num}"
         )
 
     builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id).pack()))
+    
+    # 🛠 FIX: Reverted Back button destination to 'buy_back_to_plans' to avoid circular redirect loops [cite: 1]
+    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="buy_back_to_plans"))
 
     await _safe_edit_or_reply(
         callback,
@@ -680,6 +643,106 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
         "لطفاً کشور (سرور) مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
         reply_markup=builder.as_markup()
     )
+
+
+# @router.callback_query(F.data.startswith("srv_cat:"), StateFilter("*"))
+# async def handle_srv_cat(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
+#     await callback.answer()
+#     parts = callback.data.split(":")
+#     plan_id = int(parts[1])
+#     category_key = parts[2]
+#     page = int(parts[3])
+    
+#     profile_id = settings.controld_profile_id or "default"
+#     controld = ControlDService(settings)
+#     services = await controld.fetch_controld_services(profile_id)
+#     if not services:
+#         await _safe_edit_or_reply(callback, "❌ خطایی در بارگذاری سرویس‌ها رخ داد.")
+#         return
+        
+#     filtered = [s for s in services if s["category"] == category_key]
+#     filtered.sort(key=lambda x: (x["name"] or "").lower())
+    
+#     limit = 10
+#     start_idx = page * limit
+#     end_idx = start_idx + limit
+#     page_items = filtered[start_idx:end_idx]
+#     has_next = len(filtered) > end_idx
+
+#     builder = InlineKeyboardBuilder()
+#     for s in page_items:
+#         builder.button(
+#             text=s["name"] or s["pk"],
+#             callback_data=f"buy_plan_srv:{plan_id}:{s['pk']}"
+#         )
+    
+#     nav_buttons = []
+#     if page > 0:
+#         nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"srv_cat:{plan_id}:{category_key}:{page - 1}"))
+#     if has_next:
+#         nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"srv_cat:{plan_id}:{category_key}:{page + 1}"))
+#     if nav_buttons:
+#         builder.row(*nav_buttons)
+        
+#     builder.row(InlineKeyboardButton(text="🔙 بازگشت به دسته‌بندی‌ها", callback_data=PlanCallback(plan_id=plan_id).pack()))
+#     builder.adjust(2)
+    
+#     from app.services.controld import get_category_label_fa
+#     category_label = get_category_label_fa(category_key)
+#     await _safe_edit_or_reply(
+#         callback,
+#         f"📂 دسته‌بندی انتخاب شده: <b>{category_label}</b> | صفحه {page + 1}\n\n"
+#         f"🎮 لطفاً سرویس مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
+#         reply_markup=builder.as_markup()
+#     )
+
+
+# @router.callback_query(F.data.startswith("buy_plan_srv:"), StateFilter("*"))
+# async def handle_buy_plan_srv(
+#     callback: CallbackQuery,
+#     session: AsyncSession,
+#     settings: Settings,
+# ) -> None:
+#     await callback.answer()
+#     if callback.message is None:
+#         return
+
+#     parts = callback.data.split(":")
+#     plan_id = int(parts[1])
+#     service_pk = parts[2]
+
+#     controld_service = ControlDService(settings)
+#     proxies = await controld_service.fetch_controld_proxies()
+    
+#     if not proxies:
+#         await callback.message.answer("❌ خطایی در بارگذاری سرورهای معتبر رخ داد.")
+#         return
+
+#     await _show_buy_loc_page(callback, plan_id, service_pk, page=0, settings=settings)
+
+
+
+# --- LOCATE AND REPLACE _show_buy_loc_page ---
+# async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: str, page: int, settings: Settings) -> None:
+#     """Renders the selection menu showing exactly your 5 premium static servers [cite: 1]."""
+#     from app.config import SLOT_CONFIGS
+
+#     builder = InlineKeyboardBuilder()
+#     for slot_num, config in SLOT_CONFIGS.items():
+#         builder.button(
+#             text=config["name"],
+#             callback_data=f"buy_plan_loc:{plan_id}:{service_pk}:{slot_num}" # We pass the Slot Number!
+#         )
+
+#     builder.adjust(1)
+#     builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=PlanCallback(plan_id=plan_id).pack()))
+
+#     await _safe_edit_or_reply(
+#         callback,
+#         "🗺 <b>انتخاب لوکیشن سرور</b>\n\n"
+#         "لطفاً کشور (سرور) مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
+#         reply_markup=builder.as_markup()
+#     )
 
 
 @router.callback_query(F.data.startswith("buy_loc_page:"), StateFilter("*"))
@@ -907,12 +970,19 @@ async def handle_pay_instant_wallet(
     duration_text = calculate_remaining_time_fa(expire_at)  
     expire_str = format_datetime_fa(expire_at)
 
+    # bot/routers/buy.py
+# (Inside handle_pay_instant_wallet, around line 550)
+
     success_text = f"""🔹 تاریخ انقضاء پلن : {expire_str}
 🔷 زمان باقی‌مانده: {duration_text}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
+
+📱 دی ان اس مخصوص موبایل 
+🔷 : <code>76.76.2.22</code>
+
 
 
 مراحل ثبت آی‌پی (بسیار مهم):
@@ -923,7 +993,7 @@ async def handle_pay_instant_wallet(
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
 
 📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
-
+    
     # Safely retrieve the active subscription ID for both new purchases and renewals [cite: 1]
     active_sub_id = new_subscription.id if current_sub is None else current_sub.id
 

@@ -209,8 +209,18 @@ class PaymentService:
             .with_for_update(of=Payment)
         )
 
+    # app/services/payment_service.py
+
     @staticmethod
     def _is_unpaid_order_expired(order: Order, payment: Payment) -> bool:
+        """
+        Helper to check if a pending payment is expired.
+        Surgically bypasses expiration for manual card-to-card payments [cite: 1].
+        """
+        # 🛠 FIX: Directly check the loaded payment's method to bypass lazy-loading desyncs [cite: 1]
+        if payment.method in ("manual", "manual_wallet_topup"):
+            return False
+            
         return OrderService.is_order_expired(order)
 
     async def _complete_order(self, order: Order, now: datetime) -> ApprovedPaymentResult:

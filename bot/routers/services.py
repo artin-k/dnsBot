@@ -295,6 +295,9 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
 
     remaining_time = calculate_remaining_time_fa(service.expire_at)
 
+    # bot/routers/services.py
+# (Inside handle_manage_links)
+
     text = f"""📊 <b>لینک‌های اتصال سرویس {escape(device_name)}</b>
 
 🔹 <b>تاریخ انقضاء پلن :</b> <code>{escape(expire_str)}</code>
@@ -306,10 +309,19 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
 Primary: <code>{escape(ipv4_primary)}</code>
 Secondary: <code>{escape(ipv4_secondary)}</code>
 
-⚠️ <i>مراحل اتصال:</i>
-۱. بدون فیلترشکن روی دکمه «ثبت آی‌پی اتوماتیک» کلیک کنید تا دسترسی شما فعال شود.
-۲. دی‌ان‌اس‌ها را در بخش تنظیمات سیستم خود وارد کنید."""
-    
+📱 <b>دی‌ان‌اس‌های مخصوص موبایل شما:</b>
+🔷 <code>76.76.2.22</code>
+
+
+
+مراحل ثبت آی‌پی (بسیار مهم):
+1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
+2️⃣ : فیلترشکن خود را خاموش کرده و روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
+❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
+
+⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
+
+📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""    
     markup = await create_secure_ip_update_keyboard(session, service.id)
     await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
 

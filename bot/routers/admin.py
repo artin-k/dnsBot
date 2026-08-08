@@ -3491,6 +3491,9 @@ def _approved_message(
             from app.services.controld import get_country_name_fa
             country_display = f"{get_country_name_fa(pop_code)} ({pop_code})"
 
+    # bot/routers/admin.py
+# (Inside _approved_message)
+
     return f"""🔹 تاریخ انقضاء پلن : {expire_str}
 🔷 زمان باقی‌مانده: {duration_text}
 🎮 برنامه/بازی: <b>{escape(service_display)}</b>
@@ -3499,6 +3502,9 @@ def _approved_message(
 دی ان اس اختصاصی شما :
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
+
+📱 دی ان اس مخصوص موبایل :
+ <code>76.76.2.22</code>
 
 
 مراحل ثبت آی‌پی (بسیار مهم):
@@ -3509,7 +3515,6 @@ def _approved_message(
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
 
 📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
-
 
 def _manual_activation_user_message(
     *,
@@ -3534,12 +3539,18 @@ def _manual_activation_user_message(
     days = duration_hours // 24 if duration_hours >= 24 and duration_hours % 24 == 0 else duration_hours
     unit = "روز" if duration_hours >= 24 and duration_hours % 24 == 0 else "ساعت"
 
+    # bot/routers/admin.py
+# (Inside _manual_activation_user_message)
+
     return f"""🔹 تاریخ انقضاء پلن : {expire_str}
 🔷 زمان باقی‌مانده: {days} {unit}
 دی ان اس اختصاصی شما :
 
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
+
+📱 دی ان اس مخصوص موبایل :
+🔷 <code>76.76.2.22</code>
 
 
 مراحل ثبت آی‌پی (بسیار مهم):
@@ -3548,7 +3559,6 @@ def _manual_activation_user_message(
 ❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
 
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
-
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
     """Generates direct update-ip links to bypass capture-ip entirely [cite: controld_buy.py, run_web_ip_updater.py]."""
