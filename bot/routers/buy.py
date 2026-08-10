@@ -57,7 +57,14 @@ WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 TEST_ACCOUNT_DURATION_HOURS = 2
 
 
-async def _safe_edit_or_reply(callback: CallbackQuery, text: str, reply_markup=None) -> None:
+# bot/routers/buy.py
+
+async def _safe_edit_or_reply(
+    callback: CallbackQuery, 
+    text: str, 
+    *, 
+    reply_markup=None
+) -> None:
     """Safely edits bot messages or replies to user interactions."""
     bot = getattr(callback, "bot", None)
     bot_id = getattr(bot, "id", None)
@@ -67,7 +74,11 @@ async def _safe_edit_or_reply(callback: CallbackQuery, text: str, reply_markup=N
             return
         except Exception:
             pass
-    await callback.message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+    if callback.message:
+        try:
+            await callback.message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception:
+            pass
 
 
 def _get_ip_registration_keyboard(device_id: str) -> InlineKeyboardMarkup:
@@ -455,7 +466,7 @@ async def handle_test_loc_selection(
 
 مراحل ثبت آی‌پی (بسیار مهم):
 1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
-2️⃣ : فیلترشکن خود را خاموش کرده و روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
+2️⃣ : فیلترشکن و پروکسی تلگرام خود را خاموش کرده و مجدد روی دکمه ثبت آیپی زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
 ❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
 
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید."""
@@ -540,7 +551,7 @@ async def handle_apply_test_loc(
 
 مراحل ثبت آی‌پی :
 1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .
-2️⃣ : بدون فیلتر شکن روی دکمه ثبت آی‌پی زیر کلیک کنید.
+2️⃣ : بدون فیلترشکن و پروکسی تلگرام روی دکمه ثبت آی‌پی زیر کلیک کنید.
 ❌ در صورت عدم ثبت آی‌پی DNS ها برای شما متصل نخواهد شد ❌
 
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
@@ -630,8 +641,10 @@ async def handle_buy_plan_select(
     await _show_buy_loc_page(callback, plan.id, "default", page=0, settings=settings)
 
 
+# bot/routers/buy.py
+
 async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: str, page: int, settings: Settings) -> None:
-    """Renders the selection menu showing exactly your 5 premium static servers [cite: 1]."""
+    """Renders the selection menu showing exactly your 5 premium static servers."""
     from app.config import SLOT_CONFIGS
 
     builder = InlineKeyboardBuilder()
@@ -642,14 +655,18 @@ async def _show_buy_loc_page(callback: CallbackQuery, plan_id: int, service_pk: 
         )
 
     builder.adjust(1)
-    
-    # 🛠 FIX: Reverted Back button destination to 'buy_back_to_plans' to avoid circular redirect loops [cite: 1]
     builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="buy_back_to_plans"))
+
+    # Combined both paragraphs into 1 single text string argument
+    text = (
+        "🗺 <b>انتخاب لوکیشن سرور</b>\n\n"
+        "لطفاً کشور (سرور) مورد نظر خود را برای انتقال ترافیک انتخاب کنید:\n\n"
+        "💡 <i>توجه داشته باشید که بعد از خرید اشتراک، می‌توانید لوکیشن سرور را در بخش «اشتراک‌های من» به تعداد نامحدود تغییر دهید.</i>"
+    )
 
     await _safe_edit_or_reply(
         callback,
-        "🗺 <b>انتخاب لوکیشن سرور</b>\n\n"
-        "لطفاً کشور (سرور) مورد نظر خود را برای انتقال ترافیک انتخاب کنید:",
+        text,
         reply_markup=builder.as_markup()
     )
 
@@ -997,7 +1014,7 @@ async def handle_pay_instant_wallet(
 
 مراحل ثبت آی‌پی (بسیار مهم):
 1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
-2️⃣ : فیلترشکن خود را خاموش کرده و روی دکمه «ثبت آی‌پی اتوماتیک» زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
+2️⃣ : فیلترشکن و پروکسی تلگرام خود را خاموش کرده و مجدد روی دکمه ثبت آیپی زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
 ❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
 
 ⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
@@ -1246,7 +1263,7 @@ async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) 
     await state.update_data(device_id=device_id)
     
     await callback.message.answer(
-        "🤖 لطفاً آی‌پی (IPv4) خود را بدون فیلترشکن وارد کنید.\n\n"
+        "🤖 لطفاً آی‌پی (IPv4) خود را بدون فیلترشکن و پروکسی تلگرام وارد کنید.\n\n"
         "مثال: `5.200.12.1`"
     )
 

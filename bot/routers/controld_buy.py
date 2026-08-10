@@ -426,7 +426,7 @@
 #     await state.update_data(device_id=device_id)
     
 #     await callback.message.answer(
-#         "🤖 لطفاً آی‌پی خارجی خود (IPv4) را بدون فیلترشکن وارد کنید.\n\n"
+#         "🤖 لطفاً آی‌پی خارجی خود (IPv4) را بدون فیلترشکن و پروکسی تلگرام وارد کنید.\n\n"
 #         "مثال: `5.200.12.1`"
 #     )
 
