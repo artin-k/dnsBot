@@ -2,7 +2,7 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from app.models import VPNService, VPNServiceStatus
+from app.models import VPNService, VPNServiceStatus, User
 
 
 class ServicesRepository:
@@ -86,15 +86,44 @@ class ServicesRepository:
         )
         return list(result.unique().all())
 
-    async def search(self, query: str, limit: int = 10) -> list[VPNService]:
+    async def list_paginated(self, page: int = 0, limit: int = 10) -> tuple[list[VPNService], bool]:
+        """Supports browsing through ALL active and inactive subscriptions page-by-page."""
+        offset = max(page, 0) * limit
+        result = await self.session.scalars(
+            select(VPNService)
+            .options(joinedload(VPNService.plan), joinedload(VPNService.user))
+            .order_by(VPNService.created_at.desc())
+            .offset(offset)
+            .limit(limit + 1)
+        )
+        items = list(result.unique().all())
+        has_next = len(items) > limit
+        return items[:limit], has_next
+
+    async def search(self, query: str, limit: int = 20) -> list[VPNService]:
+        """Searches by service username, device ID, user ID, Telegram ID, or first name."""
         normalized = query.strip().removeprefix("@")
-        conditions = [VPNService.username.ilike(f"%{normalized}%")]
+        if not normalized:
+            return []
+
+        conditions = [
+            VPNService.username.ilike(f"%{normalized}%"),
+            VPNService.controld_device_id.ilike(f"%{normalized}%"),
+        ]
         if normalized.isdigit():
-            conditions.append(VPNService.user.has(telegram_id=int(normalized)))
+            num_val = int(normalized)
+            conditions.append(VPNService.id == num_val)
+            conditions.append(VPNService.user_id == num_val)
+            conditions.append(VPNService.user.has(User.telegram_id == num_val))
+        else:
+            conditions.append(VPNService.user.has(User.telegram_username.ilike(f"%{normalized}%")))
+            conditions.append(VPNService.user.has(User.first_name.ilike(f"%{normalized}%")))
+
         result = await self.session.scalars(
             select(VPNService)
             .options(joinedload(VPNService.plan), joinedload(VPNService.user))
             .where(or_(*conditions))
+            .order_by(VPNService.created_at.desc())
             .limit(limit)
         )
         return list(result.unique().all())

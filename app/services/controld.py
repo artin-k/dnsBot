@@ -480,12 +480,16 @@ async def update_service_route(profile_id: str, service_name: str, pop_code: str
 async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
     """
     Updates the catch-all Default Rule for a profile.
-    Correct Control D API endpoint: PUT /profiles/{profile_id}/default
+    Safely bypasses numeric slot codes to prevent 400 Bad Request errors.
     """
+    if not pop_code or pop_code.isdigit():
+        logger.info("skipping_default_route_update_for_numeric_slot", profile_id=profile_id, pop_code=pop_code)
+        return True
+
     url = f"{BASE_URL}/profiles/{profile_id}/default"
     payload = {
-        "do": 3,      # 3 represents REDIRECT/SPOOF to Location [cite: 8.3.2]
-        "status": 1,  # 1 represents enabled/active [cite: 8.4.1]
+        "do": 3,      # REDIRECT/SPOOF to Location
+        "status": 1,  # Active
         "via": pop_code
     }
     async with httpx.AsyncClient() as client:
@@ -495,7 +499,7 @@ async def update_profile_default_route(profile_id: str, pop_code: str) -> bool:
                 logger.info("controld_default_route_updated", profile_id=profile_id, pop_code=pop_code)
                 return True
             else:
-                logger.error(f"Failed to update default route on Control D (Status {response.status_code}): {response.text}")
+                logger.warning(f"Control D default route update ignored (Status {response.status_code}): {response.text}")
                 return False
         except Exception as e:
             logger.error(f"Error updating profile default route: {str(e)}")

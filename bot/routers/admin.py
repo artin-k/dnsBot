@@ -6,6 +6,7 @@ import hashlib
 import hmac
 from html import escape
 import site
+from unittest import result
 from zoneinfo import ZoneInfo
 import jdatetime # <-- Add this line [1]
 
@@ -80,6 +81,7 @@ from app.services.settings_service import (
     SETTING_DEFINITION_BY_KEY,
     SETTING_DEFINITIONS,
     SUPPORT_USERNAME,
+    TEACHING_VIDEO_LINK,
     WALLET_MAX_TOPUP_AMOUNT,
     WALLET_MAX_WITHDRAW_AMOUNT,
     WALLET_MIN_TOPUP_AMOUNT,
@@ -164,6 +166,7 @@ from bot.keyboards.admin import (
 from bot.keyboards.main_menu import main_menu_keyboard
 from bot.keyboards.services import ServiceActionCallback
 from bot.keyboards.wallet import WalletTopupReviewCallback
+from bot.routers.services import create_secure_ip_update_keyboard
 from bot.states.admin import (
     AdminAddPlanStates,
     AdminAddTestAccountStates,
@@ -181,6 +184,7 @@ from bot.states.admin import (
     AdminWithdrawalStates,
 )
 from bot.states.buy import BuyStates
+from bot.utils.auto_clean import schedule_message_deletion
 
 router = Router(name="admin")
 logger = structlog.get_logger(__name__)
@@ -329,6 +333,9 @@ async def admin_order_callback(
 
     payment_service = PaymentService(session, VPNPanelService(), settings)
 
+    reply_markup=await create_secure_ip_update_keyboard(session, service_record.id) if service_record else None
+
+
 # Inside bot/routers/admin.py -> admin_order_callback()
 
     if action == "complete":
@@ -339,34 +346,35 @@ async def admin_order_callback(
             try:
                 result = await payment_service.approve_payment(order.payment.id)
                 
-                # Fetch the generated VPNService record
-                stmt = select(VPNService).where(VPNService.order_id == order.id)
-                res = await session.execute(stmt)
-                service_record = res.scalars().first()
+                # Fetch service record using the fallback helper
+                service_record = await _get_service_for_order(session, order)
                 
                 device_id = "unknown"
-                ips = {"ipv4_primary": "94.183.166.203", "ipv4_secondary": "94.183.166.208"}
+                ips = {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
                 
                 if service_record:
                     device_id = service_record.controld_device_id
-                    # Query Control D in real-time to fetch the exact assigned legacy IPs [1]
                     ips = await get_controld_device_ips(device_id, settings)
 
-                # Notify the user on Telegram with the new style and registration keyboard
-                # Inside bot/routers/admin.py -> admin_order_callback() action == "complete"
+                keyboard = await create_secure_ip_update_keyboard(session, service_record.id) if service_record else None
 
-                await callback.bot.send_message(
+                sent_msg = await callback.bot.send_message(
                     chat_id=result.user_telegram_id,
                     text=_approved_message(
                         result, 
                         expire_at=service_record.expire_at if service_record else None,
                         ipv4_primary=ips["ipv4_primary"],
                         ipv4_secondary=ips["ipv4_secondary"],
-                        custom_username=order.custom_username if order else None  # <-- Added [1]
+                        custom_username=order.custom_username if order else None
                     ),
-                    reply_markup=_get_ip_registration_keyboard(device_id) if service_record else None,
+                    reply_markup=keyboard,
                     parse_mode="HTML"
                 )
+
+                # Schedule deletion after 2 hours
+                if sent_msg:
+                    await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
+
                 await callback.message.answer(f"✅ سفارش {order.tracking_code} با موفقیت تکمیل و کانفیگ صادر شد.")
             except Exception as e:
                 await callback.message.answer(f"❌ خطا در تکمیل سفارش: {e}")
@@ -375,7 +383,6 @@ async def admin_order_callback(
             await session.commit()
             await callback.message.answer(f"✅ وضعیت سفارش {order.tracking_code} به تکمیل‌شده تغییر یافت.")
         
-        # Refresh details panel
         order = await OrdersRepository(session).get_with_details(order_id)
         await _show_order_detail_panel(callback, order)
         return
@@ -559,12 +566,19 @@ async def admin_manual_activate_order(
         ipv4_secondary=ipv4_secondary,
     )
     try:
-        await callback.bot.send_message(
+        keyboard = await create_secure_ip_update_keyboard(session, service.id)
+
+        sent_msg = await callback.bot.send_message(
             chat_id=order.user.telegram_id, 
             text=user_text,
-            reply_markup=_get_ip_registration_keyboard(device_id),
+            reply_markup=keyboard,
             parse_mode="HTML"
         )
+
+        # Schedule deletion after 2 hours
+        if sent_msg:
+            await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
+            
     except Exception as exc:
         user_delivery_failed = True
         logger.warning(
@@ -821,6 +835,40 @@ async def admin_action(
     if callback.message:
         await callback.message.answer(texts.COMING_SOON_TEXT)
 
+    # bot/routers/admin.py
+
+    if action == "video_link_admin":
+        await state.clear()
+        app_settings = AppSettingsService(session)
+        current_link = await app_settings.get_teaching_video_link()
+        link_display = f"<code>{escape(current_link)}</code>" if current_link else "ثبت نشده"
+
+        builder = InlineKeyboardBuilder()
+        builder.button(
+            text="✏️ ویرایش لینک ویدیو آموزشی", 
+            callback_data=AdminSettingCallback(action="edit", key=TEACHING_VIDEO_LINK)
+        )
+        builder.button(
+            text="↩️ بازگشت", 
+            callback_data=AdminActionCallback(action="cat_comms")
+        )
+        builder.adjust(1)
+
+        await _safe_edit_or_answer(
+            callback,
+            f"🎥 <b>مدیریت لینک ویدیو آموزشی</b>\n\n"
+            f"🔗 <b>لینک فعلی:</b> {link_display}\n\n"
+            f"همچنین می‌توانید از دستور <code>/teaching_video_link</code> جهت مدیریت سریع استفاده کنید.",
+            reply_markup=builder.as_markup()
+        )
+        return  # <--- CRUCIAL: Prevents falling through to COMING_SOON_TEXT!
+
+    # This catch-all fallback MUST be the last line in admin_action:
+    if callback.message:
+        await callback.message.answer(texts.COMING_SOON_TEXT)
+
+
+# bot/routers/admin.py
 
 @router.callback_query(AdminSettingCallback.filter())
 async def admin_setting_action(
@@ -830,7 +878,8 @@ async def admin_setting_action(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    if not _is_env_admin(callback.from_user.id if callback.from_user else None, settings):
+    # Use _is_admin instead of _is_env_admin to allow all authorized admins
+    if not await _is_admin(callback.from_user.id if callback.from_user else None, session, settings):
         await callback.answer("⛔ شما دسترسی تغییر تنظیمات را ندارید.", show_alert=True)
         return
 
@@ -1157,24 +1206,18 @@ async def admin_payment_action(
         if callback_data.action == "approve":
             result = await payment_service.approve_payment(callback_data.payment_id)
             
-            # Fetch the generated VPNService record
             payment_record = await session.get(Payment, callback_data.payment_id)
             device_id = "unknown"
             service_record = None
-            ips = {"ipv4_primary": "94.183.166.203", "ipv4_secondary": "94.183.166.208"}
+            ips = {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
             
-            if payment_record and payment_record.order_id:
-                stmt = select(VPNService).where(VPNService.order_id == payment_record.order_id)
-                res = await session.execute(stmt)
-                service_record = res.scalars().first()
+            if payment_record and payment_record.order:
+                # Fetch service record using the fallback helper
+                service_record = await _get_service_for_order(session, payment_record.order)
                 if service_record:
                     device_id = service_record.controld_device_id
-                    
-                    # Fetch dynamic legacy IPv4 addresses
                     ips = await get_controld_device_ips(device_id, settings)
                     
-                    # --- DYNAMIC ROUTING CONFIGURATION ON MANUAL APPROVAL [cite: 1] ---
-                    # Parse the selected game and country from custom_username
                     raw_username = payment_record.order.custom_username or ""
                     if "|" in raw_username:
                         parts = raw_username.split("|")
@@ -1182,16 +1225,20 @@ async def admin_payment_action(
                         pop_code = parts[2] if len(parts) > 2 else None
                         
                         if pop_code:
-                            controld_service = ControlDService(settings)
-                            profile_id = service_record.plan.controld_profile_id or settings.controld_profile_id
-                            
-                            # Apply the routing rules dynamically on Control D backend [cite: 1]
-                            if service_pk == "default":
-                                await controld_service.update_profile_default(profile_id, pop_code) 
-                            else:
-                                await controld_service.update_service_route(profile_id, service_pk, pop_code) 
+                            try:
+                                controld_service = ControlDService(settings)
+                                profile_id = service_record.plan.controld_profile_id or settings.controld_profile_id
+                                if profile_id and not pop_code.isdigit():
+                                    if service_pk == "default":
+                                        await controld_service.update_profile_default(profile_id, pop_code) 
+                                    else:
+                                        await controld_service.update_service_route(profile_id, service_pk, pop_code) 
+                            except Exception as exc:
+                                logger.warning("failed_to_update_controld_route_on_approval", error=str(exc))
+                                
+            keyboard = await create_secure_ip_update_keyboard(session, service_record.id) if service_record else None
 
-            await callback.bot.send_message(
+            sent_msg = await callback.bot.send_message(
                 chat_id=result.user_telegram_id,
                 text=_approved_message(
                     result, 
@@ -1200,16 +1247,19 @@ async def admin_payment_action(
                     ipv4_secondary=ips["ipv4_secondary"],
                     custom_username=payment_record.order.custom_username if payment_record and payment_record.order else None
                 ),
-                reply_markup=_get_ip_registration_keyboard(device_id) if service_record else None,
+                reply_markup=keyboard,
                 parse_mode="HTML"
             )
+
+            # Schedule deletion after 2 hours
+            if sent_msg:
+                await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
             
             if result.waiting_inventory:
                 await callback.answer("❌ موجودی کانفیگ برای این تعرفه تمام شده است.", show_alert=True)
             else:
                 await callback.answer("پرداخت تایید شد.")
             await _remove_admin_buttons(callback)
-            
         elif callback_data.action == "reject":
             result = await payment_service.reject_payment(callback_data.payment_id)
             await callback.bot.send_message(
@@ -1571,10 +1621,14 @@ async def admin_service_action(
         return
     await callback.answer()
 
+    # bot/routers/admin.py
+    # (Inside admin_service_action)
+
     if callback_data.action == "search":
-        await state.set_state(AdminServiceEditStates.service_query)
+        # FIXED: Corrected state group from AdminServiceEditStates to AdminSearchStates
+        await state.set_state(AdminSearchStates.service_query)
         if callback.message:
-            await callback.message.answer("نام کاربری سرویس یا آیدی عددی کاربر را ارسال کنید.")
+            await callback.message.answer("نام کاربری سرویس، آیدی عددی یا آیدی تلگرام کاربر را ارسال کنید.")
         return
 
     service = await ServicesRepository(session).get(callback_data.service_id)
@@ -2954,40 +3008,34 @@ def _format_withdrawal_detail(withdrawal: WalletWithdrawalRequest) -> str:
 
 # bot/routers/admin.py
 
-# --- LOCATE AND REPLACE THE _show_services METHOD (around line 1021) ---
-async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None:
+async def _show_services(callback: CallbackQuery, session: AsyncSession, page: int = 0) -> None:
     """
-    Parses active subscription metadata on the fly, queries Control D in real-time
-    to ensure 100% remote-to-local IP synchronization, and renders the Farsi catalog [cite: services.py, 1].
+    Displays all subscriptions with full pagination support (10 subscriptions per page).
     """
-    services = await ServicesRepository(session).list_recent(10)
+    services, has_next = await ServicesRepository(session).list_paginated(page=page, limit=10)
     
-    if not services:
+    if not services and page == 0:
         await _safe_edit_or_answer(callback, "❌ هنوز هیچ سرویسی در پایگاه داده ثبت نشده است.")
         return
 
     from app.config import SLOT_CONFIGS
-    from app.services.controld import get_flag_emoji
 
-    lines = ["🛍 <b>مدیریت سرویس‌ها | آخرین اشتراک‌های فعال:</b>\n"]
-    
+    lines = [f"🛍 <b>مدیریت سرویس‌ها | صفحه {page + 1}:</b>\n"]
     builder = InlineKeyboardBuilder()
-    for index, service in enumerate(services, start=1):
+    
+    for index, service in enumerate(services, start=(page * 10) + 1):
         user = service.user
         username_tg = f"@{user.telegram_username}" if user and user.telegram_username else "-"
         first_name = user.first_name if user else "-"
         telegram_id = user.telegram_id if user else "-"
 
-        # Parse static country slots and metadata [cite: services.py, 1]
         raw_username = service.username or ""
-        username_part = raw_username
         service_display = "کل ترافیک اینترنت (Default)"
         country_display = "پیش‌فرض"
         flag = "📍"
         
         if "|" in raw_username:
             parts = raw_username.split("|")
-            username_part = parts[0]
             service_pk = parts[1] if len(parts) > 1 else "default"
             slot_num_str = parts[2] if len(parts) > 2 else "1"
             
@@ -2999,12 +3047,10 @@ async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None
                 if slot_num in SLOT_CONFIGS:
                     country_display = SLOT_CONFIGS[slot_num]["name"]
                     try:
-                        country_display_clean = country_display.split(" ")[1] if len(country_display.split(" ")) > 1 else country_display
                         flag = country_display.split(" ")[0]
                     except Exception:
                         flag = "📍"
 
-        # Safe Shamsi/Jalali expiration formatting [cite: Paste July 09, 2026 - 10:50AM]
         expire_at = service.expire_at
         shamsi_expire = "-"
         if expire_at:
@@ -3018,31 +3064,10 @@ async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None
             except Exception:
                 shamsi_expire = tehran_expire.strftime("%Y-%m-%d %H:%M")
 
-        # Dynamic Real-Time IP Synchronization with Control D [cite: 1]
-        active_ip = service.authorized_ip
-        if service.controld_device_id:
-            try:
-                controld = ControlDService(settings)
-                active_ips = await controld.get_active_ips(service.controld_device_id)
-                if active_ips:
-                    real_ip = active_ips[0]
-                    if service.authorized_ip != real_ip:
-                        service.authorized_ip = real_ip
-                        await session.commit()
-                    active_ip = real_ip
-                else:
-                    if service.authorized_ip:
-                        service.authorized_ip = None
-                        await session.commit()
-                    active_ip = None
-            except Exception as exc:
-                logger.error("failed_to_sync_active_ips_on_show_services", device_id=service.controld_device_id, error=str(exc))
-
         status_emoji = "🟢" if service.status == "active" else "🔴"
         status_fa = "فعال" if service.status == "active" else "منقضی شده"
-        active_ip_display = active_ip or "ثبت نشده (No IP)"
+        active_ip_display = service.authorized_ip or "ثبت نشده (No IP)"
 
-        # Append clean card to the text message
         lines.append(
             f"""<b>{index}. 👤 کاربر:</b> {escape(first_name)} (<code>{telegram_id}</code>)
 🔗 <b>یوزرنیم:</b> {escape(username_tg)}
@@ -3054,20 +3079,33 @@ async def _show_services(callback: CallbackQuery, session: AsyncSession) -> None
 ━━━━━━━━━━━━━━━━━━━━━"""
         )
 
-        # Build clean buttons using correct Admin-level callback [cite: services.py]
         button_label = f"👤 {first_name[:10]} | {flag} {country_display.split(' - ')[0][:12]}"
         builder.button(
             text=button_label,
-            # FIXED: Uses AdminServiceCallback to route directly to the Admin details manager [cite: services.py]
             callback_data=AdminServiceCallback(action="detail", service_id=service.id)
         )
 
-    # Layout: Stacks user buttons cleanly
     builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="↩️ بازگشت به پنل مدیریت", callback_data="admin:panel"))
+
+    # Navigation buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(
+            InlineKeyboardButton(text="⬅️ قبلی", callback_data=AdminServiceCallback(action="list_page", page=page - 1).pack())
+        )
+    if has_next:
+        nav_buttons.append(
+            InlineKeyboardButton(text="بعدی ➡️", callback_data=AdminServiceCallback(action="list_page", page=page + 1).pack())
+        )
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="↩️ بازگشت به پنل مدیریت", callback_data="adm:panel"))
 
     text_content = "\n".join(lines)
     await _safe_edit_or_answer(callback, text_content, reply_markup=builder.as_markup())
+
+    
     
 async def _show_service_detail(callback: CallbackQuery, service) -> None:
     await _safe_edit_or_answer(callback, _format_service_detail(service), reply_markup=service_detail_keyboard(service))
@@ -3199,6 +3237,9 @@ def _format_setting_prompt(key: str, current_value: str | int) -> str:
         hint = "مقدار جدید را ارسال کنید. برای خالی کردن مقدار، - بفرستید."
         if key == SUPPORT_USERNAME:
             hint += "\nنام کاربری را بدون @ هم می‌توانید بفرستید."
+        elif key == TEACHING_VIDEO_LINK:
+            hint += "\nمثال: https://t.me/your_channel/123"
+            
     return f"""✏️ ویرایش {definition.label}
 
 مقدار فعلی:
@@ -3826,3 +3867,87 @@ async def handle_reset_test_status(
     except Exception as exc:
         await session.rollback()
         await processing_msg.edit_text(f"❌ خطایی در دیتابیس رخ داد:\n<code>{str(exc)}</code>", parse_mode="HTML")
+
+
+        # Add this command handler inside bot/routers/admin.py:
+
+@router.message(Command("teaching_video_link"), StateFilter("*"))
+async def cmd_teaching_video_link(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Manages the teaching video link dynamically via /teaching_video_link command."""
+    if not await _is_admin(message.from_user.id if message.from_user else None, session, settings):
+        await message.answer("⛔ شما دسترسی مدیریت ندارید.")
+        return
+
+    await state.clear()
+    app_settings = AppSettingsService(session)
+    
+    args = (message.text or "").strip().split(maxsplit=1)
+    if len(args) == 1:
+        # Show current link and instructions
+        current_link = await app_settings.get_teaching_video_link()
+        link_display = f"<code>{escape(current_link)}</code>" if current_link else "ثبت نشده"
+        
+        await message.answer(
+            f"🎥 <b>مدیریت لینک ویدیو آموزشی</b>\n\n"
+            f"🔗 <b>لینک فعلی:</b> {link_display}\n\n"
+            f"✍️ <b>جهت تغییر یا ثبت لینک جدید:</b>\n"
+            f"دستور را همراه با لینک ارسال کنید:\n"
+            f"<code>/teaching_video_link https://t.me/your_channel/123</code>\n\n"
+            f"🗑 <b>جهت حذف لینک فعلی:</b>\n"
+            f"<code>/teaching_video_link remove</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    input_val = args[1].strip()
+    
+    # Handle removal
+    if input_val.lower() in {"remove", "delete", "clear", "-"}:
+        await app_settings.set_setting(TEACHING_VIDEO_LINK, "")
+        await session.commit()
+        await message.answer("🗑 <b>لینک ویدیو آموزشی با موفقیت حذف شد.</b>", parse_mode="HTML")
+        return
+
+    # Format URL
+    new_url = input_val
+    if new_url.startswith("t.me/"):
+        new_url = f"https://{new_url}"
+
+    if not (new_url.startswith("http://") or new_url.startswith("https://")):
+        await message.answer(
+            "❌ <b>فرمت لینک معتبر نیست.</b>\n\n"
+            "لطفاً یک لینک معتبر اینترنتی ارسال کنید (مانند `https://t.me/...` یا `https://youtube.com/...`).",
+            parse_mode="HTML"
+        )
+        return
+
+    await app_settings.set_setting(TEACHING_VIDEO_LINK, new_url)
+    await session.commit()
+    
+    await message.answer(
+        f"✅ <b>لینک ویدیو آموزشی با موفقیت ذخیره شد.</b>\n\n"
+        f"🎥 <b>لینک جدید:</b>\n<code>{escape(new_url)}</code>",
+        parse_mode="HTML"
+    )
+
+async def _get_service_for_order(session: AsyncSession, order: Order) -> VPNService | None:
+    """Finds the VPNService record linked to the order, with fallback to user's active subscription."""
+    # 1. Look up directly by order_id
+    stmt = select(VPNService).where(VPNService.order_id == order.id)
+    res = await session.execute(stmt)
+    service = res.scalars().first()
+    if service:
+        return service
+
+    # 2. Fallback: Find user's latest active subscription
+    stmt = select(VPNService).where(
+        VPNService.user_id == order.user_id,
+        VPNService.is_test_account == False
+    ).order_by(VPNService.expire_at.desc()).limit(1)
+    res = await session.execute(stmt)
+    return res.scalars().first()

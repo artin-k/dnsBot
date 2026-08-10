@@ -252,7 +252,6 @@ class PaymentService:
         user = order.user
         username = order.custom_username or f"user{user.telegram_id}"
 
-        # 1. Parse which Slot Number (1-5) was selected by the user during checkout
         _raw_user, _service, slot_num_str = order.custom_username.split("|") if "|" in order.custom_username else ("", "default", "1")
         try:
             slot_num = int(slot_num_str) if slot_num_str.isdigit() else 1
@@ -263,29 +262,48 @@ class PaymentService:
         if slot_num not in SLOT_CONFIGS:
             slot_num = 1
 
-        # 2. Allocate the static slot settings directly [cite: 1]
         device_id = SLOT_CONFIGS[slot_num]["device_id"]
         ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
         ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
 
-        # 3. Create active subscription in the local database
-        expire_at = now + timedelta(hours=plan.duration_hours)
-        services = ServicesRepository(self.session)
-        new_service = await services.create(
-            user_id=user.id,
-            order_id=order.id,
-            plan_id=plan.id,
-            config_inventory_id=None,
-            username=username,
-            config_link="sdns://placeholder",
-            subscription_link="sdns://placeholder",
-            volume_gb=plan.volume_gb,
-            duration_days=plan.duration_hours // 24 if plan.duration_hours >= 24 else 1,
-            expire_at=expire_at,
-            status=VPNServiceStatus.ACTIVE.value,
-        )
-        
-        new_service.controld_device_id = device_id
+        # Find existing subscription for this user
+        existing_stmt = select(VPNService).where(
+            VPNService.user_id == user.id,
+            VPNService.is_test_account == False
+        ).order_by(VPNService.expire_at.desc()).limit(1)
+        res = await self.session.execute(existing_stmt)
+        existing_service = res.scalars().first()
+
+        if existing_service is not None:
+            base_time = existing_service.expire_at if existing_service.expire_at > now else now
+            if base_time.tzinfo is None:
+                base_time = base_time.replace(tzinfo=timezone.utc)
+            expire_at = base_time + timedelta(hours=plan.duration_hours)
+
+            existing_service.expire_at = expire_at
+            existing_service.plan_id = plan.id
+            existing_service.order_id = order.id  # <--- CRUCIAL FIX: Update order_id!
+            existing_service.username = username
+            existing_service.status = VPNServiceStatus.ACTIVE.value
+            target_service = existing_service
+        else:
+            expire_at = now + timedelta(hours=plan.duration_hours)
+            services = ServicesRepository(self.session)
+            target_service = await services.create(
+                user_id=user.id,
+                order_id=order.id,
+                plan_id=plan.id,
+                config_inventory_id=None,
+                username=username,
+                config_link="sdns://placeholder",
+                subscription_link="sdns://placeholder",
+                volume_gb=plan.volume_gb,
+                duration_days=plan.duration_hours // 24 if plan.duration_hours >= 24 else 1,
+                expire_at=expire_at,
+                status=VPNServiceStatus.ACTIVE.value,
+            )
+
+        target_service.controld_device_id = device_id
         await self.session.flush()
 
         return ApprovedPaymentResult(
@@ -297,6 +315,7 @@ class PaymentService:
             duration_days=plan.duration_hours // 24 if plan.duration_hours >= 24 else 1,
             config_link="Dynamic Web Link Provided",
             subscription_link="Dynamic Web Link Provided",
+            new_expire_at=expire_at,
             plan_id=plan.id,
             ipv4=ipv4_primary,
             ipv6="::1",

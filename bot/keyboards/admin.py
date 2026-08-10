@@ -45,6 +45,7 @@ class AdminTestAccountCallback(CallbackData, prefix="adm_test"):
 class AdminUserCallback(CallbackData, prefix="adm_user"):
     action: str
     user_id: int = 0
+    page: int = 0
 
 
 class AdminServiceCallback(CallbackData, prefix="adm_svc"):
@@ -179,6 +180,7 @@ def admin_communications_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📢 پیام همگانی", callback_data=AdminActionCallback(action="broadcast"))
     builder.button(text="📚 آموزش‌ها", callback_data=AdminActionCallback(action="tutorials_admin"))
+    builder.button(text="🎥 لینک ویدیو آموزشی", callback_data=AdminActionCallback(action="video_link_admin"))
     builder.button(text="☎️ پشتیبانی", callback_data=AdminActionCallback(action="support_admin"))
     builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="panel"))
     builder.adjust(1)

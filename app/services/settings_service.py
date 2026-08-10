@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.settings import SettingsRepository
 
+# Add the constant
+TEACHING_VIDEO_LINK = "TEACHING_VIDEO_LINK"
+
 
 class SettingValidationError(ValueError):
     pass
@@ -29,6 +32,7 @@ class SettingDefinition:
 
 
 SUPPORT_USERNAME = "SUPPORT_USERNAME"
+TEACHING_VIDEO_LINK = "TEACHING_VIDEO_LINK"
 PAYMENT_CARD_NUMBER = "PAYMENT_CARD_NUMBER"
 PAYMENT_CARD_HOLDER = "PAYMENT_CARD_HOLDER"
 PAYMENT_DESCRIPTION = "PAYMENT_DESCRIPTION"
@@ -118,6 +122,20 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         value_type="int",
         description="بیشترین مبلغ مجاز برداشت از کیف پول؛ 0 یعنی بدون محدودیت",
         min_value=0,
+    ),
+    SettingDefinition(
+        key=SUPPORT_USERNAME,
+        label="نام کاربری پشتیبانی",
+        default="",
+        value_type="str",
+        description="نام کاربری پشتیبانی تلگرام بدون @",
+    ),
+    SettingDefinition(
+        key=TEACHING_VIDEO_LINK,
+        label="لینک ویدیو آموزشی",
+        default="",
+        value_type="str",
+        description="لینک ویدیو آموزشی راهنمای اتصال دی‌ان‌اس",
     ),
 )
 
@@ -288,3 +306,6 @@ class AppSettingsService:
     @staticmethod
     def _normalize_support_username(value: str) -> str:
         return value.strip().removeprefix("@")
+
+    async def get_teaching_video_link(self) -> str:
+        return await self.get_setting(TEACHING_VIDEO_LINK, cast_type=str)

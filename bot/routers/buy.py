@@ -48,6 +48,7 @@ from bot.keyboards.main_menu import main_menu_keyboard
 from bot.keyboards.buy import PlanCallback, paystar_payment_keyboard
 from bot.routers.services import create_secure_ip_update_keyboard
 from bot.states.buy import BuyStates
+from bot.utils.auto_clean import schedule_message_deletion
 
 router = Router(name="buy")
 logger = structlog.get_logger(__name__)
@@ -464,11 +465,14 @@ async def handle_test_loc_selection(
     from bot.routers.services import create_secure_ip_update_keyboard
     markup = await create_secure_ip_update_keyboard(session, new_test_sub.id)
 
-    await callback.message.answer(
+    sent_msg = await callback.message.answer(
         success_text,
         reply_markup=markup,
         parse_mode="HTML"
     )
+
+    # Schedule deletion after 2 hours
+    await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
 
 
 # --- LOCATE AND REPLACE handle_apply_test_loc ---
@@ -543,11 +547,16 @@ async def handle_apply_test_loc(
 
 📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""
 
-    await callback.message.answer(
+    markup = await create_secure_ip_update_keyboard(session, new_test_sub.id)
+
+    sent_msg = await callback.message.answer(
         success_text, 
-        reply_markup = await create_secure_ip_update_keyboard(session, new_test_sub.id), # For test
+        reply_markup=markup,
         parse_mode="HTML"
     )
+
+    # Schedule deletion after 2 hours
+    await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
 
 
 # ============================================================================
@@ -954,10 +963,11 @@ async def handle_pay_instant_wallet(
                 logger.error("failed_to_authorize_new_slot_during_renewal", error=str(exc))
 
         # Sync database with the new slot allocation
+        # Update existing subscription on wallet renewal / purchase
         current_sub.expire_at = expire_at
         current_sub.plan_id = plan.id
-        current_sub.controld_device_id = target_device_id  # Save new slot ID [cite: 1]
-        current_sub.status = "active"
+        current_sub.controld_device_id = target_device_id
+        current_sub.status = "active"  # Explicitly reset status to active
         
         device_id = target_device_id
 
@@ -1000,11 +1010,15 @@ async def handle_pay_instant_wallet(
     # Generate the registration inline keyboard dynamically [cite: 1]
     markup = await create_secure_ip_update_keyboard(session, active_sub_id)
 
-    await callback.message.answer(
+    # 1. Capture sent message
+    sent_msg = await callback.message.answer(
         success_text, 
         reply_markup=markup,
         parse_mode="HTML"
     )
+
+    # 2. Schedule deletion after 2 hours
+    await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
 
 
 # ============================================================================
