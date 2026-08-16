@@ -1268,6 +1268,8 @@ async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) 
     )
 
 
+# bot/routers/buy.py
+
 @router.message(BuyStates.waiting_manual_ip, F.text)
 async def process_manual_ip(
     message: Message, 
@@ -1288,13 +1290,32 @@ async def process_manual_ip(
         await message.answer("❌ خطای سیستمی. لطفاً مجدداً تلاش کنید.")
         return
 
-    stmt = select(VPNService).where(VPNService.controld_device_id == device_id, VPNService.status == "active").limit(1)
+    if message.from_user is None:
+        return
+
+    user = await UsersRepository(session).get_by_telegram_id(message.from_user.id)
+    if not user:
+        return
+
+    # FIX: Query specifically for the active subscription belonging to THIS user
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(VPNService)
+        .where(
+            VPNService.user_id == user.id,
+            VPNService.controld_device_id == device_id,
+            VPNService.status != "disabled",
+            VPNService.expire_at > now
+        )
+        .order_by(VPNService.expire_at.desc())
+        .limit(1)
+    )
     res = await session.execute(stmt)
     service = res.scalars().first()
 
     if not service:
         await state.clear()
-        await message.answer("❌ دستگاه فعال متناظر با این اشتراک یافت نشد.")
+        await message.answer("❌ اشتراک فعال متناظر با این دستگاه برای حساب شما یافت نشد.")
         return
 
     from app.services.ip_manager import update_device_ip_safe
@@ -1304,4 +1325,4 @@ async def process_manual_ip(
         await state.clear()
         await message.answer(f"✅ آی‌پی <code>{user_ip}</code> با موفقیت به صورت دستی برای دستگاه شما ثبت شد.", parse_mode="HTML")
     else:
-        await message.answer(f"❌ خطا در ثبت آی‌پی در سیستم Control D. مجدداً تلاش کنید.")
+        await message.answer("❌ خطا در ثبت آی‌پی در سیستم Control D. مجدداً تلاش کنید.")

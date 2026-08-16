@@ -522,24 +522,7 @@ async def capture_ip(request: Request, token: str):
 
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse)
 async def update_device_ip(request: Request, device_id: str):
-    async with async_session_maker() as db_session:
-        stmt = select(VPNService).where(VPNService.controld_device_id == device_id).limit(1)
-        res = await db_session.execute(stmt)
-        service = res.scalars().first()
-
-        # Fail-safe expiration check
-        if not service or service.status != "active" or (service.expire_at and service.expire_at <= datetime.now(timezone.utc)):
-            return HTMLResponse(
-                content="""
-                <div style='text-align:center; padding:50px; font-family:sans-serif;'>
-                    <h2>❌ این اشتراک منقضی شده است</h2>
-                    <p>برای ثبت آی‌پی، لطفاً ابتدا از طریق ربات تلگرام اشتراک خود را تمدید کنید.</p>
-                </div>
-                """,
-                status_code=403
-            )
-        
-    """Detects, registers, and synchronizes the client public IP to the local database."""
+    """Detects, registers, and synchronizes client IP with expiration verification."""
     client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
     if client_ip and "," in client_ip:
         client_ip = client_ip.split(",")[0].strip()
@@ -548,43 +531,46 @@ async def update_device_ip(request: Request, device_id: str):
     if not token:
         return "<h3>خطا: توکن API در تنظیمات یافت نشد.</h3>"
 
-    # --- EXPIRATION DB CHECK ---
+    now = datetime.now(timezone.utc)
+
+    # FIX: Query specifically for an ACTIVE, UNEXPIRED subscription on this slot
     async with async_session_maker() as db_session:
-        stmt = select(VPNService).where(VPNService.controld_device_id == device_id).limit(1)
+        stmt = (
+            select(VPNService)
+            .where(
+                VPNService.controld_device_id == device_id,
+                VPNService.status != "disabled",
+                VPNService.expire_at > now
+            )
+            .order_by(VPNService.expire_at.desc())
+            .limit(1)
+        )
         res = await db_session.execute(stmt)
         service = res.scalars().first()
 
         if not service:
-            return "<h3>خطا: اشتراک متناظر با این دستگاه در سیستم یافت نشد.</h3>"
-
-        now = datetime.now(timezone.utc)
-        expire_at = service.expire_at
-        if expire_at:
-            if expire_at.tzinfo is None:
-                expire_at = expire_at.replace(tzinfo=timezone.utc)
-            if expire_at <= now or service.status == "disabled":
-                return """
-                <!DOCTYPE html>
-                <html lang="fa" dir="rtl">
-                <head>
-                    <meta charset="utf-8">
-                    <title>خطا - اشتراک منقضی شده</title>
-                    <style>
-                        body { font-family: Tahoma, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; text-align: center; padding: 50px; direction: rtl; }
-                        .card { background: #1e293b; border: 1px solid #334155; padding: 30px; border-radius: 12px; display: inline-block; max-width: 500px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-                        h1 { color: #ef4444; font-size: 22px; margin-bottom: 15px; }
-                        p { color: #cbd5e1; font-size: 16px; line-height: 1.8; }
-                    </style>
-                </head>
-                <body>
-                    <div class="card">
-                        <h1>❌ اشتراک شما منقضی شده است</h1>
-                        <p>تاریخ اعتبار این اشتراک به پایان رسیده است.</p>
-                        <p>برای ثبت آی‌پی و ادامه استفاده از سرویس، لطفاً از طریق ربات تلگرام اقدام به تمدید یا خرید اشتراک جدید نمایید.</p>
-                    </div>
-                </body>
-                </html>
-                """
+            return """
+            <!DOCTYPE html>
+            <html lang="fa" dir="rtl">
+            <head>
+                <meta charset="utf-8">
+                <title>خطا - اشتراک منقضی شده</title>
+                <style>
+                    body { font-family: Tahoma, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; text-align: center; padding: 50px; direction: rtl; }
+                    .card { background: #1e293b; border: 1px solid #334155; padding: 30px; border-radius: 12px; display: inline-block; max-width: 500px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+                    h1 { color: #ef4444; font-size: 22px; margin-bottom: 15px; }
+                    p { color: #cbd5e1; font-size: 16px; line-height: 1.8; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h1>❌ اشتراک شما منقضی شده است</h1>
+                    <p>هیچ اشتراک فعالی برای این سرویس یافت نشد.</p>
+                    <p>برای ثبت آی‌پی و ادامه استفاده از سرویس، لطفاً از طریق ربات تلگرام اقدام به تمدید یا خرید اشتراک جدید نمایید.</p>
+                </div>
+            </body>
+            </html>
+            """
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -625,7 +611,17 @@ async def update_device_ip(request: Request, device_id: str):
             if response.status_code in (200, 201):
                 try:
                     async with async_session_maker() as db_session:
-                        stmt = select(VPNService).where(VPNService.controld_device_id == device_id).limit(1)
+                        # Sync IP to active subscription record
+                        stmt = (
+                            select(VPNService)
+                            .where(
+                                VPNService.controld_device_id == device_id,
+                                VPNService.status != "disabled",
+                                VPNService.expire_at > now
+                            )
+                            .order_by(VPNService.expire_at.desc())
+                            .limit(1)
+                        )
                         res = await db_session.execute(stmt)
                         service = res.scalars().first()
                         if service:
@@ -651,7 +647,7 @@ async def update_device_ip(request: Request, device_id: str):
                     <div class="card">
                         <h1>✅ ثبت آی‌پی با موفقیت انجام شد!</h1>
                         <p>آی‌پی شناسایی‌شده شما: <b>{escape(client_ip)}</b></p>
-                        <p>اکنون می‌توانید بدون نیاز به فیلترشکن و پروکسی تلگرام از دی‌ان‌اس اختصاصی خود روی دستگاه خود استفاده کنید.</p>
+                        <p>اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود روی دستگاه خود استفاده کنید.</p>
                     </div>
                 </body>
                 </html>
@@ -660,7 +656,7 @@ async def update_device_ip(request: Request, device_id: str):
                 return f"<h3>خطا در ثبت آی‌پی در پنل کنترل دی: {response.text}</h3>"
         except Exception as e:
             return f"<h3>خطا در برقراری ارتباط با سرور: {str(e)}</h3>"
-
+        
 # ============================================================================
 # WEB ADMIN DASHBOARD
 # ============================================================================
