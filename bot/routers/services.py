@@ -388,9 +388,6 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
 Primary: <code>{escape(ipv4_primary)}</code>
 Secondary: <code>{escape(ipv4_secondary)}</code>
 
-📱 <b>دی‌ان‌اس‌های مخصوص موبایل شما:</b>
-🔷 <code>76.76.2.22</code>
-
 مراحل ثبت آی‌پی (بسیار مهم):
 1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
 2️⃣ : فیلترشکن و پروکسی تلگرام خود را خاموش کرده و مجدد روی دکمه ثبت آیپی زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
