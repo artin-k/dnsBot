@@ -541,7 +541,7 @@ async def update_device_ip(request: Request, device_id: str):
                 status_code=403
             )
         
-    @app.get("/update-ip/{device_id}", response_class=HTMLResponse)
+@app.get("/update-ip/{device_id}", response_class=HTMLResponse)
 async def update_device_ip(request: Request, device_id: str):
     """Detects, registers, and synchronizes client IP with expiration verification."""
     client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
