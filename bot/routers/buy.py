@@ -460,8 +460,7 @@ async def handle_test_loc_selection(
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
-📱 دی ان اس مخصوص موبایل :
-🔷 <code>76.76.2.22</code>
+
 
 
 مراحل ثبت آی‌پی (بسیار مهم):
@@ -546,8 +545,7 @@ async def handle_apply_test_loc(
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
-📱 دی ان اس مخصوص موبایل :
-🔷 <code>76.76.2.22</code>
+
 
 مراحل ثبت آی‌پی :
 1️⃣ : در ابتدا گوشی موبایل و کنسول بازی رو به یک اینترنت مشترک وصل کنید .

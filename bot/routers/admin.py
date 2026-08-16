@@ -3544,8 +3544,7 @@ def _approved_message(
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
-📱 دی ان اس مخصوص موبایل :
- <code>76.76.2.22</code>
+
 
 
 مراحل ثبت آی‌پی (بسیار مهم):
@@ -3590,8 +3589,7 @@ def _manual_activation_user_message(
 🔷 Primary : <code>{ipv4_primary}</code>
 🔷 Secondary : <code>{ipv4_secondary}</code>
 
-📱 دی ان اس مخصوص موبایل :
-🔷 <code>76.76.2.22</code>
+
 
 
 مراحل ثبت آی‌پی (بسیار مهم):

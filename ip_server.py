@@ -260,8 +260,7 @@ async def _send_paystar_success_message(order: Order, payment: Payment, context:
 🔷 Primary : <code>{escape(context["ipv4_primary"])}</code>
 🔷 Secondary : <code>{escape(context["ipv4_secondary"])}</code>
 
-📱 دی ان اس مخصوص موبایل :
-🔷 <code>76.76.2.22</code>
+
 
 
 مراحل ثبت آی‌پی (بسیار مهم):
