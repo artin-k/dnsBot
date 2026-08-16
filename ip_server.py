@@ -519,57 +519,55 @@ async def capture_ip(request: Request, token: str):
             )
 
 
+# ip_server.py & run_web_ip_updater.py
+
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse)
 async def update_device_ip(request: Request, device_id: str):
-    """Detects, registers, and synchronizes client IP with expiration verification."""
+    """Detects, registers, and synchronizes client IP with timezone-safe Python verification."""
     client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
     if client_ip and "," in client_ip:
         client_ip = client_ip.split(",")[0].strip()
 
+    dev_id = device_id.strip()
     token = settings.controld_api_token
     if not token:
         return "<h3>خطا: توکن API در تنظیمات یافت نشد.</h3>"
 
+    bot_user = await get_bot_username()
     now = datetime.now(timezone.utc)
 
-    # FIX: Query specifically for an ACTIVE, UNEXPIRED subscription on this slot
     async with async_session_maker() as db_session:
+        # Fetch all non-disabled subscriptions for this slot ordered newest first
         stmt = (
             select(VPNService)
             .where(
-                VPNService.controld_device_id == device_id,
-                VPNService.status != "disabled",
-                VPNService.expire_at > now
+                VPNService.controld_device_id == dev_id,
+                VPNService.status != "disabled"
             )
             .order_by(VPNService.expire_at.desc())
-            .limit(1)
         )
         res = await db_session.execute(stmt)
-        service = res.scalars().first()
+        services_list = list(res.scalars().all())
 
-        if not service:
-            return """
-            <!DOCTYPE html>
-            <html lang="fa" dir="rtl">
-            <head>
-                <meta charset="utf-8">
-                <title>خطا - اشتراک منقضی شده</title>
-                <style>
-                    body { font-family: Tahoma, Arial, sans-serif; background-color: #0f172a; color: #f8fafc; text-align: center; padding: 50px; direction: rtl; }
-                    .card { background: #1e293b; border: 1px solid #334155; padding: 30px; border-radius: 12px; display: inline-block; max-width: 500px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-                    h1 { color: #ef4444; font-size: 22px; margin-bottom: 15px; }
-                    p { color: #cbd5e1; font-size: 16px; line-height: 1.8; }
-                </style>
-            </head>
-            <body>
-                <div class="card">
-                    <h1>❌ اشتراک شما منقضی شده است</h1>
-                    <p>هیچ اشتراک فعالی برای این سرویس یافت نشد.</p>
-                    <p>برای ثبت آی‌پی و ادامه استفاده از سرویس، لطفاً از طریق ربات تلگرام اقدام به تمدید یا خرید اشتراک جدید نمایید.</p>
-                </div>
-            </body>
-            </html>
-            """
+        # Safe Python-level timezone parsing & expiration check
+        active_service = None
+        for service in services_list:
+            exp = service.expire_at
+            if exp:
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if exp > now:
+                    active_service = service
+                    break
+
+        if not active_service:
+            return _render_capture_ip_html(
+                title="اشتراک منقضی شده است",
+                heading="❌ این لوکیشن (سرور) برای شما منقضی شده است",
+                message="هیچ اشتراک فعالی برای این لوکیشن یافت نشد. اگر اشتراک فعال دارید، لطفاً ابتدا از بخش «اشتراک‌های من» در ربات تلگرام لوکیشن خود را به این سرور تغییر دهید یا اقدام به تمدید نمایید.",
+                is_success=False,
+                bot_username=bot_user
+            )
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -583,21 +581,6 @@ async def update_device_ip(request: Request, device_id: str):
         headers["X-Force-Org-Id"] = org_id
 
     async with httpx.AsyncClient() as client:
-        device_url = f"https://api.controld.com/devices/{device_id}"
-        profile_id = None
-        try:
-            device_resp = await client.get(device_url, headers=headers, timeout=5.0)
-            if device_resp.status_code == 200:
-                profile_id = device_resp.json().get("body", {}).get("device", {}).get("profile_id")
-        except Exception:
-            pass
-
-        if not profile_id:
-            profile_id = settings.controld_profile_id
-
-        if not profile_id:
-            return "<h3>خطا: شناسه پروفایل برای این دستگاه یافت نشد.</h3>"
-
         access_url = "https://api.controld.com/access"
         payload = {
             "ips": [client_ip],
@@ -606,55 +589,56 @@ async def update_device_ip(request: Request, device_id: str):
         }
 
         try:
-            response = await client.post(f"{access_url}?device_id={device_id}", json=payload, headers=headers, timeout=10.0)
+            response = await client.post(f"{access_url}?device_id={dev_id}", json=payload, headers=headers, timeout=10.0)
             if response.status_code in (200, 201):
                 try:
                     async with async_session_maker() as db_session:
-                        # Sync IP to active subscription record
                         stmt = (
                             select(VPNService)
                             .where(
-                                VPNService.controld_device_id == device_id,
-                                VPNService.status != "disabled",
-                                VPNService.expire_at > now
+                                VPNService.controld_device_id == dev_id,
+                                VPNService.status != "disabled"
                             )
                             .order_by(VPNService.expire_at.desc())
-                            .limit(1)
                         )
                         res = await db_session.execute(stmt)
-                        service = res.scalars().first()
-                        if service:
-                            service.authorized_ip = client_ip
-                            await db_session.commit()
-                            logger.info("web_updater_synced_registered_ip_to_db", device_id=device_id, ip=client_ip)
+                        svc_list = list(res.scalars().all())
+                        for s in svc_list:
+                            exp = s.expire_at
+                            if exp and exp.tzinfo is None:
+                                exp = exp.replace(tzinfo=timezone.utc)
+                            if exp and exp > now:
+                                s.authorized_ip = client_ip
+                                await db_session.commit()
+                                logger.info("web_updater_synced_registered_ip_to_db", device_id=dev_id, ip=client_ip)
+                                break
                 except Exception as db_exc:
-                    logger.error("web_updater_failed_to_sync_registered_ip_to_db", device_id=device_id, error=str(db_exc))
+                    logger.error("web_updater_failed_to_sync_registered_ip_to_db", device_id=dev_id, error=str(db_exc))
 
-                return f"""
-                <html>
-                <head>
-                    <meta charset="utf-8">
-                    <title>ثبت آی‌پی موفقیت‌آمیز</title>
-                    <style>
-                        body {{ font-family: Tahoma, Arial, sans-serif; background-color: #f4f6f9; text-align: center; padding: 50px; direction: rtl; }}
-                        .card {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: inline-block; }}
-                        h1 {{ color: #2ecc71; }}
-                        p {{ color: #333; font-size: 18px; }}
-                    </style>
-                </head>
-                <body>
-                    <div class="card">
-                        <h1>✅ ثبت آی‌پی با موفقیت انجام شد!</h1>
-                        <p>آی‌پی شناسایی‌شده شما: <b>{escape(client_ip)}</b></p>
-                        <p>اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود روی دستگاه خود استفاده کنید.</p>
-                    </div>
-                </body>
-                </html>
-                """
+                return _render_capture_ip_html(
+                    title="ثبت آی‌پی موفقیت‌آمیز",
+                    heading="✅ ثبت آی‌پی با موفقیت انجام شد!",
+                    message="آی‌پی فعلی دستگاه شما با موفقیت در پروفایل امنیتی ثبت شد. اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود روی این دستگاه استفاده کنید.",
+                    is_success=True,
+                    client_ip=client_ip,
+                    bot_username=bot_user
+                )
             else:
-                return f"<h3>خطا در ثبت آی‌پی در پنل کنترل دی: {response.text}</h3>"
+                return _render_capture_ip_html(
+                    title="خطا در ثبت آی‌پی",
+                    heading="خطای سرور دی‌ان‌اس",
+                    message=f"خطا در ثبت آی‌پی در پنل Control D: {response.text}",
+                    is_success=False,
+                    bot_username=bot_user
+                )
         except Exception as e:
-            return f"<h3>خطا در برقراری ارتباط با سرور: {str(e)}</h3>"
+            return _render_capture_ip_html(
+                title="خطا در ثبت آی‌پی",
+                heading="خطای ارتباطی",
+                message=f"خطا در برقراری ارتباط با سرور: {str(e)}",
+                is_success=False,
+                bot_username=bot_user
+            )
         
 # ============================================================================
 # WEB ADMIN DASHBOARD
