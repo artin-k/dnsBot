@@ -3947,3 +3947,75 @@ async def _get_service_for_order(session: AsyncSession, order: Order) -> VPNServ
     ).order_by(VPNService.expire_at.desc()).limit(1)
     res = await session.execute(stmt)
     return res.scalars().first()
+
+
+
+# bot/routers/admin.py
+
+@router.message(Command("consolidate_services"), StateFilter("*"))
+async def handle_consolidate_services(message: Message, session: AsyncSession, settings: Settings):
+    """
+    Cleans up duplicate VPNService rows per user, merges all remaining 
+    valid subscription time into 1 primary active subscription, and deletes stale duplicates.
+    """
+    admin_ids = set(settings.admin_ids)
+    if settings.root_admin_telegram_id is not None:
+        admin_ids.add(settings.root_admin_telegram_id)
+        
+    if message.from_user.id not in admin_ids:
+        await message.answer("⛔ شما دسترسی مدیریت ندارید.")
+        return
+
+    msg = await message.answer("⚙️ در حال پاکسازی دیتابیس و یکپارچه‌سازی اشتراک‌های تکراری...")
+
+    try:
+        # Find all user_ids that have > 1 non-test VPNService
+        rows = await session.execute(
+            select(VPNService.user_id)
+            .where(VPNService.is_test_account == False)
+            .group_by(VPNService.user_id)
+            .having(func.count(VPNService.id) > 1)
+        )
+        user_ids = rows.scalars().all()
+        
+        cleaned_count = 0
+        now = datetime.now(timezone.utc)
+
+        for uid in user_ids:
+            s_stmt = select(VPNService).where(
+                VPNService.user_id == uid,
+                VPNService.is_test_account == False
+            ).order_by(VPNService.expire_at.desc())
+            res = await session.execute(s_stmt)
+            user_services = list(res.scalars().all())
+            
+            if len(user_services) > 1:
+                # Primary service is the one with the latest expiration date
+                primary_service = user_services[0]
+                
+                # Find the maximum expire_at date across all user subscriptions
+                max_expire = max(s.expire_at for s in user_services)
+                if max_expire.tzinfo is None:
+                    max_expire = max_expire.replace(tzinfo=timezone.utc)
+                
+                primary_service.expire_at = max_expire
+                if max_expire > now:
+                    primary_service.status = "active"
+                    
+                # Delete all old duplicate subscription rows for this user
+                duplicate_ids = [s.id for s in user_services[1:]]
+                await session.execute(
+                    delete(VPNService).where(VPNService.id.in_(duplicate_ids))
+                )
+                cleaned_count += len(duplicate_ids)
+                
+        await session.commit()
+        await msg.edit_text(
+            f"✅ <b>عملیات یکپارچه‌سازی با موفقیت انجام شد!</b>\n\n"
+            f"🗑 تعداد <code>{cleaned_count}</code> اشتراک تکراری/قدیمی پاکسازی شدند.\n"
+            f"زمان تمام اشتراک‌ها روی ۱ اکانت اصلی هر کاربر یکپارچه و فعال شد.",
+            parse_mode="HTML"
+        )
+    except Exception as exc:
+        await session.rollback()
+        await msg.edit_text(f"❌ خطا در پاکسازی دیتابیس: <code>{str(exc)}</code>", parse_mode="HTML")
