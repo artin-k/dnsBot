@@ -528,8 +528,6 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         f"🔐 <b>دی‌ان‌اس‌های اختصاصی سرور جدید:</b>\n"
         f"🔷 Primary: <code>{escape(ipv4_primary)}</code>\n"
         f"🔷 Secondary: <code>{escape(ipv4_secondary)}</code>\n\n"
-        f"📱 <b>دی‌ان‌اس مخصوص موبایل:</b>\n"
-        f"🔷 Primary: <code>76.76.2.22</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📋 <b>مراحل فعال‌سازی (بسیار مهم):</b>\n\n"
         f"1️⃣ دی‌ان‌AS‌های جدید بالا را جایگزین DNS قبلی دستگاه خود کنید.\n"
