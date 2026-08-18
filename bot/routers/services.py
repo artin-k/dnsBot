@@ -497,10 +497,13 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         reply_markup=None
     )
 
+    # bot/routers/services.py (inside handle_apply_def_loc)
+
     controld = ControlDService(settings)
     old_device_id = service.controld_device_id
     user_ip = service.authorized_ip
 
+    # 1. Surgically remove old IP from old endpoint
     if old_device_id and user_ip:
         try:
             logger.info("surgically_deauthorizing_old_slot_ip", service_id=service.id, old_device_id=old_device_id, ip=user_ip)
@@ -508,6 +511,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         except Exception as exc:
             logger.warning("old_slot_ip_deauthorization_failed_proceeding", service_id=service.id, error=str(exc))
 
+    # 2. Authorize IP on new endpoint
     if user_ip:
         try:
             logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=user_ip)
@@ -515,6 +519,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         except Exception as exc:
             logger.error("new_slot_ip_authorization_failed", service_id=service.id, error=str(exc))
 
+    # 3. Update DB
     raw_username = service.username.split("|")[0]
     service.username = f"{raw_username}|default|{slot_num}"
     service.controld_device_id = new_device_id

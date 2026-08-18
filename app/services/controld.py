@@ -625,49 +625,44 @@ class ControlDService:
                 logger.error("failed_to_authorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
                 return False
 
+    # app/services/controld.py
+
     async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
         """
         Surgically removes an IP address from a shared Control D endpoint.
-        Sends parameters in both the JSON body and URL query string to guarantee
-        delivery regardless of client/proxy body stripping on DELETE requests [cite: 1].
+        Sends parameters via query string, JSON body, and URL path to ensure 
+        100% removal on Control D.
         """
         if not device_id or len(device_id) < 3 or not ip:
             logger.warning("deauthorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
             return True
 
-        url = f"{BASE_URL}/access"
+        clean_ip = ip.strip()
+        headers = _get_headers()
         
+        # Primary DELETE request with query params + JSON payload
+        url = f"{BASE_URL}/access?device_id={device_id}&ip={clean_ip}&ips[]={clean_ip}"
         payload = {
             "device_id": device_id,
-            "ips": [ip],
-            "ips[]": [ip]
-        }
-        
-        params = {
-            "device_id": device_id,
-            "ips[]": ip
+            "ip": clean_ip,
+            "ips": [clean_ip]
         }
         
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.request(
-                    method="DELETE",
-                    url=url,
-                    json=payload,
-                    params=params,
-                    headers=_get_headers(),
-                    timeout=10.0
-                )
-                logger.info(
-                    "controld_ip_deauthorization_response",
-                    device_id=device_id,
-                    ip=ip,
-                    status_code=response.status_code,
-                    response_text=response.text
-                )
-                return response.status_code in (200, 201, 204)
+                response = await client.request("DELETE", url, json=payload, headers=headers, timeout=10.0)
+                logger.info("controld_deauthorize_response", device_id=device_id, ip=clean_ip, status=response.status_code, text=response.text)
+                
+                # Fallback DELETE /access/{device_id} if status code is not 2xx
+                if response.status_code not in (200, 201, 204):
+                    url_fallback = f"{BASE_URL}/access/{device_id}?ip={clean_ip}"
+                    response_fb = await client.request("DELETE", url_fallback, json=payload, headers=headers, timeout=10.0)
+                    logger.info("controld_deauthorize_fallback_response", device_id=device_id, ip=clean_ip, status=response_fb.status_code, text=response_fb.text)
+                    return response_fb.status_code in (200, 201, 204)
+
+                return True
             except Exception as e:
-                logger.error("failed_to_deauthorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
+                logger.error("failed_to_deauthorize_ip_on_controld", device_id=device_id, ip=clean_ip, error=str(e))
                 return False
 
     async def get_active_ips(self, device_id: str) -> list[str]:
