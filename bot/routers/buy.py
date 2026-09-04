@@ -1,7 +1,6 @@
 # bot/routers/buy.py
 from __future__ import annotations
 
-import re
 import secrets
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -26,13 +25,11 @@ from app.services.paystar import PaystarService
 from app.services.settings_service import AppSettingsService
 from app.services.vpn_panel import VPNPanelService
 from app.services.controld import ControlDService
-from app.services.ip_manager import update_device_ip_safe
 from app.utils.formatting import format_money, format_duration_fa, format_datetime_fa, calculate_remaining_time_fa
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
 from bot.keyboards.buy import PlanCallback, paystar_payment_keyboard
 from bot.keyboards.verification import phone_verification_keyboard
-from bot.routers.services import create_secure_ip_update_keyboard
 from bot.states.buy import BuyStates
 from bot.states.wallet import VerificationStates
 from bot.utils.auto_clean import schedule_message_deletion
@@ -249,7 +246,6 @@ async def handle_pay_wallet(callback: CallbackQuery, state: FSMContext, session:
         delay_seconds=7200,
     )
 
-
 @router.callback_query(F.data.startswith("pay_card:"), StateFilter("*"))
 async def handle_pay_card(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     """Manual card-to-card checkout with receipt upload."""
@@ -357,76 +353,3 @@ async def receive_receipt_photo(message: Message, state: FSMContext, session: As
         order=order,
         receipt_file_id=receipt_file_id,
     )
-
-
-# ============================================================================
-# MANUAL IP REGISTRATION (WITH STRICT IRAN ANTI-VPN CHECK)
-# ============================================================================
-
-@router.callback_query(F.data.startswith("manual_ip_reg:"), StateFilter("*"))
-async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    device_id = callback.data.split(":")[1]
-    await state.set_state(BuyStates.waiting_manual_ip)
-    await state.update_data(device_id=device_id)
-    await callback.message.answer("لطفاً IP خود را وارد نمایید.\n برای مشاهده IP فعلی خود، روی لینک زیر کلیک کنید: \n\n  🌐 https://ipnumberia.com  \n\n ⚠️ نکته: حتماً VPN یا فیلترشکن خود را خاموش کنید و سپس IP نمایش‌داده‌شده را در بخش مربوطه وارد نمایید.")
-
-
-@router.message(BuyStates.waiting_manual_ip, F.text)
-async def process_manual_ip(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    user_ip = message.text.strip()
-    if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", user_ip):
-        await message.answer("❌ فرمت آی‌پی نامعتبر است. مثال معتبر: `5.200.12.1`")
-        return
-
-    # 🛡️ STRICT IRAN CHECK
-    from app.services.vpn_detector import verify_user_ip
-    ip_check = await verify_user_ip(user_ip)
-    if not ip_check.is_iran:
-        await message.answer(
-            f"⚠️ <b>خطا: فیلترشکن شما روشن است یا آی‌پی غیرایرانی وارد شده!</b>\n\n"
-            f"🌐 <b>آی‌پی بررسی‌شده:</b> <code>{escape(user_ip)}</code>\n"
-            f"🗺 <b>کشور شناسایی‌شده:</b> {escape(ip_check.country)} ({escape(ip_check.country_code)})\n"
-            f"📡 <b>ارائه‌دهنده:</b> {escape(ip_check.isp)}\n\n"
-            f"❌ <b>ثبت آی‌پی فقط برای اینترنت داخل ایران مجاز است.</b>\n"
-            f"لطفاً فیلترشکن را خاموش کرده و آی‌پی واقعی اینترنت ایران خود را ارسال کنید.",
-            parse_mode="HTML",
-        )
-        return
-
-    data = await state.get_data()
-    device_id = data.get("device_id")
-    user = await UsersRepository(session).get_by_telegram_id(message.from_user.id) if message.from_user else None
-
-    if not user or not device_id:
-        await state.clear()
-        await message.answer("❌ خطای سیستمی. لطفاً مجدداً تلاش کنید.")
-        return
-
-    stmt = (
-        select(VPNService)
-        .where(
-            VPNService.user_id == user.id,
-            VPNService.controld_device_id == device_id,
-            VPNService.status != "disabled",
-            VPNService.expire_at > datetime.now(timezone.utc),
-        )
-        .order_by(VPNService.expire_at.desc())
-        .limit(1)
-    )
-    res = await session.execute(stmt)
-    service = res.scalars().first()
-
-    if not service:
-        await state.clear()
-        await message.answer("❌ اشتراک فعالی برای این دستگاه یافت نشد.")
-        return
-
-    if await update_device_ip_safe(session, service, user_ip):
-        await state.clear()
-        await message.answer(
-            f"✅ آی‌پی <code>{user_ip}</code> با موفقیت برای دستگاه شما ثبت شد.",
-            parse_mode="HTML",
-        )
-    else:
-        await message.answer("❌ خطا در ثبت آی‌پی در پنل. لطفاً مجدداً تلاش کنید.")

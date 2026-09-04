@@ -62,6 +62,12 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
                     await adguard.deauthorize_client_ip(old_ip)
                 except Exception as exc:
                     logger.warning("adguard_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
+        else:
+            logger.info(
+                "skipping_old_ip_deauthorization_shared_by_active_service",
+                service_id=service.id,
+                old_ip=old_ip,
+            )
 
     # 3. Authorize New IP on Control D
     controld_success = False

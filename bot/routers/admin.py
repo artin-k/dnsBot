@@ -313,3 +313,37 @@ async def cmd_consolidate_services(message: Message, session: AsyncSession, sett
 
     await session.commit()
     await msg.edit_text(f"✅ یکپارچه‌سازی انجام شد. <code>{cleaned}</code> رکورد تکراری حذف گردید.", parse_mode="HTML")
+
+
+@router.message(Command("reset_tests"), StateFilter("*"))
+async def cmd_reset_all_tests(message: Message, session: AsyncSession, settings: Settings) -> None:
+    # 1. Security Check: Only admins can run this
+    if not await _is_admin(message.from_user.id if message.from_user else None, session, settings):
+        return
+
+    msg = await message.answer("⏳ در حال پاکسازی اطلاعات تست تمام کاربران...")
+    
+    try:
+        from app.models import TestAccountClaim, VPNService
+        from sqlalchemy import delete
+        
+        # 2. Delete all claims so everyone can fetch a new test account
+        await session.execute(delete(TestAccountClaim))
+        
+        # 3. Delete all currently active test/trial VPN services
+        await session.execute(
+            delete(VPNService).where(VPNService.is_test_account == True)
+        )
+        
+        # 4. Save changes
+        await session.commit()
+        
+        await msg.edit_text(
+            "✅ <b>وضعیت اکانت تست برای تمام کاربران با موفقیت ریست شد.</b>\n\n"
+            "اکنون همه کاربران می‌توانند مجدداً از منوی اصلی اکانت تست دریافت کنند.", 
+            parse_mode="HTML"
+        )
+    except Exception as exc:
+        await session.rollback()
+        logger.error("failed_to_reset_all_tests", error=str(exc))
+        await msg.edit_text(f"❌ خطا در ریست کردن اکانت‌های تست:\n<code>{str(exc)}</code>", parse_mode="HTML")

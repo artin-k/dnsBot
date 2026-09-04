@@ -459,97 +459,25 @@ async def capture_ip(request: Request, token: str):
         if not service:
             return _render_capture_ip_html("خطا در ثبت آی‌پی", "سرویس یافت نشد", "سرویس مورد نظر یافت نشد.", False, bot_username=bot_user)
 
+        # update_device_ip_safe commits the service IP. Marking the token first
+        # makes token consumption and the IP update a single DB commit.
+        token_record.is_used = True
         success = await update_device_ip_safe(session, service, client_ip)
         if success:
-            token_record.is_used = True
-            await session.commit()
             return _render_capture_ip_html("ثبت آی‌پی موفقیت‌آمیز", "✅ ثبت آی‌پی با موفقیت انجام شد!", f"آی‌پی ایران ({client_ip}) با موفقیت ثبت شد.", True, client_ip, bot_user)
         return _render_capture_ip_html("خطا در ثبت آی‌پی", "خطای سرور", "خطا در ثبت در سرور دی‌ان‌اس.", False, bot_username=bot_user)
 
-@app.get("/update-ip/{device_id}", response_class=HTMLResponse)
-async def update_device_ip(request: Request, device_id: str):
-    # 1. Extract real client IP and CDN-detected country
-    client_ip, cdn_country = get_client_real_ip(request)
-    dev_id = device_id.strip()
+@app.get("/update-ip/{device_id}", response_class=HTMLResponse, status_code=status.HTTP_410_GONE)
+async def retired_update_device_ip(device_id: str):
+    """Reject unsafe pre-token links; never select a service by shared slot."""
     bot_user = await get_bot_username()
-    now = datetime.now(timezone.utc)
-
-    # 2. Format validation
-    if not client_ip or not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", client_ip):
-        return _render_capture_ip_html("خطا در ثبت آی‌پی", "آی‌پی شناسایی نشد", "آدرس آی‌پی عمومی شما به درستی شناسایی نشد.", False, bot_username=bot_user)
-
-    # 3. FAST-PATH: If ArvanCloud/Cloudflare already flagged non-IR country
-    if cdn_country and cdn_country != "IR":
-        return _render_vpn_detected_html(
-            detected_ip=client_ip,
-            country=cdn_country,
-            isp="VPN / Foreign Server",
-            error_message=f"فیلترشکن شما روشن است! لوکیشن اتصال: {cdn_country}",
-            bot_username=bot_user
-        )
-
-    # 4. 🛡️ STRICT ANTI-VPN CHECK
-    ip_check = await verify_user_ip(client_ip)
-    if not ip_check.is_iran:
-        return _render_vpn_detected_html(
-            detected_ip=client_ip,
-            country=ip_check.country,
-            isp=ip_check.isp,
-            error_message=ip_check.error_message,
-            bot_username=bot_user
-        )
-
-    # 5. Process active subscription and update
-    async with async_session_maker() as db_session:
-        stmt = (
-            select(VPNService)
-            .where(
-                VPNService.controld_device_id == dev_id,
-                VPNService.status != "disabled"
-            )
-            .order_by(VPNService.expire_at.desc())
-        )
-        res = await db_session.execute(stmt)
-        services_list = list(res.scalars().all())
-
-        active_service = None
-        for service in services_list:
-            exp = service.expire_at
-            if exp:
-                if exp.tzinfo is None:
-                    exp = exp.replace(tzinfo=timezone.utc)
-                if exp > now:
-                    active_service = service
-                    break
-
-        if not active_service:
-            return _render_capture_ip_html(
-                title="اشتراک منقضی شده است",
-                heading="❌ این لوکیشن (سرور) برای شما منقضی شده است",
-                message="هیچ اشتراک فعالی برای این لوکیشن یافت نشد.",
-                is_success=False,
-                bot_username=bot_user
-            )
-
-        success = await update_device_ip_safe(db_session, active_service, client_ip)
-
-        if success:
-            return _render_capture_ip_html(
-                title="ثبت آی‌پی موفقیت‌آمیز",
-                heading="✅ ثبت آی‌پی با موفقیت انجام شد!",
-                message="هم‌اکنون می‌توانید بدون هیچ محدودیتی، از تجربه اینترنت آزاد با بالاترین سرعت و پینگ فوق‌العاده برای وب‌گردی و بازی لذت ببرید.",
-                is_success=True,
-                client_ip=client_ip,
-                bot_username=bot_user
-            )
-        else:
-            return _render_capture_ip_html(
-                title="خطا در ثبت آی‌پی",
-                heading="خطای ارتباطی",
-                message="خطا در برقراری ارتباط با سرور دی‌ان‌اس.",
-                is_success=False,
-                bot_username=bot_user
-            )
+    return _render_capture_ip_html(
+        "این لینک منقضی شده است",
+        "⚠️ لینک قدیمی است",
+        "لطفاً به ربات بازگردید و از لینک امن ثبت IP استفاده کنید.",
+        False,
+        bot_username=bot_user,
+    )
         
 # ============================================================================
 # WEB ADMIN DASHBOARD
@@ -681,13 +609,8 @@ async def admin_add_ip(
 # ============================================================================
 # PAYSTAR REDIRECT PROXY
 # ============================================================================
-# ip_server.py & run_web_ip_updater.py
-
-# In ip_server.py
-
-@app.get("/paystar/redirect")
+@app.get("/paystar/redirect", response_class=HTMLResponse)
 async def paystar_redirect(token: str):
-
     bot_user = await get_bot_username()
     try:
         clean_token = token.strip()
@@ -700,16 +623,77 @@ async def paystar_redirect(token: str):
             if payment.status == PaymentStatus.APPROVED.value or payment.order.status == OrderStatus.COMPLETED.value:
                 return _success_html("این سفارش قبلاً با موفقیت پرداخت و نهایی شده است.", bot_username=bot_user)
 
-        # Official Paystar payment gateway URL
-        paystar_gateway_url = f"https://core.paystar.click/api/pardakht/payment?token={clean_token}"
+        # Build the HTML form to auto-submit a POST request to Paystar
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="fa" dir="rtl">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta name="referrer" content="origin-when-cross-origin" />
+            <title>در حال انتقال...</title>
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+                body {{
+                    font-family: 'Vazirmatn', Tahoma, sans-serif;
+                    background-color: #0f172a;
+                    color: #f8fafc;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                }}
+                .btn-fallback {{
+                    background-color: #3b82f6;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 12px 24px;
+                    font-weight: bold;
+                    cursor: pointer;
+                    margin-top: 20px;
+                    font-family: inherit;
+                }}
+            </style>
+        </head>
+        <body>
+            <div style="text-align: center;">
+                <h3 style="margin-bottom: 10px;">در حال انتقال به درگاه بانکی...</h3>
+                <p style="color: #94a3b8; font-size: 14px;">لطفاً چند لحظه صبر کنید.</p>
+                
+                <form id="paymentForm" action="https://core.paystar.click/api/pardakht/payment" method="POST">
+                    <input type="hidden" name="token" value="{clean_token}">
+                    <noscript>
+                        <p style="color: #ef4444; margin-top: 20px;">جاوااسکریپت در مرورگر شما غیرفعال است.</p>
+                    </noscript>
+                    <button type="submit" id="fallbackBtn" class="btn-fallback" style="display: none;">
+                        انتقال دستی به درگاه پرداخت
+                    </button>
+                </form>
+            </div>
 
-        # 🚀 Immediate HTTP 303 Redirect to Shaparak (Bypasses all client-side blockers)
-        return RedirectResponse(url=paystar_gateway_url, status_code=status.HTTP_303_SEE_OTHER)
+            <script>
+                document.addEventListener("DOMContentLoaded", function() {{
+                    // Auto-submit the form as soon as the DOM is ready
+                    document.getElementById("paymentForm").submit();
+                    
+                    // Show fallback button if the redirect fails or is blocked
+                    setTimeout(function() {{
+                        document.getElementById("fallbackBtn").style.display = "inline-block";
+                    }}, 2500);
+                }});
+            </script>
+        </body>
+        </html>
+        """
+        
+        return HTMLResponse(content=html_content)
 
     except Exception as exc:
         logger.exception("failed_to_process_paystar_redirect_route", token=token)
         return _failed_html(f"خطای داخلی در اتصال به درگاه بانکی: {str(exc)}", bot_username=bot_user)
-
 
 # ============================================================================
 # PAYSTAR GATEWAY CALLBACK & RESULT PAGES

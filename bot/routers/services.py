@@ -84,24 +84,22 @@ def format_service_item_display(service: VPNService, index: int) -> str:
 """
 
 
-def build_ip_registration_keyboard(
-    device_id: str,
+def _build_secure_ip_registration_keyboard(
+    token: str,
     support_username: str = "",
     video_link: str = "",
 ) -> InlineKeyboardMarkup:
-    """Simple standard buttons for IP registration."""
+    """Build a keyboard whose registration link identifies one service only."""
     builder = InlineKeyboardBuilder()
 
     base_url = WEB_SERVER_BASE_URL.strip().rstrip("/")
     if not base_url.startswith(("http://", "https://")):
         base_url = f"https://{base_url}"
 
-    dev_str = str(device_id or "unknown").strip()
-    update_url = f"{base_url}/update-ip/{dev_str}"
+    capture_url = f"{base_url}/capture-ip/{token}"
 
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=update_url)
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=update_url)
-    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{dev_str}")
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=capture_url)
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=capture_url)
 
     if support_username:
         clean_sup = support_username.removeprefix("@").strip()
@@ -121,14 +119,27 @@ def build_ip_registration_keyboard(
 
 async def create_secure_ip_update_keyboard(
     session: AsyncSession,
-    service_id_or_device_id: int | str,
+    service_id: int,
 ) -> InlineKeyboardMarkup:
-    """Unified keyboard generator with support username fallback."""
-    if isinstance(service_id_or_device_id, int):
-        service = await session.get(VPNService, service_id_or_device_id)
-        device_id = service.controld_device_id if service else "unknown"
-    else:
-        device_id = str(service_id_or_device_id)
+    """Issue a single-use token and build the service-bound capture-IP keyboard."""
+    service = await session.get(VPNService, service_id)
+    if service is None:
+        raise ValueError(f"Cannot issue an IP registration token for missing service {service_id}")
+
+    now = datetime.now(timezone.utc)
+    await session.execute(delete(IPAuthToken).where(IPAuthToken.service_id == service.id))
+    token = uuid.uuid4().hex
+    session.add(
+        IPAuthToken(
+            token=token,
+            service_id=service.id,
+            expires_at=now + timedelta(minutes=10),
+            is_used=False,
+        )
+    )
+    # The Telegram message is sent after this function returns, so the token
+    # must already be durable when its URL is exposed to the user.
+    await session.commit()
 
     app_settings = AppSettingsService(session)
     support_username = await app_settings.get_support_username()
@@ -141,8 +152,8 @@ async def create_secure_ip_update_keyboard(
             if root_user and root_user.telegram_username:
                 support_username = root_user.telegram_username
 
-    return build_ip_registration_keyboard(
-        device_id=device_id,
+    return _build_secure_ip_registration_keyboard(
+        token=token,
         support_username=support_username,
         video_link=video_link,
     )
@@ -208,8 +219,8 @@ async def _show_my_services_page(
         if is_service_active(service):
             builder.row(
                 InlineKeyboardButton(
-                    text="✳️ ثبت آی‌پی سریع",
-                    url=f"{WEB_SERVER_BASE_URL}/update-ip/{service.controld_device_id}",
+                    text="✳️ ثبت آی‌پی",
+                    callback_data=f"manage_links:{service.id}",
                 ),
                 InlineKeyboardButton(
                     text="🛠 مدیریت",
@@ -261,6 +272,11 @@ async def handle_manage_service(callback: CallbackQuery, session: AsyncSession) 
         await callback.message.answer("❌ سرویس پیدا نشد.")
         return
 
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if user is None or service.user_id != user.id:
+        await callback.message.answer("❌ دسترسی به این سرویس مجاز نیست.")
+        return
+
     if not is_service_active(service):
         builder = InlineKeyboardBuilder()
         builder.button(text="🛒 خرید / تمدید اشتراک", callback_data="buy_back_to_plans")
@@ -288,6 +304,11 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
     service = await ServicesRepository(session).get(service_id)
     if service is None:
         await callback.message.answer("❌ سرویس پیدا نشد.")
+        return
+
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if user is None or service.user_id != user.id:
+        await callback.message.answer("❌ دسترسی به این سرویس مجاز نیست.")
         return
 
     if not is_service_active(service):

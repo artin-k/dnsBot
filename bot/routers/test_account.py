@@ -1,7 +1,6 @@
 # bot/routers/test_account.py
 from __future__ import annotations
 
-import uuid
 import secrets
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -11,16 +10,15 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import SLOT_CONFIGS, Settings
-from app.models import IPAuthToken, VPNService, VPNServiceStatus
+from app.models import VPNService, VPNServiceStatus
 from app.repositories.users import UsersRepository
 from app.utils.formatting import calculate_remaining_time_fa, format_datetime_fa
 from bot import texts
 from bot.keyboards.main_menu import main_menu_keyboard
-from bot.routers.services import create_secure_ip_update_keyboard
 from bot.utils.auto_clean import schedule_message_deletion
 from bot.utils.ui import safe_edit_or_reply
 
@@ -121,10 +119,6 @@ async def handle_get_test_account(
 
 🗺 <b>لطفاً لوکیشن سرور مورد نظر خود را انتخاب کنید:</b>
 
-<blockquote>⚡ <b>مقایسه سرورهای تست:</b>
-🇩🇪 <b>آلمان:</b> ترافیک پایدار و سرعت دانلود عالی
-🇹🇷 <b>ترکیه:</b> پایین‌ترین پینگ و تاخیر برای بازی‌های آنلاین</blockquote>
-
 💡 <i>هر کاربر تلگرام تنها یک بار امکان دریافت اکانت تست رایگان را دارد.</i>"""
 
     await safe_edit_or_reply(event, prompt, reply_markup=builder.as_markup())
@@ -175,15 +169,6 @@ async def handle_test_loc_selection(
     session.add(test_sub)
     await session.flush()
 
-    # Clear old tokens & issue a secure auth token
-    await session.execute(delete(IPAuthToken).where(IPAuthToken.service_id == test_sub.id))
-    session.add(IPAuthToken(
-        token=uuid.uuid4().hex,
-        service_id=test_sub.id,
-        expires_at=now + timedelta(minutes=10),
-        is_used=False,
-    ))
-    
     await session.commit()
     await state.clear()
 
