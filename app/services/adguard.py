@@ -69,7 +69,6 @@ class AdGuardHomeService:
                         logger.error("adguard_api_error", status=resp.status, text=err_text, endpoint=endpoint)
                         return None
 
-                    # AdGuard Home /control/access/set returns 200 with text or empty body
                     if resp.status in (200, 201):
                         if resp.content_type == "application/json":
                             return await resp.json()
@@ -151,38 +150,3 @@ class AdGuardHomeService:
                 logger.info("adguard_ip_deauthorized_successfully", ip=valid_ip)
                 return True
             return False
-
-    async def deauthorize_client_ip(self, ip_address: str) -> bool:
-        """Deauthorizes (removes) a client IP from AdGuard Home's allowed_clients list."""
-        if not self.is_configured():
-            return True
-
-        try:
-            valid_ip = validate_network_target(ip_address)
-        except ValueError:
-            return True
-
-        async with self._access_lock:
-            # 1. READ current ACL
-            data = await self._request("GET", "/control/access/list")
-            if data is None:
-                logger.error("failed_to_fetch_adguard_access_list_for_deauth", ip=valid_ip)
-                return False
-
-            allowed = set(data.get("allowed_clients", []))
-            if valid_ip not in allowed:
-                return True  # Already not in the list
-
-            # 2. REMOVE
-            allowed.discard(valid_ip)
-            data["allowed_clients"] = sorted(allowed)
-            data.setdefault("disallowed_clients", [])
-            data.setdefault("blocked_hosts", [])
-
-            # 3. WRITE
-            res = await self._request("POST", "/control/access/set", payload=data)
-            if res is not None:
-                logger.info("adguard_ip_deauthorized_successfully", ip=valid_ip)
-                return True
-            return False
-        

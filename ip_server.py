@@ -877,22 +877,36 @@ async def admin_add_ip(
 # ============================================================================
 # ip_server.py & run_web_ip_updater.py
 
-@app.get("/paystar/redirect", response_class=HTMLResponse)
+# In ip_server.py
+
+@app.get("/paystar/redirect")
 async def paystar_redirect(token: str):
-    """Gracefully handles redirects using a highly-styled dark card and a robust manual submit fallback [cite: 1]."""
+    """
+    Seamlessly redirects the customer directly to the official Paystar/Shaparak gateway.
+    Uses official core.paystar.ir to prevent browser adblocker interception.
+    """
+    bot_user = await get_bot_username()
     try:
+        clean_token = token.strip()
         async with async_session_maker() as session:
-            payment = await PaymentsRepository(session).get_by_token_with_details(token)
+            payment = await PaymentsRepository(session).get_by_token_with_details(clean_token)
             if payment is None or payment.order is None or payment.user is None:
-                return _failed_html("توکن پرداخت معتبر نیست.")
+                return _failed_html("توکن پرداخت معتبر نیست یا منقضی شده است.", bot_username=bot_user)
             if payment.method != "paystar":
-                return _failed_html("این لینک برای پرداخت آنلاین ثبت نشده است.")
+                return _failed_html("این لینک برای پرداخت آنلاین پی‌استار ثبت نشده است.", bot_username=bot_user)
             if payment.status == PaymentStatus.APPROVED.value or payment.order.status == OrderStatus.COMPLETED.value:
-                return _success_html("این سفارش قبلاً با موفقیت نهایی شده است.")
+                return _success_html("این سفارش قبلاً با موفقیت پرداخت و نهایی شده است.", bot_username=bot_user)
+
+        # Official Paystar payment gateway URL
+        paystar_gateway_url = f"https://core.paystar.ir/api/pardakht/payment?token={clean_token}"
+
+        # 🚀 Immediate HTTP 303 Redirect to Shaparak (Bypasses all client-side blockers)
+        return RedirectResponse(url=paystar_gateway_url, status_code=status.HTTP_303_SEE_OTHER)
+
     except Exception as exc:
         logger.exception("failed_to_process_paystar_redirect_route", token=token)
-        return _failed_html(f"خطای داخلی سرور در انتقال به درگاه پرداخت: {str(exc)}")
-
+        return _failed_html(f"خطای داخلی در اتصال به درگاه بانکی: {str(exc)}", bot_username=bot_user)
+    
     # Proceed to submit form to core.paystar.click with custom style and manual action fallback [cite: 1]
     html_content = f"""
     <!DOCTYPE html>
@@ -965,10 +979,6 @@ async def paystar_redirect(token: str):
     </html>
     """
     return HTMLResponse(content=html_content)
-
-# ============================================================================
-# PAYSTAR GATEWAY CALLBACK
-# ============================================================================
 
 # ============================================================================
 # PAYSTAR GATEWAY CALLBACK & RESULT PAGES
