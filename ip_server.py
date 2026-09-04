@@ -34,6 +34,7 @@ from bot.loader import create_bot
 from bot.utils.auto_clean import schedule_message_deletion
 from app.services.vpn_detector import verify_user_ip
 
+
 app = FastAPI(title="Control D Auto-IP & Payment Gateway")
 settings = get_settings()
 bot = create_bot(settings)
@@ -657,6 +658,104 @@ async def capture_ip(request: Request, token: str):
                 bot_username=bot_user
             )
 
+def _render_vpn_detected_html(
+    detected_ip: str,
+    country: str,
+    isp: str,
+    bot_username: str = "bot"
+) -> HTMLResponse:
+    """Renders a warning card when foreign IP / VPN is detected."""
+    html_content = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>فیلترشکن شما روشن است</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+        body {{
+            font-family: 'Vazirmatn', Tahoma, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }}
+        .card-box {{
+            background-color: #1e293b;
+            border: 2px solid #eab308;
+            border-radius: 16px;
+            padding: 36px;
+            box-shadow: 0 10px 25px -5px rgba(234, 179, 8, 0.25);
+            max-width: 540px;
+            width: 100%;
+            text-align: center;
+        }}
+        .icon-box {{
+            width: 75px;
+            height: 75px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 38px;
+            background-color: rgba(234, 179, 8, 0.12);
+            border: 2px solid rgba(234, 179, 8, 0.3);
+        }}
+        .ip-badge {{
+            background-color: #0f172a;
+            border: 1px solid #334155;
+            font-family: monospace;
+            font-size: 1.15rem;
+            color: #f59e0b;
+        }}
+        .btn-reload {{
+            background-color: #eab308;
+            color: #0f172a;
+            font-weight: bold;
+            border: none;
+            transition: all 0.2s;
+        }}
+        .btn-reload:hover {{
+            background-color: #ca8a04;
+            color: #0f172a;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card-box">
+        <div class="icon-box">⚠️</div>
+        <h1 class="h4 mb-3 fw-bold text-warning">فیلترشکن شما روشن است!</h1>
+        <p class="text-light mb-3" style="font-size: 15px; line-height: 1.8;">
+            آی‌پی شناسایی‌شده شما متعلق به سرور خارجی است.<br>
+            برای فعال‌سازی DNS، ثبت آی‌پی <b>فقط با اینترنت مستقیم ایران</b> امکان‌پذیر است.
+        </p>
+        
+        <div class="ip-badge py-2 px-3 rounded-3 mb-3 text-center">
+            آی‌پی فیلترشکن: <b>{escape(detected_ip)}</b><br>
+            <small class="text-secondary">کشور: {escape(country)} | ارائه‌دهنده: {escape(isp)}</small>
+        </div>
+
+        <div class="alert alert-dark text-start small mb-4 py-2 border-secondary" style="font-size: 13px;">
+            1️⃣ فیلترشکن و پروکسی تلگرام خود را خاموش کنید.<br>
+            2️⃣ مطمئن شوید به همان اینترنت/وای‌فای متصل هستید.<br>
+            3️⃣ دکمه زیر را لمس کنید:
+        </div>
+
+        <button onclick="location.reload()" class="btn btn-reload py-2 px-4 rounded-3 w-100 mb-2">
+            🔄 فیلترشکن را خاموش کردم، بررسی مجدد
+        </button>
+        <a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">
+            بازگشت به ربات تلگرام
+        </a>
+    </div>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content, status_code=200)
 
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse)
 async def update_device_ip(request: Request, device_id: str):
@@ -679,16 +778,14 @@ async def update_device_ip(request: Request, device_id: str):
             bot_username=bot_user
         )
 
+    # STRICT IRAN CHECK: Reject non-IR IPs immediately
     ip_check = await verify_user_ip(client_ip)
-    if ip_check.is_vpn:
+    if not ip_check.is_iran:
         return _render_vpn_detected_html(
-            title="فیلترشکن روشن است",
-            heading="⚠️ فیلترشکن شما روشن است!",
-            message=ip_check.error_message or "آی‌پی سرور فیلترشکن شناسایی شد. لطفاً ابتدا فیلترشکن را خاموش کنید.",
             detected_ip=client_ip,
             country=ip_check.country,
             isp=ip_check.isp,
-            bot_username=bot_user,
+            bot_username=bot_user
         )
 
     async with async_session_maker() as db_session:

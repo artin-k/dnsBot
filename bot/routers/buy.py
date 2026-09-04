@@ -422,17 +422,17 @@ async def process_manual_ip(message: Message, state: FSMContext, session: AsyncS
         await message.answer("❌ فرمت آی‌پی نامعتبر است. مثال معتبر: `5.200.12.1`")
         return
 
-    # 🛡️ ANTI-VPN SHIELD
+    # 🛡️ STRICT IRAN CHECK
     from app.services.vpn_detector import verify_user_ip
     ip_check = await verify_user_ip(user_ip)
-    if ip_check.is_vpn:
+    if not ip_check.is_iran:
         await message.answer(
-            f"⚠️ <b>خطا: فیلترشکن روشن است یا آی‌پی نامعتبر است!</b>\n\n"
-            f"🌐 <b>آی‌پی وارد شده:</b> <code>{escape(user_ip)}</code>\n"
-            f"🗺 <b>کشور:</b> {escape(ip_check.country)} ({escape(ip_check.country_code)})\n"
-            f"📡 <b>شبکه:</b> {escape(ip_check.isp)}\n\n"
-            f"❌ {escape(ip_check.error_message or 'لطفاً فیلترشکن را خاموش کنید.')}\n\n"
-            f"💡 <i>برای اینکه دی‌ان‌اس کار کند، باید آی‌پی مستقیم اینترنت ایران (همراه یا خانگی) بدون فیلترشکن را وارد کنید.</i>",
+            f"⚠️ <b>خطا: فیلترشکن شما روشن است یا آی‌پی غیرایرانی وارد شده!</b>\n\n"
+            f"🌐 <b>آی‌پی بررسی‌شده:</b> <code>{escape(user_ip)}</code>\n"
+            f"🗺 <b>کشور شناسایی‌شده:</b> {escape(ip_check.country)} ({escape(ip_check.country_code)})\n"
+            f"📡 <b>ارائه‌دهنده:</b> {escape(ip_check.isp)}\n\n"
+            f"❌ <b>ثبت آی‌پی فقط برای اینترنت داخل ایران مجاز است.</b>\n"
+            f"لطفاً فیلترشکن را خاموش کرده و آی‌پی واقعی خط ایران خود را ارسال کنید.",
             parse_mode="HTML"
         )
         return
@@ -440,7 +440,6 @@ async def process_manual_ip(message: Message, state: FSMContext, session: AsyncS
     data = await state.get_data()
     device_id = data.get("device_id")
     user = await UsersRepository(session).get_by_telegram_id(message.from_user.id) if message.from_user else None
-
 
     if not user or not device_id:
         await state.clear()
@@ -468,6 +467,9 @@ async def process_manual_ip(message: Message, state: FSMContext, session: AsyncS
 
     if await update_device_ip_safe(session, service, user_ip):
         await state.clear()
-        await message.answer(f"✅ آی‌پی <code>{user_ip}</code> با موفقیت برای دستگاه شما ثبت شد.", parse_mode="HTML")
+        await message.answer(
+            f"✅ آی‌پی <code>{user_ip}</code> با موفقیت برای دستگاه شما ثبت شد.",
+            parse_mode="HTML"
+        )
     else:
         await message.answer("❌ خطا در ثبت آی‌پی در پنل. لطفاً مجدداً تلاش کنید.")
