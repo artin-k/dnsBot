@@ -12,7 +12,6 @@ settings = get_settings()
 
 # app/services/paystar.py
 
-# 🛠 FIX: Replaced core.paystar.ir with core.paystar.click
 PAYSTAR_BASE_URL = "https://core.paystar.click/api/pardakht"
 
 class PaystarService:

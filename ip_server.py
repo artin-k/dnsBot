@@ -409,10 +409,6 @@ def _render_vpn_detected_html(
         <div class="icon-box">⚠️</div>
         <h1 class="h4 mb-3 fw-bold text-warning">فیلترشکن شما روشن است!</h1>
         <p class="text-light mb-3" style="font-size: 15px; line-height: 1.8;">{escape(custom_msg)}<br>برای فعال‌سازی DNS، ثبت آی‌پی <b>فقط با اینترنت مستقیم ایران</b> امکان‌پذیر است.</p>
-        <div class="ip-badge py-2 px-3 rounded-3 mb-3 text-center">
-            آی‌پی شناسایی‌شده: <b>{escape(detected_ip)}</b><br>
-            <small class="text-secondary">کشور: {escape(country)} | ارائه‌دهنده: {escape(isp)}</small>
-        </div>
         <div class="alert alert-dark text-start small mb-4 py-2 border-secondary" style="font-size: 13px;">
             1️⃣ فیلترشکن و پروکسی تلگرام خود را کاملاً خاموش کنید.<br>
             2️⃣ مطمئن شوید به اینترنت اصلی/وای‌فای خود متصل هستید.<br>
@@ -541,7 +537,7 @@ async def update_device_ip(request: Request, device_id: str):
             return _render_capture_ip_html(
                 title="ثبت آی‌پی موفقیت‌آمیز",
                 heading="✅ ثبت آی‌پی با موفقیت انجام شد!",
-                message="آی‌پی ایران شما با موفقیت ثبت شد. اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود استفاده کنید.",
+                message="هم‌اکنون می‌توانید بدون هیچ محدودیتی، از تجربه اینترنت آزاد با بالاترین سرعت و پینگ فوق‌العاده برای وب‌گردی و بازی لذت ببرید.",
                 is_success=True,
                 client_ip=client_ip,
                 bot_username=bot_user
@@ -676,7 +672,7 @@ async def admin_add_ip(
 
         success = await update_device_ip_safe(session, service, new_ip)
         if not success:
-            raise HTTPException(status_code=500, detail="خطا در ثبت آی‌پی در پنل Control D.")
+            raise HTTPException(status_code=500, detail="خطا در ثبت آی‌پی در پنل")
 
     logger.info("admin_manually_overrode_user_ip", service_id=service_id, new_ip=new_ip)
     return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=status.HTTP_303_SEE_OTHER)
@@ -691,10 +687,7 @@ async def admin_add_ip(
 
 @app.get("/paystar/redirect")
 async def paystar_redirect(token: str):
-    """
-    Seamlessly redirects the customer directly to the official Paystar/Shaparak gateway.
-    Uses official core.paystar.ir to prevent browser adblocker interception.
-    """
+
     bot_user = await get_bot_username()
     try:
         clean_token = token.strip()
@@ -708,7 +701,7 @@ async def paystar_redirect(token: str):
                 return _success_html("این سفارش قبلاً با موفقیت پرداخت و نهایی شده است.", bot_username=bot_user)
 
         # Official Paystar payment gateway URL
-        paystar_gateway_url = f"https://core.paystar.ir/api/pardakht/payment?token={clean_token}"
+        paystar_gateway_url = f"https://core.paystar.click/api/pardakht/payment?token={clean_token}"
 
         # 🚀 Immediate HTTP 303 Redirect to Shaparak (Bypasses all client-side blockers)
         return RedirectResponse(url=paystar_gateway_url, status_code=status.HTTP_303_SEE_OTHER)
@@ -716,79 +709,7 @@ async def paystar_redirect(token: str):
     except Exception as exc:
         logger.exception("failed_to_process_paystar_redirect_route", token=token)
         return _failed_html(f"خطای داخلی در اتصال به درگاه بانکی: {str(exc)}", bot_username=bot_user)
-    
-    # Proceed to submit form to core.paystar.click with custom style and manual action fallback [cite: 1]
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="fa" dir="rtl">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>در حال انتقال به درگاه پرداخت...</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
-            body {{
-                font-family: 'Vazirmatn', Tahoma, sans-serif;
-                background-color: #0f172a;
-                color: #f8fafc;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 20px;
-            }}
-            .redirect-card {{
-                background-color: #1e293b;
-                border: 1px solid #334155;
-                border-radius: 16px;
-                padding: 40px;
-                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-                max-width: 500px;
-                width: 100%;
-                text-align: center;
-            }}
-            .spinner-border {{
-                color: #38bdf8;
-                width: 3rem;
-                height: 3rem;
-            }}
-            .btn-submit {{
-                background-color: #10b981;
-                color: #ffffff;
-                border: none;
-                font-weight: bold;
-                transition: all 0.2s ease-in-out;
-            }}
-            .btn-submit:hover {{
-                background-color: #059669;
-                transform: translateY(-1px);
-                color: #ffffff;
-            }}
-        </style>
-        <script>
-            window.onload = function() {{
-                document.getElementById('paystar_form').submit();
-            }};
-        </script>
-    </head>
-    <body>
-        <div class="redirect-card">
-            <div class="spinner-border mb-4" role="status"></div>
-            <h1 class="h4 mb-3 fw-bold">در حال انتقال به درگاه پرداخت شاپرک...</h1>
-            <p class="mb-4 text-secondary" style="font-size: 15px; line-height: 1.8;">
-                لطفاً شکیبا باشید. در صورتی که مرورگر شما به طور خودکار منتقل نشد، روی دکمه زیر کلیک کنید:
-            </p>
-            <!-- 🛠 FORCED ACTION URL TO CORE.PAYSTAR.CLICK FOR COMPLETE FIREWALL BYPASS -->
-            <form id="paystar_form" action="https://core.paystar.click/api/pardakht/payment" method="POST">
-                <input type="hidden" name="token" value="{token}" />
-                <button type="submit" class="btn btn-submit py-2 px-4 rounded-3 text-decoration-none">انتقال دستی به درگاه بانکی</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
+
 
 # ============================================================================
 # PAYSTAR GATEWAY CALLBACK & RESULT PAGES

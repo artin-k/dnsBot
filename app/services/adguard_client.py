@@ -5,14 +5,6 @@ import asyncio
 from typing import Any
 import aiohttp
 
-from core.security import (
-    AdGuardAPIError,
-    AdGuardError,
-    AdGuardNetworkError,
-    sanitize_network_target,
-    validate_upstream_spec,
-)
-
 
 class AdGuardHomeClient:
     """Non-blocking, resilient API client for AdGuard Home."""

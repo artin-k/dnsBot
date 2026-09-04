@@ -58,11 +58,11 @@ def render_dns_delivery_text(
 🎮 <b>سرویس/بازی:</b> <b>{escape(service_display)}</b>
 🗺️ <b>سرور انتخابی:</b> <b>{escape(country_display)}</b>
 ━━━━━━━━━━━━━━━━━━━━━
-🔹 Primary: <code>{escape(ipv4_primary)}</code>
-🔹 Secondary: <code>{escape(ipv4_secondary)}</code>
 
 {adguard_block}
 
+🔹 Primary: <code>{escape(ipv4_primary)}</code>
+🔹 Secondary: <code>{escape(ipv4_secondary)}</code>
 ━━━━━━━━━━━━━━━━━━━━━
 📌 <b>راهنمای ثبت IP:</b>
 1️⃣ ابتدا موبایل و کنسول را به یک شبکه اینترنت مشترک متصل کنید.

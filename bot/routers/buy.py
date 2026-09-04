@@ -369,7 +369,7 @@ async def handle_manual_ip_callback(callback: CallbackQuery, state: FSMContext) 
     device_id = callback.data.split(":")[1]
     await state.set_state(BuyStates.waiting_manual_ip)
     await state.update_data(device_id=device_id)
-    await callback.message.answer("🤖 لطفاً آدرس آی‌پی (IPv4) خود را ارسال کنید:\n\nمثال: `5.200.12.1`")
+    await callback.message.answer("لطفاً IP خود را وارد نمایید.\n برای مشاهده IP فعلی خود، روی لینک زیر کلیک کنید: \n\n  🌐 https://ipnumberia.com  \n\n ⚠️ نکته: حتماً VPN یا فیلترشکن خود را خاموش کنید و سپس IP نمایش‌داده‌شده را در بخش مربوطه وارد نمایید.")
 
 
 @router.message(BuyStates.waiting_manual_ip, F.text)
