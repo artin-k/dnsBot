@@ -53,24 +53,9 @@ def _resolve_admin_flag(user_or_is_admin: object, is_admin: bool | None) -> bool
 
 def buy_renew_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    # 🟢 Green success button
-    builder.button(
-        text="🔐 خرید اشتراک",
-        callback_data=MENU_BUY_CALLBACK,
-        style="success"
-    )
-    # 🔵 Blue primary button
-    builder.button(
-        text="💰 مشاهده تعرفه‌ها",
-        callback_data=MENU_TARIFFS_CALLBACK,
-        style="primary"
-    )
-    # 🔴 Red danger button
-    builder.button(
-        text=texts.BTN_BACK,
-        callback_data=MENU_MAIN_CALLBACK,
-        style="danger"
-    )
+    builder.button(text="🔐 خرید اشتراک", callback_data=MENU_BUY_CALLBACK)
+    builder.button(text="💰 مشاهده تعرفه‌ها", callback_data=MENU_TARIFFS_CALLBACK)
+    builder.button(text=texts.BTN_BACK, callback_data=MENU_MAIN_CALLBACK)
     builder.adjust(1)
     return builder.as_markup()
 

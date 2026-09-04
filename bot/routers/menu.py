@@ -107,7 +107,8 @@ async def route_main_menu_text(
     elif text == texts.BTN_ADMIN_PANEL:
         await _show_admin_panel_from_menu(message, session, settings)
     elif text == texts.BTN_BUY:
-        await menu_actions.show_buy_plans(message, session)
+        from bot.routers.buy import show_locations
+        await show_locations(message, state, session)
     elif text == texts.BTN_RENEW:
         await menu_actions.show_renewal_disabled(message, session)
     elif text in {texts.BTN_MY_SERVICES, "🛍 سرویس های من", "🛍 اشتراک‌های من و تغییر لوکیشن"}:
@@ -166,7 +167,8 @@ async def main_menu_callback(
         await menu_actions.show_account_dashboard(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_BUY_CALLBACK:
         await state.clear()
-        await menu_actions.show_buy_plans(callback.message, session)
+        from bot.routers.buy import show_locations
+        await show_locations(callback, state, session)
     elif action == MENU_RENEW_CALLBACK:
         await state.clear()
         await menu_actions.show_renewal_disabled(callback.message, session)

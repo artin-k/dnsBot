@@ -22,7 +22,7 @@ def render_dns_delivery_text(
     country_display: str = "پیش‌فرض",
     title_prefix: str = "✅ <b>اشتراک DNS شما با موفقیت فعال شد!</b>",
 ) -> str:
-    """Single Source of Truth for all DNS delivery/purchase/location messages."""
+    """Renders the clean DNS delivery card with DNS at the top and instructions at the bottom."""
     settings = get_settings()
 
     # Format Shamsi Expiration
@@ -34,7 +34,7 @@ def render_dns_delivery_text(
             tehran_expire = expire_at.astimezone(ZoneInfo("Asia/Tehran"))
             expire_str = jdatetime.datetime.fromgregorian(
                 datetime=tehran_expire.replace(tzinfo=None)
-            ).strftime("%Y/%m/%d — %H:%M:%S")
+            ).strftime("%Y/%m/%d - %H:%M:%S")
         except Exception:
             expire_str = expire_at.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -53,31 +53,22 @@ def render_dns_delivery_text(
 
     return f"""{title_prefix}
 
-📋 <b>اطلاعات اشتراک:</b>
-🔹 <b>تاریخ انقضاء:</b> <code>{escape(expire_str)}</code>
-🔷 <b>زمان باقی‌مانده:</b> <b>{escape(duration_text)}</b>
-🎮 <b>سرویس انتخابی:</b> <code>{escape(service_display)}</code>
-🗺️ <b>سرور لوکیشن:</b> <b>{escape(country_display)}</b>
+🔹 <b>تاریخ انقضاء پلن:</b> <code>{escape(expire_str)}</code>
+🔷 <b>زمان باقی‌مانده:</b> {escape(duration_text)}
+🎮 <b>سرویس/بازی:</b> <b>{escape(service_display)}</b>
+🗺️ <b>سرور انتخابی:</b> <b>{escape(country_display)}</b>
 ━━━━━━━━━━━━━━━━━━━━━
-🎮 <b>دی‌ان‌اس های  گیمینگ :</b>
-
-{adguard_block}
-
-
 🔹 Primary: <code>{escape(ipv4_primary)}</code>
 🔹 Secondary: <code>{escape(ipv4_secondary)}</code>
 
+{adguard_block}
 
 ━━━━━━━━━━━━━━━━━━━━━
-<blockquote>📋 <b>مراحل فعال‌سازی (بسیار مهم):</b>
-
-1️⃣ <b>تنظیم DNS:</b> آدرس‌های بالا را در دستگاه خود وارد کنید (Control D برای پینگ گیمینگ و AdGuard برای وب‌گردی و حذف تبلیغات).
-2️⃣ <b>شبکه مشترک:</b> موبایل و سیستم/کنسول را به یک مودم یا وای‌فای مشترک متصل کنید.
-3️⃣ <b>خاموشی VPN:</b> فیلترشکن و پروکسی تلگرام خود را کاملاً خاموش کنید.
-4️⃣ <b>ثبت آی‌پی:</b> روی دکمه سبز رنگ <b>«ثبت آی‌پی اتوماتیک»</b> زیر کلیک کنید.
-
-💡 <i>نکته: شما می‌توانید لوکیشن سرور را بعد از خرید به تعداد نامحدود از بخش «اشتراک‌های من» تغییر دهید.</i>
-⚠️ <i>در صورت عدم ثبت آی‌پی بدون فیلترشکن، دسترسی به DNS فعال نخواهد شد.</i></blockquote>"""
+📌 <b>راهنمای ثبت IP:</b>
+1️⃣ ابتدا موبایل و کنسول را به یک شبکه اینترنت مشترک متصل کنید.
+2️⃣ سپس، در حالی که VPN یا فیلترشکن خاموش است، روی گزینه «ثبت IP» کلیک کنید.
+✅ پس از ثبت موفق IP، DNS برای شما فعال خواهد شد.
+⚠️ <b>توجه:</b> تا زمانی که IP شما ثبت نشده باشد، امکان استفاده از DNSها وجود نخواهد داشت."""
 
 
 async def send_dns_delivery_card(
@@ -93,7 +84,7 @@ async def send_dns_delivery_card(
     country_display: str = "پیش‌فرض",
     delay_seconds: int = 7200,
 ) -> Message:
-    """One-line helper that renders text, attaches dynamic keyboard, and schedules auto-deletion."""
+    """One-line helper that renders text, attaches simple keyboard, and schedules auto-deletion."""
     from bot.routers.services import create_secure_ip_update_keyboard
 
     text = render_dns_delivery_text(

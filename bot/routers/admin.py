@@ -106,7 +106,7 @@ def _approved_message(
     duration_text = calculate_remaining_time_fa(target_expire)
     settings = get_settings()
 
-    agh_section = f"""🛡️ <b>دی‌ان‌اس ضدتبلیغ و امنیت (AdGuard Home):</b>
+    agh_section = f"""
 🔹 Primary: <code>{escape(settings.adguard_primary_dns or 'تنظیم نشده')}</code>
 🔹 Secondary: <code>{escape(settings.adguard_secondary_dns or 'تنظیم نشده')}</code>"""
     if settings.adguard_doh_url:
@@ -117,10 +117,8 @@ def _approved_message(
 🔹 <b>تاریخ انقضاء:</b> <code>{escape(expire_str)}</code>
 🔷 <b>زمان باقی‌مانده:</b> {escape(duration_text)}
 ━━━━━━━━━━━━━━━━━━━━━
-🎮 <b>دی‌ان‌اس گیمینگ و روتینگ (Control D):</b>
 🔹 Primary: <code>{escape(ipv4_primary)}</code>
 🔹 Secondary: <code>{escape(ipv4_secondary)}</code>
-📱 موبایل: <code>76.76.2.22</code>
 
 {agh_section}
 ━━━━━━━━━━━━━━━━━━━━━

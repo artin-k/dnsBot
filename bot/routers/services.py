@@ -89,7 +89,7 @@ def build_ip_registration_keyboard(
     support_username: str = "",
     video_link: str = "",
 ) -> InlineKeyboardMarkup:
-    """Builds IP registration keyboard with Telegram 9.4+ color styles."""
+    """Simple standard buttons for IP registration."""
     builder = InlineKeyboardBuilder()
 
     base_url = WEB_SERVER_BASE_URL.strip().rstrip("/")
@@ -99,21 +99,9 @@ def build_ip_registration_keyboard(
     dev_str = str(device_id or "unknown").strip()
     update_url = f"{base_url}/update-ip/{dev_str}"
 
-    builder.button(
-        text="✳️ ثبت آی‌پی اتوماتیک ✳️",
-        url=update_url,
-        style="success",
-    )
-    builder.button(
-        text="✳️ ثبت آی‌پی اتوماتیک ۲ (کمکی) ✳️",
-        url=update_url,
-        style="success",
-    )
-    builder.button(
-        text="🤖 ثبت آی‌پی دستی",
-        callback_data=f"manual_ip_reg:{dev_str}",
-        style="primary",
-    )
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=update_url)
+    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=update_url)
+    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{dev_str}")
 
     if support_username:
         clean_sup = support_username.removeprefix("@").strip()
@@ -125,7 +113,7 @@ def build_ip_registration_keyboard(
         if clean_vid:
             if not clean_vid.startswith(("http://", "https://")):
                 clean_vid = f"https://{clean_vid}"
-            builder.button(text="🎥 ویدیو آموزشی راهنما", url=clean_vid)
+            builder.button(text="🎥 ویدیو آموزشی", url=clean_vid)
 
     builder.adjust(1)
     return builder.as_markup()
@@ -161,26 +149,12 @@ async def create_secure_ip_update_keyboard(
 
 
 def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
-    """Active service management menu with stylized colored tiers."""
+    """Simple standard buttons for service management."""
     builder = InlineKeyboardBuilder()
-    builder.button(
-        text="🔗 لینک‌ها و آدرس‌های اتصال",
-        callback_data=f"manage_links:{service_id}",
-        style="primary",
-    )
-    builder.button(
-        text="🗺 تغییر لوکیشن سرور",
-        callback_data=f"change_default_loc_select:{service_id}",
-        style="primary",
-    )
-    builder.button(
-        text="📊 وضعیت زنده اتصال",
-        callback_data=f"manage_status:{service_id}",
-    )
-    builder.button(
-        text="🔙 بازگشت به لیست اشتراک‌ها",
-        callback_data="my_services_page:0",
-    )
+    builder.button(text="🔗 لینک‌های اتصال", callback_data=f"manage_links:{service_id}")
+    builder.button(text="🗺 تنظیمات لوکیشن سرور", callback_data=f"change_default_loc_select:{service_id}")
+    builder.button(text="📊 وضعیت سرویس", callback_data=f"manage_status:{service_id}")
+    builder.button(text="🔙 بازگشت به لیست", callback_data="my_services_page:0")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -190,7 +164,7 @@ async def _show_my_services_page(
     page: int,
     session: AsyncSession,
 ) -> None:
-    """Renders parsed services per page (sends ONE single message)."""
+    """Simple standard layout for My Services."""
     user_id = callback_or_message.from_user.id
     user = await UsersRepository(session).get_by_telegram_id(user_id)
     if not user:
@@ -236,12 +210,10 @@ async def _show_my_services_page(
                 InlineKeyboardButton(
                     text="✳️ ثبت آی‌پی سریع",
                     url=f"{WEB_SERVER_BASE_URL}/update-ip/{service.controld_device_id}",
-                    style="success",
                 ),
                 InlineKeyboardButton(
                     text="🛠 مدیریت",
                     callback_data=f"manage_service:{service.id}",
-                    style="primary",
                 ),
             )
         else:
@@ -249,7 +221,6 @@ async def _show_my_services_page(
                 InlineKeyboardButton(
                     text=f"🛒 تمدید اشتراک: {raw_name}",
                     callback_data="buy_back_to_plans",
-                    style="primary",
                 )
             )
 
@@ -261,7 +232,7 @@ async def _show_my_services_page(
     if nav_buttons:
         builder.row(*nav_buttons)
 
-    builder.row(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="buy_back_to_menu", style="danger"))
+    builder.row(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="buy_back_to_menu"))
 
     text_content = "\n".join(lines)
 
@@ -380,7 +351,7 @@ async def _show_default_loc_page(
     settings: Settings | None = None,
     session: AsyncSession | None = None,
 ) -> None:
-    """Renders location switcher highlighting active server between Germany & Turkey."""
+    """Simple location switcher between Germany & Turkey."""
     if isinstance(service_or_id, int):
         if session is None:
             from app.database import async_session_maker
@@ -401,38 +372,19 @@ async def _show_default_loc_page(
     is_germany_active = current_device == SLOT_CONFIGS[1]["device_id"]
     is_turkey_active = current_device == SLOT_CONFIGS[5]["device_id"]
 
-    # 🇩🇪 Germany Button (Slot 1)
-    if is_germany_active:
-        builder.button(
-            text="🟢 🇩🇪 آلمان (سرور فعال فعلی شما)",
-            callback_data=f"apply_def_loc:{service.id}:1",
-            style="success",
-        )
-    else:
-        builder.button(
-            text="🔄 🇩🇪 انتقال به آلمان (فرانکفورت)",
-            callback_data=f"apply_def_loc:{service.id}:1",
-            style="primary",
-        )
-
-    # 🇹🇷 Turkey Button (Slot 5)
-    if is_turkey_active:
-        builder.button(
-            text="🟢 🇹🇷 ترکیه (سرور فعال فعلی شما)",
-            callback_data=f"apply_def_loc:{service.id}:5",
-            style="success",
-        )
-    else:
-        builder.button(
-            text="🔄 🇹🇷 انتقال به ترکیه (استانبول)",
-            callback_data=f"apply_def_loc:{service.id}:5",
-            style="primary",
-        )
-
+    # Germany Button
+    builder.button(
+        text="🇩🇪 آلمان (فرانکفورت)" + (" (فعال)" if is_germany_active else ""),
+        callback_data=f"apply_def_loc:{service.id}:1",
+    )
+    # Turkey Button
+    builder.button(
+        text="🇹🇷 ترکیه (استانبول)" + (" (فعال)" if is_turkey_active else ""),
+        callback_data=f"apply_def_loc:{service.id}:5",
+    )
     builder.button(
         text="🔙 بازگشت به مدیریت",
         callback_data=f"manage_service:{service.id}",
-        style="danger",
     )
     builder.adjust(1)
 
@@ -449,13 +401,10 @@ async def _show_default_loc_page(
 👤 <b>نام دستگاه:</b> <code>{(service.username or '').split('|')[0]}</code>
 📌 <b>سرور فعال شما:</b> <b>{active_name}</b>
 
-<blockquote>💡 <b>راهنما:</b>
-• سرور فعال با رنگ سبز 🟢 مشخص شده است.
-• با کلیک روی سرور دیگر، دسترسی شما فوراً به کشور جدید منتقل شده و آدرس‌های DNS جدید برای شما ارسال می‌گردد.</blockquote>"""
+کشوری که می‌خواهید ترافیک شما به سرور آن متصل شود را انتخاب کنید:"""
 
     if callback.message:
         await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
-
 
 @router.callback_query(F.data.startswith("change_default_loc_select:"), StateFilter("*"))
 async def handle_change_default_loc_select(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
