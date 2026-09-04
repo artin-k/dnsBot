@@ -1,6 +1,6 @@
 # app/services/ip_manager.py
 from datetime import datetime, timezone
-from select import select
+from sqlalchemy import select  # <-- FIXED
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,15 +11,7 @@ from app.services.controld import ControlDService
 
 logger = structlog.get_logger(__name__)
 
-
 async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_ip: str) -> bool:
-    """
-    Surgically swaps and synchronizes a user's authorized IP across both Control D and AdGuard Home:
-    1. Deauthorizes old_ip from Control D endpoint and AdGuard Home ACL if old_ip != new_ip.
-    2. Authorizes clean_new_ip on Control D device endpoint.
-    3. Authorizes clean_new_ip on AdGuard Home allowed_clients list.
-    4. Commits service.authorized_ip = clean_new_ip to the local database.
-    """
     if not service:
         return False
 
@@ -70,6 +62,7 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
                     await adguard.deauthorize_client_ip(old_ip)
                 except Exception as exc:
                     logger.warning("adguard_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
+
     # 3. Authorize New IP on Control D
     controld_success = False
     try:
@@ -88,7 +81,6 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
             logger.info("authorizing_new_ip_adguard", service_id=service.id, new_ip=clean_new_ip)
             await adguard.allow_client_ip(clean_new_ip)
         except Exception as exc:
-            # Non-fatal: Don't break purchase if local AdGuard Home has an issue
             logger.warning("adguard_new_ip_auth_failed_non_fatal", service_id=service.id, error=str(exc))
 
     # 5. Commit updated IP to database
