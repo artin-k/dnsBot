@@ -1,5 +1,6 @@
 # app/services/ip_manager.py
 from datetime import datetime, timezone
+from select import select
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,21 +47,29 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
 
     # 2. Deauthorize Old IP if it exists and has changed
     if old_ip and old_ip != clean_new_ip:
-        # Deauthorize from Control D
-        try:
-            logger.info("deauthorizing_old_ip_controld", service_id=service.id, device_id=device_id, old_ip=old_ip)
-            await controld.deauthorize_ip(device_id, old_ip)
-        except Exception as exc:
-            logger.warning("controld_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
-
-        # Deauthorize from AdGuard Home
-        if adguard.is_configured():
+        # NEW CHECK: Are any other active users sharing the old IP?
+        active_shared_ip_stmt = select(VPNService).where(
+            VPNService.authorized_ip == old_ip,
+            VPNService.status == "active",
+            VPNService.id != service.id
+        ).limit(1)
+        has_active_sharers = (await session.execute(active_shared_ip_stmt)).scalars().first()
+        
+        if not has_active_sharers:
+            # Deauthorize from Control D
             try:
-                logger.info("deauthorizing_old_ip_adguard", service_id=service.id, old_ip=old_ip)
-                await adguard.deauthorize_client_ip(old_ip)
+                logger.info("deauthorizing_old_ip_controld", service_id=service.id, device_id=device_id, old_ip=old_ip)
+                await controld.deauthorize_ip(device_id, old_ip)
             except Exception as exc:
-                logger.warning("adguard_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
+                logger.warning("controld_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
 
+            # Deauthorize from AdGuard Home
+            if adguard.is_configured():
+                try:
+                    logger.info("deauthorizing_old_ip_adguard", service_id=service.id, old_ip=old_ip)
+                    await adguard.deauthorize_client_ip(old_ip)
+                except Exception as exc:
+                    logger.warning("adguard_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
     # 3. Authorize New IP on Control D
     controld_success = False
     try:

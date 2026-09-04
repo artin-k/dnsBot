@@ -65,37 +65,47 @@ async def cleanup_expired_dns_services(bot: Bot | None = None) -> int:
 
                     # Deauthorize IP from both Control D and AdGuard Home
                     if service.authorized_ip:
-                        logger.info(
-                            "deauthorizing_expired_ip",
-                            service_id=service.id,
-                            device_id=service.controld_device_id,
-                            ip=service.authorized_ip,
-                        )
+                        # NEW CHECK: Are any other active users sharing this IP?
+                        active_shared_ip_stmt = select(VPNService).where(
+                            VPNService.authorized_ip == service.authorized_ip,
+                            VPNService.status == VPNServiceStatus.ACTIVE.value,
+                            VPNService.id != service.id
+                        ).limit(1)
+                        has_active_sharers = (await session.execute(active_shared_ip_stmt)).scalars().first()
 
-                        # 1. Remove from Control D
-                        if service.controld_device_id:
-                            try:
-                                await cd_service.deauthorize_ip(
-                                    device_id=service.controld_device_id,
-                                    ip=service.authorized_ip,
-                                )
-                            except Exception as exc:
-                                logger.error(
-                                    "controld_ip_deauthorization_raised_exception",
-                                    service_id=service.id,
-                                    error=str(exc),
-                                )
+                        if has_active_sharers:
+                            logger.info("skipping_ip_deauth_due_to_active_sharers", ip=service.authorized_ip)
+                        else:
+                            logger.info(
+                                "deauthorizing_expired_ip",
+                                service_id=service.id,
+                                device_id=service.controld_device_id,
+                                ip=service.authorized_ip,
+                            )
+                            # 1. Remove from Control D
+                            if service.controld_device_id:
+                                try:
+                                    await cd_service.deauthorize_ip(
+                                        device_id=service.controld_device_id,
+                                        ip=service.authorized_ip,
+                                    )
+                                except Exception as exc:
+                                    logger.error(
+                                        "controld_ip_deauthorization_raised_exception",
+                                        service_id=service.id,
+                                        error=str(exc),
+                                    )
 
-                        # 2. Remove from AdGuard Home
-                        if adguard.is_configured():
-                            try:
-                                await adguard.deauthorize_client_ip(service.authorized_ip)
-                            except Exception as exc:
-                                logger.error(
-                                    "adguard_ip_deauthorization_raised_exception",
-                                    service_id=service.id,
-                                    error=str(exc),
-                                )
+                            # 2. Remove from AdGuard Home
+                            if adguard.is_configured():
+                                try:
+                                    await adguard.deauthorize_client_ip(service.authorized_ip)
+                                except Exception as exc:
+                                    logger.error(
+                                        "adguard_ip_deauthorization_raised_exception",
+                                        service_id=service.id,
+                                        error=str(exc),
+                                    )
 
                     # Update local database status
                     service.status = VPNServiceStatus.EXPIRED.value

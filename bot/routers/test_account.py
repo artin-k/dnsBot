@@ -187,7 +187,7 @@ async def handle_test_loc_selection(
     await session.commit()
     await state.clear()
 
-    # ✅ UNIFIED DUAL-DNS DELIVERY CARD FOR TEST ACCOUNT:
+    #  UNIFIED DUAL-DNS DELIVERY CARD FOR TEST ACCOUNT:
     from bot.utils.messages import send_dns_delivery_card
 
     await send_dns_delivery_card(

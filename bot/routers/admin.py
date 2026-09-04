@@ -203,6 +203,19 @@ async def admin_action_navigation(
         await callback.message.edit_text("⚙️ تنظیمات ربات:", reply_markup=bot_settings_keyboard())
         return
 
+    if action == "broadcast":
+        # Add your FSM broadcast state trigger here
+        await callback.message.edit_text("لطفاً پیام همگانی خود را ارسال کنید:")
+        return
+        
+    if action == "tutorials_admin":
+        await callback.message.answer("بخش مدیریت آموزش‌ها در حال ساخت است...")
+        return
+        
+    if action == "support_admin":
+        await callback.message.answer("بخش مدیریت پشتیبانی در حال ساخت است...")
+        return
+
     if action == "video_link_admin":
         link = await AppSettingsService(session).get_teaching_video_link()
         builder = InlineKeyboardBuilder()

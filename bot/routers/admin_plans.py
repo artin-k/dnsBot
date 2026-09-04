@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from html import escape
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -151,3 +151,61 @@ async def fsm_add_plan_price(message: Message, state: FSMContext) -> None:
         reply_markup=add_plan_confirm_keyboard(),
         parse_mode="HTML",
     )
+
+@router.callback_query(AdminActionCallback.filter(F.action == "save_add_plan"))
+async def confirm_add_plan(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    data = await state.get_data()
+    if not data:
+        await callback.answer("خطا: اطلاعات یافت نشد.", show_alert=True)
+        return
+        
+    repo = PlansRepository(session)
+    await repo.create(
+        title=data["title"],
+        description=data.get("description"),
+        duration_hours=data["duration_hours"],
+        volume_gb=0,
+        price=data["price"],
+        is_active=True,
+        sort_order=data.get("sort_order", 0)
+    )
+    await session.commit()
+    await state.clear()
+    
+    await callback.message.edit_text("✅ تعرفه جدید با موفقیت ذخیره شد.")
+    plans = await repo.list_all()
+    await callback.message.answer("📦 مدیریت تعرفه‌ها:", reply_markup=plans_management_keyboard(plans))
+
+@router.callback_query(AdminActionCallback.filter(F.action == "cancel_add_plan"))
+async def cancel_add_plan(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.edit_text("❌ عملیات افزودن تعرفه لغو شد.")
+
+@router.message(AdminEditPlanStates.value)
+async def fsm_edit_plan_value(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    data = await state.get_data()
+    plan_id = data["plan_id"]
+    field = data["field"]
+    validator = data["validator"]
+    
+    new_value = message.text.strip()
+    if validator == "positive_int" and not new_value.isdigit():
+        await message.answer("لطفاً یک عدد معتبر ارسال کنید:")
+        return
+        
+    if field == "description" and new_value == "-":
+        new_value = None
+    elif validator in ["positive_int", "int"]:
+        new_value = int(new_value)
+
+    repo = PlansRepository(session)
+    await repo.update(plan_id, **{field: new_value})
+    await session.commit()
+    await state.clear()
+    
+    refreshed = await repo.get(plan_id)
+    await message.answer("✅ بروزرسانی با موفقیت انجام شد.")
+    await message.answer(_format_plan_detail(refreshed), reply_markup=plan_detail_keyboard(refreshed), parse_mode="HTML")
+
+
+
