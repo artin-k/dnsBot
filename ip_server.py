@@ -970,21 +970,45 @@ async def paystar_redirect(token: str):
 # PAYSTAR GATEWAY CALLBACK
 # ============================================================================
 
-# ip_server.py & run_web_ip_updater.py
+# ============================================================================
+# PAYSTAR GATEWAY CALLBACK & RESULT PAGES
+# ============================================================================
+
+PAYSTAR_STATUS_MESSAGES = {
+    -1: "درخواست نامعتبر است (خطای داخلی یا ساختار ناقص داده‌ها).",
+    -2: "درگاه پرداخت فعال نیست یا اطلاعات احراز هویت (Gateway ID / Sign Key) نامعتبر است.",
+    -3: "آدرس آی‌پی سرور برای این درگاه پرداخت در پنل پی‌استار تعریف/مجاز نشده است.",
+    -4: "مبلغ ارسالی به درگاه نامعتبر است.",
+    -5: "تراکنش تکراری است یا قبلاً پردازش شده است.",
+    -6: "تراکنش در سیستم پی‌استار پیدا نشد.",
+    -7: "مهلت پرداخت به پایان رسیده و فاکتور منقضی شده است.",
+    -8: "شماره کارت واریزکننده مجاز نیست.",
+    -9: "مبلغ واریز شده با فاکتور سفارش مطابقت ندارد.",
+    -98: "پرداخت توسط کاربر لغو شد (انصراف در درگاه بانکی).",
+}
+
 
 @app.api_route("/paystar/callback", methods=["GET", "POST"], response_class=HTMLResponse)
 async def paystar_callback(request: Request):
-    """Bypasses 500 errors gracefully, logs callbacks, and confirms transactions [cite: 1]."""
+    """Handles Paystar gateway redirect callback with robust logging and validation."""
+    bot_user = await get_bot_username()
     try:
         if request.method.upper() == "POST":
             payload = await request.form()
         else:
             payload = request.query_params
 
+        # 🔍 Terminal Debug Log: inspect the exact response from Paystar
+        print("\n" + "=" * 50)
+        print(f"📥 PAYSTAR CALLBACK RECEIVED [{request.method}]")
+        for key, value in payload.items():
+            print(f"  {key}: {value}")
+        print("=" * 50 + "\n")
+
         try:
-            status = int(payload.get("status", 0))
+            status_code = int(payload.get("status", 0))
         except (TypeError, ValueError):
-            status = 0
+            status_code = 0
 
         order_id = str(payload.get("order_id", "")).strip()
         ref_num = str(payload.get("ref_num", "")).strip()
@@ -992,27 +1016,37 @@ async def paystar_callback(request: Request):
         tracking_code = str(payload.get("tracking_code", "")).strip()
 
         if not order_id or not ref_num:
-            return _failed_html("اطلاعات برگشتی درگاه ناقص است.")
+            return _failed_html("اطلاعات برگشتی درگاه ناقص است (کد رهگیری یا شماره مرجع دریافت نشد).", bot_username=bot_user)
 
         async with async_session_maker() as session:
             order = await OrdersRepository(session).get_by_tracking_code_with_details(order_id)
             payment = order.payment if order else None
 
             if order is None or payment is None or order.user is None or order.plan is None:
-                return _failed_html("سفارش مرتبط با این تراکنش پیدا نشد.")
+                return _failed_html(f"سفارش با کد پیگیری {order_id} در سیستم یافت نشد.", bot_username=bot_user)
 
+            # Idempotency check: if order was already marked completed
             if payment.status == PaymentStatus.APPROVED.value and order.status == OrderStatus.COMPLETED.value:
-                service_stmt = select(VPNService).options(joinedload(VPNService.plan)).where(VPNService.order_id == order.id).limit(1)
+                service_stmt = (
+                    select(VPNService)
+                    .options(joinedload(VPNService.plan))
+                    .where(VPNService.order_id == order.id)
+                    .limit(1)
+                )
                 service_res = await session.execute(service_stmt)
                 service = service_res.scalars().first()
                 if service is None:
-                    return _success_html("پرداخت این سفارش قبلاً ثبت شده است.")
+                    return _success_html("پرداخت این سفارش قبلاً با موفقیت تایید و ثبت شده است.", bot_username=bot_user)
                 context = await _build_paystar_context(order, service, settings)
                 return _render_paystar_success_html(order, payment, context)
 
-            if status != 1:
-                return _failed_html("پرداخت توسط کاربر لغو شد یا درگاه آن را ناموفق ثبت کرد.")
+            # Check if gateway returned a failure code
+            if status_code != 1:
+                reason = PAYSTAR_STATUS_MESSAGES.get(status_code, f"تراکنش ناموفق بود (کد وضعیت پی‌استار: {status_code}).")
+                logger.warning("paystar_gateway_failed", status=status_code, order_id=order_id, reason=reason)
+                return _failed_html(reason, bot_username=bot_user)
 
+            # Status is 1 -> verify transaction with Paystar API
             paystar = PaystarService()
             try:
                 is_verified = await paystar.verify_payment(
@@ -1023,11 +1057,12 @@ async def paystar_callback(request: Request):
                 )
             except Exception as exc:
                 logger.exception("paystar_verify_failed", order_id=order_id, error=str(exc))
-                return _failed_html("خطا در ارتباط با سرویس تایید درگاه پرداخت.")
+                return _failed_html("خطا در برقراری ارتباط با سرور شاپرک/پی‌استار جهت تایید نهایی.", bot_username=bot_user)
 
             if not is_verified:
-                return _failed_html("خطا در تایید اصالت تراکنش درگاه بانکی.")
+                return _failed_html("خطا در اعتبارسنجی تراکنش در شبکه بانکی (تراکنش تایید نشد).", bot_username=bot_user)
 
+            # Payment verified -> finalize order
             payment.method = "paystar"
             payment.ref_id = ref_num
             payment.authority = tracking_code or payment.authority
@@ -1036,24 +1071,35 @@ async def paystar_callback(request: Request):
             try:
                 await payment_service.approve_payment(payment.id)
             except PaymentAlreadyProcessedError:
-                service_stmt = select(VPNService).options(joinedload(VPNService.plan)).where(VPNService.order_id == order.id).limit(1)
+                service_stmt = (
+                    select(VPNService)
+                    .options(joinedload(VPNService.plan))
+                    .where(VPNService.order_id == order.id)
+                    .limit(1)
+                )
                 service_res = await session.execute(service_stmt)
                 service = service_res.scalars().first()
                 if service is None:
-                    return _success_html("پرداخت قبلاً ثبت شده است.")
+                    return _success_html("پرداخت قبلاً تایید و ثبت شده است.", bot_username=bot_user)
                 context = await _build_paystar_context(order, service, settings)
                 return _render_paystar_success_html(order, payment, context)
             except PaymentExpiredError:
-                return _failed_html("این سفارش منقضی شده است.")
+                return _failed_html("مهلت پرداخت این سفارش در ربات به پایان رسیده و منقضی شده است.", bot_username=bot_user)
             except PaymentApprovalError as exc:
                 logger.exception("paystar_approval_failed", order_id=order_id, error=str(exc))
-                return _failed_html("پرداخت تایید شد اما در ساخت سرویس خطا رخ داد.")
+                return _failed_html("پرداخت بانکی تایید شد، اما در فعال‌سازی سرویس خطایی رخ داد.", bot_username=bot_user)
 
-            service_stmt = select(VPNService).options(joinedload(VPNService.plan)).where(VPNService.order_id == order.id).limit(1)
+            # Load activated service
+            service_stmt = (
+                select(VPNService)
+                .options(joinedload(VPNService.plan))
+                .where(VPNService.order_id == order.id)
+                .limit(1)
+            )
             service_res = await session.execute(service_stmt)
             service = service_res.scalars().first()
             if service is None:
-                return _failed_html("سرویس پس از پرداخت پیدا نشد.")
+                return _failed_html("سرویس دی‌ان‌اس پس از پرداخت در سیستم یافت نشد.", bot_username=bot_user)
 
             try:
                 await _apply_purchase_route(order, service, settings)
@@ -1063,57 +1109,167 @@ async def paystar_callback(request: Request):
             context = await _build_paystar_context(order, service, settings)
             try:
                 await _send_paystar_success_message(order, payment, context)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("failed_to_send_paystar_telegram_message", error=str(exc))
 
             return _render_paystar_success_html(order, payment, context)
+
     except Exception as global_exc:
         logger.exception("global_unhandled_callback_exception")
-        return _failed_html(f"خطای داخلی سرور در تایید نهایی پرداخت: {str(global_exc)}")
+        return _failed_html(f"خطای غیرمنتظره سرور در ثبت نتیجه پرداخت: {str(global_exc)}", bot_username=bot_user)
 
-def _failed_html(reason: str) -> HTMLResponse:
-    html_content = f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>خطا در پرداخت</title>
-        <style>
-            body {{ font-family: Tahoma, Arial, sans-serif; background-color: #f4f6f9; text-align: center; padding: 50px; direction: rtl; }}
-            .card {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: inline-block; }}
-            h1 {{ color: #e74c3c; }}
-            p {{ color: #333; font-size: 18px; }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>❌ تراکنش ناموفق بود</h1>
-            <p>{escape(reason)}</p>
-            <p>مبلغ کسر شده (در صورت کسر وجه) طی ۷۲ ساعت به حساب شما بازخواهد گشت. لطفاً مجدداً در ربات تلاش کنید.</p>
+
+def _failed_html(reason: str, bot_username: str = "bot") -> HTMLResponse:
+    """Modern dark-themed failure card with action buttons."""
+    html_content = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>تراکنش ناموفق</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+        body {{
+            font-family: 'Vazirmatn', Tahoma, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }}
+        .card-box {{
+            background-color: #1e293b;
+            border: 1px solid #ef4444;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 10px 25px -5px rgba(239, 68, 68, 0.2);
+            max-width: 550px;
+            width: 100%;
+            text-align: center;
+        }}
+        .icon-box {{
+            width: 75px;
+            height: 75px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 38px;
+            background-color: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+            border: 2px solid rgba(239, 68, 68, 0.3);
+        }}
+        .reason-box {{
+            background-color: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: #f87171;
+            font-size: 15px;
+            line-height: 1.8;
+        }}
+        .btn-telegram {{
+            background-color: #3b82f6;
+            color: #ffffff;
+            font-weight: bold;
+            border: none;
+            transition: all 0.2s;
+        }}
+        .btn-telegram:hover {{
+            background-color: #2563eb;
+            color: #ffffff;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card-box">
+        <div class="icon-box">❌</div>
+        <h1 class="h4 mb-3 fw-bold text-danger">تراکنش ناموفق بود</h1>
+        <div class="reason-box mb-4">
+            {escape(reason)}
         </div>
-    </body>
-    </html>
-    """
+        <p class="text-secondary small mb-4">
+            در صورتی که مبلغی از حساب شما کسر شده باشد، معمولاً ظرف مدت چند ساعت و نهایتاً ۷۲ ساعت از طرف بانک مبدا به حساب شما بازگردانده می‌شود.
+        </p>
+        <a href="https://t.me/{escape(bot_username)}" class="btn btn-telegram py-2 px-4 rounded-3 text-decoration-none w-100">
+            بازگشت به ربات تلگرام
+        </a>
+    </div>
+</body>
+</html>"""
     return HTMLResponse(content=html_content, status_code=200)
 
 
-def _success_html(message: str) -> HTMLResponse:
-    html_content = f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>اقدام با موفقیت</title>
-        <style>
-            body {{ font-family: Tahoma, Arial, sans-serif; background-color: #f4f6f9; text-align: center; padding: 50px; direction: rtl; }}
-            .card {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: inline-block; }}
-            h1 {{ color: #2ecc71; }}
-            p {{ color: #333; font-size: 18px; }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>✅ {escape(message)}</h1>
-        </div>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
+def _success_html(message: str, bot_username: str = "bot") -> HTMLResponse:
+    """Modern dark-themed success notification card."""
+    html_content = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>تراکنش موفق</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+        body {{
+            font-family: 'Vazirmatn', Tahoma, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }}
+        .card-box {{
+            background-color: #1e293b;
+            border: 1px solid #10b981;
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.2);
+            max-width: 550px;
+            width: 100%;
+            text-align: center;
+        }}
+        .icon-box {{
+            width: 75px;
+            height: 75px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 38px;
+            background-color: rgba(16, 185, 129, 0.1);
+            color: #10b981;
+            border: 2px solid rgba(16, 185, 129, 0.3);
+        }}
+        .btn-telegram {{
+            background-color: #10b981;
+            color: #ffffff;
+            font-weight: bold;
+            border: none;
+            transition: all 0.2s;
+        }}
+        .btn-telegram:hover {{
+            background-color: #059669;
+            color: #ffffff;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card-box">
+        <div class="icon-box">✅</div>
+        <h1 class="h4 mb-3 fw-bold text-success">پرداخت با موفقیت انجام شد</h1>
+        <p class="text-light mb-4">{escape(message)}</p>
+        <a href="https://t.me/{escape(bot_username)}" class="btn btn-telegram py-2 px-4 rounded-3 text-decoration-none w-100">
+            بازگشت به ربات تلگرام
+        </a>
+    </div>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content, status_code=200)

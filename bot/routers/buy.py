@@ -185,7 +185,7 @@ async def handle_location_selected(callback: CallbackQuery, session: AsyncSessio
     builder = InlineKeyboardBuilder()
     # 🟢 Green: Fastest instant payment options
     builder.button(
-        text="💳 پرداخت آنلاین (شاپرک)",
+        text="💳 پرداخت آنلاین",
         callback_data=f"pay_online:{plan.id}:{slot_num}",
         style="success"
     )
