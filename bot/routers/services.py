@@ -508,4 +508,18 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     from bot.utils.messages import render_dns_delivery_text
 
     success_text = render_dns_delivery_text(
-        expire_at=servi
+        expire_at=service.expire_at,
+        ipv4_primary=ipv4_primary,
+        ipv4_secondary=ipv4_secondary,
+        service_display="کل ترافیک اینترنت (Default)",
+        country_display=new_pop_name,
+        title_prefix="✅ <b>لوکیشن اشتراک با موفقیت تغییر یافت!</b>",
+    )
+
+    markup = await create_secure_ip_update_keyboard(session, service.id)
+    sent_msg = await callback.message.answer(
+        text=success_text,
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
+    await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
