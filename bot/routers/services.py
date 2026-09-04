@@ -346,10 +346,10 @@ async def _show_my_services_page(callback_or_message: CallbackQuery | Message, p
     else:
         await callback_or_message.answer(text_content, reply_markup=builder.as_markup(), parse_mode="HTML")
 
-@router.message(F.text == texts.BTN_MY_SERVICES)
-async def my_services(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    await state.clear()
-    await _show_my_services_page(message, page=0, session=session)
+# @router.message(F.text == texts.BTN_MY_SERVICES)
+# async def my_services(message: Message, state: FSMContext, session: AsyncSession) -> None:
+#     await state.clear()
+#     await _show_my_services_page(message, page=0, session=session)
 
 
 @router.callback_query(F.data.startswith("my_services_page:"), StateFilter("*"))
