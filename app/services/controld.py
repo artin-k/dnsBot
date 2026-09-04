@@ -700,12 +700,19 @@ class ControlDService:
                 logger.error("failed_to_fetch_active_ips_from_controld", device_id=device_id, error=str(e))
                 return []
 
-    async def create_dns_device(self, tg_user_id: int, profile_id: str, duration_hours: int, device_type: str = "mobile", device_name: str | None = None) -> dict | None:
+    async def create_dns_device(
+        self, 
+        tg_user_id: int, 
+        profile_id: str, 
+        duration_hours: int = 720,  # <-- Added default = 720
+        device_type: str = "mobile", 
+        device_name: str | None = None
+    ) -> dict | None:
         return await create_dns_device(
-            tg_user_id=tg_user_id, 
-            profile_id=profile_id, 
-            duration_hours=duration_hours, 
-            device_type=device_type, 
+            tg_user_id=tg_user_id,
+            profile_id=profile_id,
+            duration_hours=duration_hours,
+            device_type=device_type,
             device_name=device_name
         )
 
@@ -745,6 +752,17 @@ class ControlDService:
 # ============================================================================
 # GLOBAL BACKWARD COMPATIBLE WRAPPERS (FOR LOCAL MODULE CALLS)
 # ============================================================================
+
+async def get_controld_device_ips(device_id: str, settings=None) -> dict:
+    """Returns the primary and secondary DNS IPs for a given slot device ID."""
+    from app.config import SLOT_CONFIGS
+    for config in SLOT_CONFIGS.values():
+        if config.get("device_id") == device_id:
+            return {
+                "ipv4_primary": config["dns_primary"],
+                "ipv4_secondary": config["dns_secondary"]
+            }
+    return {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
 
 async def authorize_ip(device_id: str, ip: str) -> bool:
     """Global module-level wrapper to prevent circular import crashes [cite: services.py]."""

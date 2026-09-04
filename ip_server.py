@@ -32,6 +32,7 @@ from app.services.paystar import PaystarService
 from app.services.ip_manager import update_device_ip_safe
 from bot.loader import create_bot
 from bot.utils.auto_clean import schedule_message_deletion
+from app.services.vpn_detector import verify_user_ip
 
 app = FastAPI(title="Control D Auto-IP & Payment Gateway")
 settings = get_settings()
@@ -109,6 +110,67 @@ async def get_controld_device_ips(device_id: str, settings_obj) -> dict:
         "ipv4_secondary": "76.76.10.162",
     }
 
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard(request: Request, uid: int = Query(...), token: str = Query(...)):
+    if not verify_admin_web_token(uid, token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="دسترسی غیرمجاز است. لطفا از طریق دکمه مدیریت ربات تلگرام وارد شوید."
+        )
+
+    async with async_session_maker() as session:
+        # Fetch services with their associated user joined cleanly
+        stmt = (
+            select(VPNService)
+            .options(joinedload(VPNService.user))
+            .order_by(VPNService.created_at.desc())
+        )
+        res = await session.execute(stmt)
+        services = res.scalars().unique().all()
+
+        dashboard_data = []
+        for service in services:
+            expire_at = service.expire_at
+            shamsi_expire = "-"
+            if expire_at:
+                if expire_at.tzinfo is None:
+                    expire_at = expire_at.replace(tzinfo=timezone.utc)
+                tehran_tz = ZoneInfo("Asia/Tehran")
+                tehran_expire = expire_at.astimezone(tehran_tz)
+                try:
+                    naive_tehran = tehran_expire.replace(tzinfo=None)
+                    shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M")
+                except Exception:
+                    shamsi_expire = tehran_expire.strftime("%Y-%m-%d %H:%M")
+
+            slot_name = "ثبت نشده / Unmapped"
+            for _num, config in SLOT_CONFIGS.items():
+                if config["device_id"] == service.controld_device_id:
+                    slot_name = config["name"]
+                    break
+
+            user = service.user
+            dashboard_data.append({
+                "telegram_id": user.telegram_id if user else 0,
+                "telegram_username": user.telegram_username if user and user.telegram_username else "-",
+                "first_name": user.first_name if user and user.first_name else "-",
+                "service_id": service.id,
+                "controld_device_id": service.controld_device_id or "",
+                "authorized_ip": service.authorized_ip or "ثبت نشده (No IP)",
+                "expire_at_shamsi": shamsi_expire,
+                "status": "فعال" if service.status == "active" else "منقضی شده",
+                "slot_name": slot_name
+            })
+
+    return templates.TemplateResponse(
+        "admin.html", 
+        {
+            "request": request, 
+            "users": dashboard_data, 
+            "uid": uid, 
+            "token": token
+        }
+    )
 
 def verify_admin_web_token(uid: int, token: str) -> bool:
     admin_ids = set(settings.admin_ids)
@@ -131,6 +193,103 @@ async def _apply_purchase_route(order: Order, service: VPNService, settings_obj)
     """No-op helper under the Static 5-Server Slot Model to prevent unneeded API requests [cite: 1]."""
     _username, service_pk, slot_num_str = _parse_purchase_metadata(order.custom_username)
     return service_pk, slot_num_str
+
+def _render_vpn_detected_html(
+    title: str,
+    heading: str,
+    message: str,
+    detected_ip: str,
+    country: str,
+    isp: str,
+    bot_username: str = "bot"
+) -> HTMLResponse:
+    """Renders a sleek warning page when a VPN or foreign proxy is detected."""
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="fa" dir="rtl">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>{escape(title)}</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+            body {{
+                font-family: 'Vazirmatn', Tahoma, sans-serif;
+                background-color: #0f172a;
+                color: #f8fafc;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+            }}
+            .theme-card {{
+                background-color: #1e293b;
+                border: 1px solid #eab308;
+                border-radius: 16px;
+                padding: 36px;
+                box-shadow: 0 10px 25px -5px rgba(234, 179, 8, 0.2);
+                max-width: 550px;
+                width: 100%;
+                text-align: center;
+            }}
+            .warning-icon {{
+                width: 75px;
+                height: 75px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 20px;
+                font-size: 38px;
+                background-color: rgba(234, 179, 8, 0.1);
+                color: #eab308;
+                border: 2px solid rgba(234, 179, 8, 0.3);
+            }}
+            .info-ip {{
+                background-color: #0f172a;
+                border: 1px solid #334155;
+                font-family: monospace;
+                font-size: 1.15rem;
+                color: #f59e0b;
+            }}
+            .btn-retry {{
+                background-color: #eab308;
+                color: #0f172a;
+                border: none;
+                font-weight: bold;
+            }}
+            .btn-retry:hover {{
+                background-color: #ca8a04;
+                color: #0f172a;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="theme-card">
+            <div class="warning-icon">⚠️</div>
+            <h1 class="h4 mb-3 fw-bold text-warning">{escape(heading)}</h1>
+            <p class="mb-3 text-light" style="font-size: 15px; line-height: 1.8;">{escape(message)}</p>
+            
+            <div class="info-ip py-2 px-3 rounded-3 mb-3 text-center">
+                آی‌پی شناسایی‌شده: <b>{escape(detected_ip)}</b><br>
+                <small class="text-secondary">کشور: {escape(country)} | شبکه: {escape(isp)}</small>
+            </div>
+
+            <p class="text-secondary small mb-4">
+                برای فعال شدن دی‌ان‌اس، باید آی‌پی واقعی مودم یا اینترنت شما ثبت شود.<br>
+                <b>۱. فیلترشکن و پروکسی تلگرام را خاموش کنید.</b><br>
+                <b>۲. دکمه زیر را برای بررسی مجدد بزنید:</b>
+            </p>
+
+            <button onclick="location.reload()" class="btn btn-retry py-2 px-4 rounded-3 w-100 mb-2">🔄 فیلترشکن را خاموش کردم، بررسی مجدد</button>
+            <a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">بازگشت به ربات تلگرام</a>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content, status_code=200)
 
 
 # ip_server.py & run_web_ip_updater.py
@@ -227,62 +386,30 @@ def _render_paystar_success_html(order: Order, payment: Payment, context: dict[s
     return HTMLResponse(content=html_content)
 
 
-# ip_server.py & run_web_ip_updater.py
+# In ip_server.py:
+from bot.utils.messages import send_dns_delivery_card
 
 async def _send_paystar_success_message(order: Order, payment: Payment, context: dict[str, str]) -> None:
-    """Sends the checkout completion notification with secure direct update-ip buttons [cite: 1]."""
-    from bot.routers.services import create_secure_ip_update_keyboard
-    
+    """Sends checkout completion notification using the unified message delivery builder."""
     async with async_session_maker() as session:
-        # 🛠 FIX: Directly query VPNService to avoid SQLAlchemy DetachedInstanceError [cite: 1.2.2]
         stmt = select(VPNService).where(VPNService.order_id == order.id).limit(1)
         res = await session.execute(stmt)
         vpn_service = res.scalars().first()
-
-        if vpn_service is None:
-            logger.error("send_paystar_success_message_failed_missing_service", order_id=order.id)
+        if not vpn_service:
             return
 
-        # Safely generate the inline keyboard
-        markup = await create_secure_ip_update_keyboard(session, vpn_service.id)
-
-    # ip_server.py & run_web_ip_updater.py
-# (Inside _send_paystar_success_message)
-
-    success_telegram_text = f"""✅ <b>پرداخت آنلاین شما تایید و اشتراک فعال شد!</b>
-
-🔹 تاریخ انقضاء پلن : <code>{escape(context["expire_str"])}</code>
-🔷 زمان باقی‌مانده: {escape(context["duration_text"])}
-🎮 برنامه/بازی: <b>{escape(context["service_display"])}</b>
-🗺 سرور (کشور) فعلی: <b>{escape(context["country_display"])}</b>
-
-دی ان اس اختصاصی شما :
-🔷 Primary : <code>{escape(context["ipv4_primary"])}</code>
-🔷 Secondary : <code>{escape(context["ipv4_secondary"])}</code>
-
-
-
-
-مراحل ثبت آی‌پی (بسیار مهم):
-1️⃣ : دستگاه خود (موبایل یا لپ‌تاپ) را به همان مودم/روتری وصل کنید که کنسول یا سیستم بازی شما به آن متصل است.
-2️⃣ : فیلترشکن و پروکسی تلگرام خود را خاموش کرده و مجدد روی دکمه ثبت آیپی زیر کلیک کنید تا آی‌پی مودم شما ثبت شود.
-❌ در صورت عدم ثبت آی‌پی روی مودم/روتر مشترک، دی‌ان‌اس‌ها متصل نخواهند شد ❌
-
-⚠️ در صورت عدم اتصال دی‌ان‌اس‌ها، لطفاً وضعیت اتصال اینترنت خود را شخصاً بررسی کنید.
-
-📌 برای تغییر لوکیشن بازی به لوکیشن کشور دلخواه خود: به بخش «اشتراک‌های من» بروید، روی «مدیریت» کلیک کنید و لوکیشن دلخواه را تنظیم کنید."""    
-    try:
-        sent_msg = await bot.send_message(
+        await send_dns_delivery_card(
+            bot=bot,
             chat_id=order.user.telegram_id,
-            text=success_telegram_text,
-            reply_markup=markup,
-            parse_mode="HTML",
+            session=session,
+            service=vpn_service,
+            title_prefix="✅ <b>پرداخت آنلاین تایید و اشتراک فعال شد!</b>",
+            ipv4_primary=context.get("ipv4_primary", "76.76.2.162"),
+            ipv4_secondary=context.get("ipv4_secondary", "76.76.10.162"),
+            service_display=context.get("service_display", "کل ترافیک اینترنت (Default)"),
+            country_display=context.get("country_display", "پیش‌فرض"),
+            delay_seconds=7200,
         )
-        # Schedule deletion after 2 hours
-        await schedule_message_deletion(bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
-    except Exception as exc:
-        logger.warning("paystar_notification_failed", order_id=order.id, payment_id=payment.id, error=str(exc))
-
 # ============================================================================
 # AUTO-REGISTRATION ENDPOINT & HELPERS
 # ============================================================================
@@ -426,6 +553,18 @@ async def capture_ip(request: Request, token: str):
             bot_username=bot_user
         )
 
+    ip_check = await verify_user_ip(client_ip)
+    if ip_check.is_vpn:
+        return _render_vpn_detected_html(
+            title="فیلترشکن روشن است",
+            heading="⚠️ فیلترشکن شما روشن است!",
+            message=ip_check.error_message or "آی‌پی سرور فیلترشکن شناسایی شد. لطفاً ابتدا فیلترشکن را خاموش کنید.",
+            detected_ip=client_ip,
+            country=ip_check.country,
+            isp=ip_check.isp,
+            bot_username=bot_user,
+        )
+
     async with async_session_maker() as session:
         # 2. Database validation query
         stmt = (
@@ -519,22 +658,38 @@ async def capture_ip(request: Request, token: str):
             )
 
 
-# ip_server.py & run_web_ip_updater.py
-
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse)
 async def update_device_ip(request: Request, device_id: str):
-    """Detects, registers, and synchronizes client IP with timezone-safe Python verification."""
+    """Detects, registers, and synchronizes client IP across Control D and AdGuard Home."""
     client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
     if client_ip and "," in client_ip:
         client_ip = client_ip.split(",")[0].strip()
 
     dev_id = device_id.strip()
-    token = settings.controld_api_token
-    if not token:
-        return "<h3>خطا: توکن API در تنظیمات یافت نشد.</h3>"
-
     bot_user = await get_bot_username()
     now = datetime.now(timezone.utc)
+
+    # Basic IPv4 format validation
+    if not client_ip or not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", client_ip):
+        return _render_capture_ip_html(
+            title="خطا در ثبت آی‌پی",
+            heading="آی‌پی شناسایی نشد",
+            message="آدرس آی‌پی عمومی شما به درستی شناسایی نشد. لطفاً اتصال اینترنت خود را بررسی کرده و فیلترشکن را خاموش کنید.",
+            is_success=False,
+            bot_username=bot_user
+        )
+
+    ip_check = await verify_user_ip(client_ip)
+    if ip_check.is_vpn:
+        return _render_vpn_detected_html(
+            title="فیلترشکن روشن است",
+            heading="⚠️ فیلترشکن شما روشن است!",
+            message=ip_check.error_message or "آی‌پی سرور فیلترشکن شناسایی شد. لطفاً ابتدا فیلترشکن را خاموش کنید.",
+            detected_ip=client_ip,
+            country=ip_check.country,
+            isp=ip_check.isp,
+            bot_username=bot_user,
+        )
 
     async with async_session_maker() as db_session:
         # Fetch all non-disabled subscriptions for this slot ordered newest first
@@ -569,73 +724,23 @@ async def update_device_ip(request: Request, device_id: str):
                 bot_username=bot_user
             )
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "accept": "application/json"
-    }
+        # ✅ DUAL SYNC: Atomically updates Control D + AdGuard Home ACL + Database
+        success = await update_device_ip_safe(db_session, active_service, client_ip)
 
-    import os
-    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
-    if org_id:
-        headers["X-Force-Org-Id"] = org_id
-
-    async with httpx.AsyncClient() as client:
-        access_url = "https://api.controld.com/access"
-        payload = {
-            "ips": [client_ip],
-            "ips[]": [client_ip],
-            "name": "Auto Registered"
-        }
-
-        try:
-            response = await client.post(f"{access_url}?device_id={dev_id}", json=payload, headers=headers, timeout=10.0)
-            if response.status_code in (200, 201):
-                try:
-                    async with async_session_maker() as db_session:
-                        stmt = (
-                            select(VPNService)
-                            .where(
-                                VPNService.controld_device_id == dev_id,
-                                VPNService.status != "disabled"
-                            )
-                            .order_by(VPNService.expire_at.desc())
-                        )
-                        res = await db_session.execute(stmt)
-                        svc_list = list(res.scalars().all())
-                        for s in svc_list:
-                            exp = s.expire_at
-                            if exp and exp.tzinfo is None:
-                                exp = exp.replace(tzinfo=timezone.utc)
-                            if exp and exp > now:
-                                s.authorized_ip = client_ip
-                                await db_session.commit()
-                                logger.info("web_updater_synced_registered_ip_to_db", device_id=dev_id, ip=client_ip)
-                                break
-                except Exception as db_exc:
-                    logger.error("web_updater_failed_to_sync_registered_ip_to_db", device_id=dev_id, error=str(db_exc))
-
-                return _render_capture_ip_html(
-                    title="ثبت آی‌پی موفقیت‌آمیز",
-                    heading="✅ ثبت آی‌پی با موفقیت انجام شد!",
-                    message="آی‌پی فعلی دستگاه شما با موفقیت در پروفایل امنیتی ثبت شد. اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود روی این دستگاه استفاده کنید.",
-                    is_success=True,
-                    client_ip=client_ip,
-                    bot_username=bot_user
-                )
-            else:
-                return _render_capture_ip_html(
-                    title="خطا در ثبت آی‌پی",
-                    heading="خطای سرور دی‌ان‌اس",
-                    message=f"خطا در ثبت آی‌پی در پنل Control D: {response.text}",
-                    is_success=False,
-                    bot_username=bot_user
-                )
-        except Exception as e:
+        if success:
+            return _render_capture_ip_html(
+                title="ثبت آی‌پی موفقیت‌آمیز",
+                heading="✅ ثبت آی‌پی با موفقیت انجام شد!",
+                message="آی‌پی فعلی دستگاه شما با موفقیت برای هر دو سرویس Control D و AdGuard Home ثبت شد. اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود روی این دستگاه استفاده کنید.",
+                is_success=True,
+                client_ip=client_ip,
+                bot_username=bot_user
+            )
+        else:
             return _render_capture_ip_html(
                 title="خطا در ثبت آی‌پی",
                 heading="خطای ارتباطی",
-                message=f"خطا در برقراری ارتباط با سرور: {str(e)}",
+                message="خطا در برقراری ارتباط با سرور دی‌ان‌اس. لطفاً چند لحظه بعد مجدداً تلاش کنید.",
                 is_success=False,
                 bot_username=bot_user
             )
@@ -714,8 +819,15 @@ async def admin_delete_ip(
     if not ip or ip == "ثبت نشده (No IP)":
         return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=status.HTTP_303_SEE_OTHER)
 
+    # 1. Remove from Control D
     controld = ControlDService(settings)
     await controld.deauthorize_ip(device_id, ip)
+
+    # 2. Remove from AdGuard Home
+    from app.services.adguard import AdGuardHomeService
+    adguard = AdGuardHomeService(settings)
+    if adguard.is_configured():
+        await adguard.deauthorize_client_ip(ip)
 
     async with async_session_maker() as session:
         stmt = select(VPNService).where(VPNService.id == service_id).limit(1)

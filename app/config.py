@@ -1,8 +1,9 @@
 # app/config.py
 from functools import lru_cache
+import warnings
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
-import warnings
+
 
 class Settings(BaseSettings):
     controld_api_token: str = Field(default="", alias="CONTROLD_API_TOKEN")
@@ -37,7 +38,15 @@ class Settings(BaseSettings):
     controld_device_3: str = Field(default="", alias="CONTROLD_DEVICE_3")
     controld_device_4: str = Field(default="", alias="CONTROLD_DEVICE_4")
     controld_device_5: str = Field(default="", alias="CONTROLD_DEVICE_5")
-        
+
+    # --- AdGuard Home Settings ---
+    adguard_url: str = Field(default="http://127.0.0.1:80", alias="ADGUARD_URL")
+    adguard_username: str = Field(default="", alias="ADGUARD_USERNAME")
+    adguard_password: str = Field(default="", alias="ADGUARD_PASSWORD")
+    adguard_primary_dns: str = Field(default="1.1.1.1", alias="ADGUARD_PRIMARY_DNS")
+    adguard_secondary_dns: str = Field(default="1.0.0.1", alias="ADGUARD_SECONDARY_DNS")
+    adguard_doh_url: str = Field(default="", alias="ADGUARD_DOH_URL")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -189,20 +198,19 @@ def _validate_settings(settings: Settings) -> None:
         errors.append("❌ DATABASE_URL is not set or empty")
     elif not settings.database_url.startswith(("postgresql://", "postgresql+asyncpg://")):
         errors.append("❌ DATABASE_URL must be PostgreSQL")
-    
+
     if settings.fsm_storage == "redis" and not settings.redis_url:
         errors.append("❌ FSM_STORAGE=redis configured but REDIS_URL is empty")
-    
+
     if settings.fsm_storage == "memory":
         warnings.warn(
             "⚠️ FSM_STORAGE=memory: Conversation state will be lost on bot restart.",
             RuntimeWarning,
-            stacklevel=3
+            stacklevel=3,
         )
     if errors:
         raise ValueError("Configuration validation failed:\n\n" + "\n".join(errors))
-    
-# app/config.py
+
 
 SLOT_CONFIGS = {
     1: {
@@ -234,5 +242,5 @@ SLOT_CONFIGS = {
         "device_id": get_settings().controld_device_5,
         "dns_primary": "76.76.2.175",
         "dns_secondary": "76.76.10.175",
-    }
+    },
 }

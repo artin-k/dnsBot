@@ -1,136 +1,142 @@
-from __future__ import annotations
-
+# app/utils/formatting.py
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_DOWN
-from html import escape
 from zoneinfo import ZoneInfo
-
-from app.models import (
-    AffiliateCommissionStatus,
-    OrderKind,
-    OrderStatus,
-    User,
-    VPNServiceStatus,
-    WalletTransactionStatus,
-    WalletTransactionType,
-)
-from app.utils.money import format_money
-
-TEHRAN_TZ = ZoneInfo("Asia/Tehran")
-
-ORDER_STATUS_LABELS = {
-    OrderStatus.PENDING_USERNAME.value: "در انتظار نام کاربری",
-    OrderStatus.PENDING_PAYMENT.value: "در انتظار پرداخت",
-    OrderStatus.PAID.value: "پرداخت شده",
-    OrderStatus.CREATING_SERVICE.value: "در حال ساخت سرویس",
-    OrderStatus.COMPLETED.value: "تکمیل شده",
-    OrderStatus.WAITING_INVENTORY.value: "در انتظار شارژ موجودی",
-    OrderStatus.EXPIRED.value: "منقضی شده",
-    OrderStatus.CANCELLED.value: "لغو شده",
-    OrderStatus.FAILED.value: "ناموفق",
-}
-
-ORDER_TYPE_LABELS = {
-    OrderKind.PURCHASE.value: "خرید جدید",
-    OrderKind.RENEWAL.value: "تمدید",
-}
-
-SERVICE_STATUS_LABELS = {
-    VPNServiceStatus.ACTIVE.value: "فعال",
-    VPNServiceStatus.EXPIRED.value: "منقضی شده",
-    VPNServiceStatus.DISABLED.value: "غیرفعال",
-}
-
-WALLET_TRANSACTION_TYPE_LABELS = {
-    WalletTransactionType.TOPUP.value: "شارژ کیف پول",
-    WalletTransactionType.PURCHASE.value: "خرید اشتراک",
-    WalletTransactionType.RENEWAL.value: "تمدید سرویس",
-    WalletTransactionType.REFERRAL_REWARD.value: "پاداش زیرمجموعه‌گیری",
-    WalletTransactionType.ADMIN_ADJUSTMENT.value: "تنظیم دستی مدیریت",
-    WalletTransactionType.DISCOUNT.value: "تخفیف",
-    WalletTransactionType.WITHDRAWAL_REQUEST.value: "درخواست برداشت",
-    WalletTransactionType.WITHDRAWAL_PAID.value: "برداشت پرداخت‌شده",
-    WalletTransactionType.WITHDRAWAL_REJECTED_REFUND.value: "بازگشت برداشت ردشده",
-}
-
-WALLET_TRANSACTION_STATUS_LABELS = {
-    WalletTransactionStatus.PENDING.value: "در انتظار تایید",
-    WalletTransactionStatus.APPROVED.value: "تایید شده",
-    WalletTransactionStatus.REJECTED.value: "رد شده",
-    WalletTransactionStatus.CANCELLED.value: "لغو شده",
-}
-
-COMMISSION_STATUS_LABELS = {
-    AffiliateCommissionStatus.PENDING.value: "در انتظار تایید",
-    AffiliateCommissionStatus.APPROVED.value: "تایید شده",
-    AffiliateCommissionStatus.PAID.value: "تسویه شده",
-    AffiliateCommissionStatus.CANCELLED.value: "لغو شده",
-    AffiliateCommissionStatus.REVERSED.value: "برگشت خورده",
-}
+import jdatetime
 
 
-def format_order_status_fa(status: str | None) -> str:
-    return ORDER_STATUS_LABELS.get(status or "", status or "-")
+def format_money(amount: int | float) -> str:
+    """Formats an integer to a string with comma separators."""
+    return f"{amount:,}"
 
 
-def format_order_type_fa(order_type: str | None) -> str:
-    return ORDER_TYPE_LABELS.get(order_type or OrderKind.PURCHASE.value, "خرید جدید")
+def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
+    """Calculates remaining time and returns a Persian string."""
+    if not expire_at:
+        return "۳۰ روز"
+
+    now = datetime.now(timezone.utc)
+    if expire_at.tzinfo is None:
+        expire_at = expire_at.replace(tzinfo=timezone.utc)
+
+    delta = expire_at - now
+    total_seconds = delta.total_seconds()
+
+    if total_seconds <= 0:
+        return "پایان یافته"
+
+    total_hours = int(total_seconds // 3600)
+
+    if total_hours >= 24:
+        return f"{total_hours // 24} روز"
+    if total_hours > 0:
+        return f"{total_hours} ساعت"
+
+    return f"{int(total_seconds // 60)} دقیقه"
 
 
-def format_service_status_fa(status: str | None) -> str:
-    return SERVICE_STATUS_LABELS.get(status or "", status or "-")
+def format_duration_fa(hours: int) -> str:
+    """Converts duration hours to a clean Persian string (days if divisible by 24, else hours)."""
+    if hours >= 24 and hours % 24 == 0:
+        days = hours // 24
+        return f"{days} روز"
+    return f"{hours} ساعت"
 
 
-def format_wallet_transaction_type_fa(transaction_type: str | None) -> str:
-    return WALLET_TRANSACTION_TYPE_LABELS.get(transaction_type or "", transaction_type or "-")
-
-
-def format_wallet_transaction_status_fa(status: str | None) -> str:
-    return WALLET_TRANSACTION_STATUS_LABELS.get(status or "", status or "-")
-
-
-def format_commission_status_fa(status: str | None) -> str:
-    return COMMISSION_STATUS_LABELS.get(status or "", status or "-")
-
-
-def format_percent(value: float | int | None) -> str:
+def format_datetime_fa(value: datetime | None) -> str:
+    """Converts standard datetimes to Shamsi (Jalali) format in Asia/Tehran timezone."""
     if value is None:
-        return "0٪"
-    number = float(value)
-    if number.is_integer():
-        return f"{int(number)}٪"
-    return f"{number:.2f}".rstrip("0").rstrip(".") + "٪"
+        return "نامشخص"
 
-
-def format_user_display(user: User | None) -> str:
-    if user is None:
-        return "-"
-    username = f"@{user.telegram_username}" if user.telegram_username else "-"
-    name = escape(user.first_name or "-")
-    return f"{name} | {username} | {user.telegram_id}"
-
-
-def calculate_commission_amount(base_amount: int, percent: float | int) -> int:
-    if base_amount <= 0 or percent <= 0:
-        return 0
-    amount = Decimal(base_amount) * Decimal(str(percent)) / Decimal("100")
-    return int(amount.quantize(Decimal("1"), rounding=ROUND_DOWN))
-
-
-def format_datetime(value: datetime | None) -> str:
-    if value is None:
-        return "-"
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
+
+    tehran_tz = ZoneInfo("Asia/Tehran")
+    localized = value.astimezone(tehran_tz)
+
+    try:
+        naive_tehran = localized.replace(tzinfo=None)
+        return jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
+    except Exception:
+        return localized.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def format_remaining_time(total_seconds: int) -> str:
-    total_seconds = max(total_seconds, 0)
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, _seconds = divmod(remainder, 60)
-    if hours and minutes:
-        return f"{hours} ساعت و {minutes} دقیقه"
-    if hours:
-        return f"{hours} ساعت"
-    return f"{minutes} دقیقه"
+# Export both names so any router can import either one
+format_datetime = format_datetime_fa
+
+
+# --- Helpers for wallet and order routers ---
+def calculate_commission_amount(base_amount: int, percent: float) -> int:
+    if percent <= 0 or base_amount <= 0:
+        return 0
+    return int(base_amount * (percent / 100.0))
+
+
+def format_wallet_transaction_type_fa(tx_type: str) -> str:
+    mapping = {
+        "topup": "شارژ کیف پول",
+        "purchase": "خرید اشتراک",
+        "renewal": "تمدید اشتراک",
+        "referral_reward": "پاداش زیرمجموعه‌گیری",
+        "admin_adjustment": "تغییر توسط ادمین",
+        "discount": "تخفیف",
+        "withdrawal_request": "درخواست برداشت",
+        "withdrawal_paid": "برداشت پرداخت‌شده",
+        "withdrawal_rejected_refund": "بازگشت وجه برداشت ردشده",
+    }
+    return mapping.get(tx_type, tx_type)
+
+
+def format_wallet_transaction_status_fa(status: str) -> str:
+    mapping = {
+        "pending": "در انتظار",
+        "approved": "تایید شده",
+        "rejected": "رد شده",
+        "cancelled": "لغو شده",
+    }
+    return mapping.get(status, status)
+
+
+def format_order_status_fa(status: str) -> str:
+    mapping = {
+        "pending_username": "در انتظار نام کاربری",
+        "pending_payment": "در انتظار پرداخت",
+        "paid": "پرداخت شده",
+        "creating_service": "در حال ساخت سرویس",
+        "completed": "تکمیل شده",
+        "waiting_inventory": "در انتظار موجودی",
+        "expired": "منقضی شده",
+        "cancelled": "لغو شده",
+        "failed": "ناموفق",
+    }
+    return mapping.get(status, status)
+
+
+def format_order_type_fa(kind: str | None) -> str:
+    if kind == "renewal":
+        return "تمدید"
+    return "خرید"
+
+# --- Remaining Time Aliases ---
+format_remaining_time = calculate_remaining_time_fa
+format_remaining_time_fa = calculate_remaining_time_fa
+
+
+# --- Traffic / Volume Formatters (for legacy panel views) ---
+def format_traffic(volume_gb: int | float | None) -> str:
+    if not volume_gb or volume_gb <= 0:
+        return "نامحدود"
+    return f"{volume_gb} گیگابایت"
+
+format_volume = format_traffic
+format_volume_gb = format_traffic
+
+# --- Service Status Formatters ---
+def format_service_status_fa(status: str | None) -> str:
+    mapping = {
+        "active": "🟢 فعال",
+        "expired": "🔴 منقضی شده",
+        "disabled": "⛔ غیرفعال",
+    }
+    return mapping.get(str(status).lower() if status else "", "نامشخص")
+
+format_service_status = format_service_status_fa

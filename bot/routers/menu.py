@@ -1,12 +1,9 @@
-from email.mime import message
-
+# bot/routers/menu.py
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
-from aiogram.filters import StateFilter
-
 
 from app.config import Settings
 from app.repositories.users import UsersRepository
@@ -32,7 +29,7 @@ from bot.keyboards.main_menu import (
     main_menu_keyboard,
 )
 from bot.keyboards.verification import phone_verification_keyboard
-from bot.routers.buy import handle_get_test_account
+from bot.routers.test_account import handle_get_test_account
 from bot.states.wallet import VerificationStates
 
 router = Router(name="menu")
@@ -91,8 +88,6 @@ async def handle_main_menu_text(
     return True
 
 
-# bot/routers/menu.py
-
 async def route_main_menu_text(
     message: Message,
     state: FSMContext,
@@ -116,7 +111,6 @@ async def route_main_menu_text(
     elif text == texts.BTN_RENEW:
         await menu_actions.show_renewal_disabled(message, session)
     elif text in {texts.BTN_MY_SERVICES, "🛍 سرویس های من", "🛍 اشتراک‌های من و تغییر لوکیشن"}:
-    # Local import to prevent circular dependency [1]
         from bot.routers.services import _show_my_services_page 
         await _show_my_services_page(message, page=0, session=session) 
     elif text in {texts.BTN_TARIFFS, "💰 تعرفه اشتراک ها"}:
@@ -131,74 +125,22 @@ async def route_main_menu_text(
         await menu_actions.show_support(message, session)
     elif text == texts.BTN_WALLET:
         await menu_actions.show_wallet(message, session, state)
-    elif text in {texts.BTN_TEST_ACCOUNT, "🔑 دی‌ان‌اس تست"}: 
-        from bot.routers.buy import handle_get_test_account 
-        from aiogram.types import CallbackQuery
-        
-        class FakeCallback(CallbackQuery):
-            async def answer(self, text: str | None = None, show_alert: bool = False, **kwargs) -> bool:
-                if text:
-                    await self.message.answer(text)
-                return True
-
-        fake_callback = FakeCallback(
-            id="00000",
-            from_user=message.from_user,
-            chat_instance="0",
-            message=message,
-            data="get_test_account"
-        )
-        await handle_get_test_account(fake_callback, state, session, settings)
+    elif text in {texts.BTN_TEST_ACCOUNT, "🔑 دی‌ان‌اس تست", "🎁 دریافت اکانت تست"}: 
+        await handle_get_test_account(message, state, session)
     elif text == texts.BTN_LUCKY_WHEEL:
         await menu_actions.show_lucky_wheel(message, session, settings)
     else:
         await menu_actions.show_main_menu(message, session, settings)
 
 
-# ============================================================================
-# TOP-LEVEL MESSAGE HANDLER (Defined outside and below the routing function) [1]
-# ============================================================================
-
-# @router.message(F.text == texts.BTN_TEST_ACCOUNT)
-async def direct_test_account_handler(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    settings: Settings,
-) -> None:
-    await state.clear()
-    
-    from aiogram.types import CallbackQuery
-    fake_callback = CallbackQuery(
-        id="fake_id",
-        from_user=message.from_user,
-        chat_instance="fake",
-        message=message,
-        data="get_test_account",
-    )
-
-    async def fake_answer(*args, **kwargs):
-        pass
-
-    # Assigning the custom fake answer handler correctly [1]
-    fake_callback.answer = fake_answer
-
-    # Local import to prevent circular dependency
-    from bot.routers.buy import handle_get_test_account
-    await handle_get_test_account(fake_callback, state, session, settings)
-
-
-
-@router.callback_query(F.data.in_(MENU_CALLBACKS), StateFilter("*")) # Added StateFilter("*") to match any active state
+@router.callback_query(F.data.in_(MENU_CALLBACKS), StateFilter("*"))
 async def main_menu_callback(
     callback: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    # 1. Always answer the callback query first to stop the loading spinner
     await callback.answer()
-    
     if callback.message is None:
         return
 
@@ -223,7 +165,6 @@ async def main_menu_callback(
         await state.clear()
         await menu_actions.show_account_dashboard(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_BUY_CALLBACK:
-        # 2. Clear FSM state and display plans
         await state.clear()
         await menu_actions.show_buy_plans(callback.message, session)
     elif action == MENU_RENEW_CALLBACK:
@@ -246,20 +187,19 @@ async def main_menu_callback(
         await menu_actions.show_wallet(callback.message, session, state, settings, telegram_user=callback.from_user)
     elif action == MENU_TEST_CALLBACK:
         await state.clear()
-        await handle_get_test_account(callback, state, session, settings, answer_callback=False)
+        await handle_get_test_account(callback, state, session)
     elif action == MENU_DICE_CALLBACK:
         await state.clear()
         await menu_actions.show_lucky_wheel(callback.message, session, settings, telegram_user=callback.from_user)
     elif action == MENU_VERIFY_PHONE_CALLBACK:
         await state.clear()
-        from bot.keyboards.verification import phone_verification_keyboard
-        from bot.states.wallet import VerificationStates
         await state.set_state(VerificationStates.waiting_contact)
         await state.update_data(next_section="account")
         await callback.message.answer(
             "📱 برای تایید شماره موبایل، دکمه زیر را بزنید و شماره تلگرام خودتان را ارسال کنید 👇",
             reply_markup=phone_verification_keyboard(),
         )
+
 
 async def _show_admin_panel_from_menu(message: Message, session: AsyncSession, settings: Settings) -> None:
     if message.from_user is None:
@@ -274,33 +214,3 @@ async def _show_admin_panel_from_menu(message: Message, session: AsyncSession, s
         await message.answer("⛔ شما دسترسی مدیریت ندارید.")
         return
     await message.answer(texts.ADMIN_PANEL_TEXT, reply_markup=admin_main_keyboard())
-
-from aiogram import F
-from aiogram.types import CallbackQuery
-
-@router.message(F.text == "🎁 دریافت اکانت تست")
-async def direct_test_account_handler(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    settings: Settings,
-) -> None:
-    await state.clear()
-    
-    # We must fake a CallbackQuery object so the ControlD API function doesn't crash
-    # It expects to be able to call `callback.answer()` and `callback.message.answer()`
-    fake_callback = CallbackQuery(
-        id="fake_id",
-        from_user=message.from_user,
-        chat_instance="fake",
-        message=message,
-        data="get_test_account",
-    )
-    
-    # We override the fake answer method so it doesn't throw an error when the function calls it
-    async def fake_answer(*args, **kwargs):
-        pass
-    fake_callback.answer = fake_answer
-
-    # Now we pass the fake callback to the REAL generator!
-    await handle_get_test_account(fake_callback, state, session, settings)

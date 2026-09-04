@@ -27,6 +27,8 @@ import uuid
 # bot/routers/services.py
 from app.services.settings_service import AppSettingsService
 from bot.utils.auto_clean import schedule_message_deletion
+from bot.utils.messages import render_dns_delivery_text
+
 
 from app.models import IPAuthToken
 
@@ -174,27 +176,27 @@ def format_service_item_display(service: VPNService, index: int) -> str:
 """
 
 
-def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
-    """Generates active service management keyboard using secure string callbacks."""
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="🔗 لینک‌های اتصال",
-        callback_data=f"manage_links:{service_id}"
-    )
-    builder.button(
-        text="📊 وضعیت سرویس",
-        callback_data=f"manage_status:{service_id}"
-    )
-    builder.button(
-        text="🗺 تنظیمات لوکیشن سرور",
-        callback_data=f"change_default_loc_select:{service_id}"
-    )
-    builder.button(
-        text="🔙 بازگشت به لیست",
-        callback_data="my_services_page:0"
-    )
-    builder.adjust(1)
-    return builder.as_markup()
+# def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
+#     """Generates active service management keyboard using secure string callbacks."""
+#     builder = InlineKeyboardBuilder()
+#     builder.button(
+#         text="🔗 لینک‌های اتصال",
+#         callback_data=f"manage_links:{service_id}"
+#     )
+#     builder.button(
+#         text="📊 وضعیت سرویس",
+#         callback_data=f"manage_status:{service_id}"
+#     )
+#     builder.button(
+#         text="🗺 تنظیمات لوکیشن سرور",
+#         callback_data=f"change_default_loc_select:{service_id}"
+#     )
+#     builder.button(
+#         text="🔙 بازگشت به لیست",
+#         callback_data="my_services_page:0"
+#     )
+#     builder.adjust(1)
+#     return builder.as_markup()
 
 
 # bot/routers/services.py
@@ -214,6 +216,72 @@ async def _show_my_services_page(callback_or_message: CallbackQuery | Message, p
         else:
             await callback_or_message.answer(msg)
         return
+
+    # Sort Active subscriptions FIRST, ordered by newest expire_at
+    def service_sort_key(s: VPNService):
+        active = is_service_active(s)
+        exp = s.expire_at
+        if exp:
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            ts = exp.timestamp()
+        else:
+            ts = 0.0
+        return (0 if active else 1, -ts)
+
+    services.sort(key=service_sort_key)
+
+    limit = 3  
+    start_idx = page * limit
+    end_idx = start_idx + limit
+    page_services = services[start_idx:end_idx]
+    has_next = len(services) > end_idx
+
+    lines = [f"🛍 <b>اشتراک‌های DNS شما | صفحه {page + 1} از {((len(services) - 1) // limit) + 1}</b>\n"]
+    
+    builder = InlineKeyboardBuilder()
+    for idx, service in enumerate(page_services, start=start_idx + 1):
+        lines.append(format_service_item_display(service, idx))
+        raw_name = (service.username or "دستگاه").split("|")[0].strip()
+        
+        if is_service_active(service):
+            builder.row(
+                InlineKeyboardButton(
+                    text="✳️ ثبت آی‌پی سریع",
+                    url=f"{WEB_SERVER_BASE_URL}/update-ip/{service.controld_device_id}",
+                    style="success"
+                ),
+                InlineKeyboardButton(
+                    text="🛠 مدیریت",
+                    callback_data=f"manage_service:{service.id}",
+                    style="primary"
+                )
+            )
+        else:
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"🛒 تمدید اشتراک: {raw_name}",
+                    callback_data="buy_back_to_plans",
+                    style="primary"
+                )
+            )
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"my_services_page:{page - 1}"))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"my_services_page:{page + 1}"))
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="buy_back_to_menu", style="danger"))
+
+    text_content = "\n".join(lines)
+    
+    if isinstance(callback_or_message, CallbackQuery):
+        await callback_or_message.message.edit_text(text_content, reply_markup=builder.as_markup(), parse_mode="HTML")
+    else:
+        await callback_or_message.answer(text_content, reply_markup=builder.as_markup(), parse_mode="HTML")
 
     # Sort Active subscriptions FIRST (0), Expired LAST (1), ordered by newest expire_at date
     def service_sort_key(s: VPNService):
@@ -420,24 +488,71 @@ async def handle_manage_status(callback: CallbackQuery, session: AsyncSession) -
     await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id), parse_mode="HTML")
 
 
-async def _show_default_loc_page(callback: CallbackQuery, service_id: int, page: int, settings: Settings) -> None:
-    """Renders the location selection menu displaying exactly your 5 fixed premium slots."""
-    builder = InlineKeyboardBuilder()
-    for slot_num, config in SLOT_CONFIGS.items():
-        builder.button(
-            text=config["name"],
-            callback_data=f"apply_def_loc:{service_id}:{slot_num}"
-        )
-    
-    builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"manage_service:{service_id}"))
+# In bot/routers/services.py
 
-    await callback.message.edit_text(
-        "🗺 <b>تغییر لوکیشن سرور دی‌ان‌اس</b>\n\n"
-        "کشوری که می‌خواهید ترافیک اینترنت شما به سرور آن متصل شود را انتخاب کنید:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+async def _show_default_loc_page(
+    callback: CallbackQuery,
+    service: VPNService,
+    settings: Settings
+) -> None:
+    """Renders location switcher highlighting active server between Germany & Turkey."""
+    builder = InlineKeyboardBuilder()
+
+    current_device = service.controld_device_id
+    is_germany_active = current_device == SLOT_CONFIGS[1]["device_id"]
+    is_turkey_active = current_device == SLOT_CONFIGS[5]["device_id"]
+
+    # 🇩🇪 Germany Button (Slot 1)
+    if is_germany_active:
+        builder.button(
+            text="🟢 🇩🇪 آلمان (سرور فعال فعلی شما)",
+            callback_data=f"apply_def_loc:{service.id}:1",
+            style="success"
+        )
+    else:
+        builder.button(
+            text="🔄 🇩🇪 انتقال به آلمان (فرانکفورت)",
+            callback_data=f"apply_def_loc:{service.id}:1",
+            style="primary"
+        )
+
+    # 🇹🇷 Turkey Button (Slot 5)
+    if is_turkey_active:
+        builder.button(
+            text="🟢 🇹🇷 ترکیه (سرور فعال فعلی شما)",
+            callback_data=f"apply_def_loc:{service.id}:5",
+            style="success"
+        )
+    else:
+        builder.button(
+            text="🔄 🇹🇷 انتقال به ترکیه (استانبول)",
+            callback_data=f"apply_def_loc:{service.id}:5",
+            style="primary"
+        )
+
+    builder.button(
+        text="🔙 بازگشت به مدیریت",
+        callback_data=f"manage_service:{service.id}",
+        style="danger"
     )
+    builder.adjust(1)
+
+    active_name = (
+        '🇩🇪 آلمان (فرانکفورت)' if is_germany_active
+        else '🇹🇷 ترکیه (استانبول)' if is_turkey_active
+        else 'سایر سرورها'
+    )
+
+    text = f"""🗺 <b>تغییر لوکیشن سرور دی‌ان‌اس</b>
+
+👤 <b>نام دستگاه:</b> <code>{(service.username or '').split('|')[0]}</code>
+📌 <b>سرور فعال شما:</b> <b>{active_name}</b>
+
+<blockquote>💡 <b>راهنما:</b>
+• سرور فعال با رنگ سبز 🟢 مشخص شده است.
+• با کلیک روی سرور دیگر، دسترسی شما فوراً به کشور جدید منتقل شده و آدرس‌های DNS جدید برای شما ارسال می‌گردد.</blockquote>"""
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("change_default_loc_select:"), StateFilter("*"))
@@ -452,8 +567,6 @@ async def handle_change_default_loc_select(callback: CallbackQuery, session: Asy
 
     await _show_default_loc_page(callback, service_id, page=0, settings=settings)
 
-
-# bot/routers/services.py
 
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
@@ -497,13 +610,11 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         reply_markup=None
     )
 
-    # bot/routers/services.py (inside handle_apply_def_loc)
-
     controld = ControlDService(settings)
     old_device_id = service.controld_device_id
     user_ip = service.authorized_ip
 
-    # 1. Surgically remove old IP from old endpoint
+    # 1. Remove old IP from previous Control D slot
     if old_device_id and user_ip:
         try:
             logger.info("surgically_deauthorizing_old_slot_ip", service_id=service.id, old_device_id=old_device_id, ip=user_ip)
@@ -511,7 +622,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         except Exception as exc:
             logger.warning("old_slot_ip_deauthorization_failed_proceeding", service_id=service.id, error=str(exc))
 
-    # 2. Authorize IP on new endpoint
+    # 2. Authorize IP on new Control D slot
     if user_ip:
         try:
             logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=user_ip)
@@ -519,42 +630,33 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         except Exception as exc:
             logger.error("new_slot_ip_authorization_failed", service_id=service.id, error=str(exc))
 
-    # 3. Update DB
-    raw_username = service.username.split("|")[0]
+    # 3. Update DB with new slot
+    raw_username = service.username.split("|")[0].strip() if service.username else "دستگاه"
     service.username = f"{raw_username}|default|{slot_num}"
     service.controld_device_id = new_device_id
     await session.commit()
 
-  # Clean, professional HTML formatted string
-    success_text = (
-        f"✅ <b>لوکیشن اشتراک با موفقیت تغییر یافت!</b>\n\n"
-        f"🗺 <b>سرور جدید:</b> {escape(new_pop_name)}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔐 <b>دی‌ان‌اس‌های اختصاصی سرور جدید:</b>\n"
-        f"🔷 Primary: <code>{escape(ipv4_primary)}</code>\n"
-        f"🔷 Secondary: <code>{escape(ipv4_secondary)}</code>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📋 <b>مراحل فعال‌سازی (بسیار مهم):</b>\n\n"
-        f"1️⃣ دی‌ان‌AS‌های جدید بالا را جایگزین DNS قبلی دستگاه خود کنید.\n"
-        f"2️⃣ موبایل و کنسول/سیستم خود را به یک اینترنت مشترک وصل کنید.\n"
-        f"3️⃣ فیلترشکن و پروکسی تلگرام و پروکسی تلگرام خود را خاموش کنید.\n"
-        f"4️⃣ مجدد روی دکمه ثبت آیپی زیر کلیک کنید.\n\n"
-        f"💡 <i>نکته: شما می‌توانید لوکیشن DNS را بعد از خرید به تعداد نامحدود تغییر دهید.</i>\n\n"
-        f"⚠️ <i>اگر پس از تغییر DNS اتصال برقرار نشد، یک بار مجدد روی دکمه ثبت آیپی زیر کلیک کنید و مجدداً وضعیت اتصال را بررسی کنید.</i>"
+    # 4. Render delivery text with both Control D and AdGuard Home
+    from bot.utils.messages import render_dns_delivery_text
+
+    success_text = render_dns_delivery_text(
+        expire_at=service.expire_at,
+        ipv4_primary=ipv4_primary,
+        ipv4_secondary=ipv4_secondary,
+        service_display="کل ترافیک اینترنت (Default)",
+        country_display=new_pop_name,
+        title_prefix="✅ <b>لوکیشن اشتراک با موفقیت تغییر یافت!</b>",
     )
 
     markup = await create_secure_ip_update_keyboard(session, service.id)
 
-    # 1. Capture sent message
+    # 5. Send message and schedule auto-deletion
     sent_msg = await callback.message.answer(
         text=success_text,
         reply_markup=markup,
         parse_mode="HTML"
     )
-
-    # 2. Schedule deletion after 2 hours (7200s)
     await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
-
 
 @router.callback_query(F.data.startswith("def_loc_page:"), StateFilter("*"))
 async def handle_def_loc_page(callback: CallbackQuery, settings: Settings) -> None:
@@ -578,22 +680,18 @@ async def create_secure_ip_update_keyboard(session: AsyncSession, service_id: in
 
 # bot/routers/services.py
 
+# In bot/routers/services.py
+
 def build_ip_registration_keyboard(
     device_id: str,
     support_username: str = "",
     video_link: str = ""
 ) -> InlineKeyboardMarkup:
     """
-    Builds the full IP registration inline keyboard with:
-    1. Automatic IP 1
-    2. Automatic IP 2
-    3. Manual IP
-    4. Online Support (Direct to Admin PV)
-    5. Teaching Video
+    Builds the high-converting IP registration keyboard with Telegram 9.4+ color styles.
     """
     builder = InlineKeyboardBuilder()
     
-    # 1. Sanitize base URL
     base_url = WEB_SERVER_BASE_URL.strip().rstrip('/')
     if not base_url.startswith(("http://", "https://")):
         base_url = f"https://{base_url}"
@@ -601,29 +699,72 @@ def build_ip_registration_keyboard(
     dev_str = str(device_id or "unknown").strip()
     update_url = f"{base_url}/update-ip/{dev_str}"
 
-    # Primary registration buttons
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=update_url)
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=update_url)
-    builder.button(text="🤖 ثبت آی‌پی دستی 🤖", callback_data=f"manual_ip_reg:{dev_str}")
+    # 🟢 Green "success" buttons for primary instant actions
+    builder.button(
+        text="✳️ ثبت آی‌پی اتوماتیک ✳️",
+        url=update_url,
+        style="success"
+    )
+    builder.button(
+        text="✳️ ثبت آی‌پی اتوماتیک ۲ (کمکی) ✳️",
+        url=update_url,
+        style="success"
+    )
 
-    # 2. Add Online Support Button (Direct redirect to Admin PV)
+    # 🔵 Blue "primary" button for manual configuration
+    builder.button(
+        text="🤖 ثبت آی‌پی دستی",
+        callback_data=f"manual_ip_reg:{dev_str}",
+        style="primary"
+    )
+
+    # Secondary Support & Educational Links
     if support_username:
         clean_sup = support_username.removeprefix("@").strip()
         if clean_sup:
-            builder.button(text="☎️ پشتیبانی آنلاین", url=f"https://t.me/{clean_sup}")
+            builder.button(
+                text="☎️ پشتیبانی آنلاین",
+                url=f"https://t.me/{clean_sup}"
+            )
 
-    # 3. Add Teaching Video Button
     if video_link:
         clean_vid = video_link.strip()
         if clean_vid:
             if not clean_vid.startswith(("http://", "https://")):
                 clean_vid = f"https://{clean_vid}"
-            builder.button(text="🎥 ویدیو آموزشی", url=clean_vid)
+            builder.button(
+                text="🎥 ویدیو آموزشی راهنما",
+                url=clean_vid
+            )
 
-    # Stack all buttons cleanly in full-width single columns
     builder.adjust(1)
     return builder.as_markup()
 
+
+def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
+    """Active service management menu with stylized colored tiers."""
+    builder = InlineKeyboardBuilder()
+    
+    builder.button(
+        text="🔗 لینک‌ها و آدرس‌های اتصال",
+        callback_data=f"manage_links:{service_id}",
+        style="primary"
+    )
+    builder.button(
+        text="🗺 تغییر لوکیشن سرور",
+        callback_data=f"change_default_loc_select:{service_id}",
+        style="primary"
+    )
+    builder.button(
+        text="📊 وضعیت زنده اتصال",
+        callback_data=f"manage_status:{service_id}"
+    )
+    builder.button(
+        text="🔙 بازگشت به لیست اشتراک‌ها",
+        callback_data="my_services_page:0"
+    )
+    builder.adjust(1)
+    return builder.as_markup()
 
 async def create_secure_ip_update_keyboard(session: AsyncSession, service_id_or_device_id: int | str) -> InlineKeyboardMarkup:
     """
@@ -658,6 +799,7 @@ async def create_secure_ip_update_keyboard(session: AsyncSession, service_id_or_
 async def create_secure_ip_update_keyboard(session: AsyncSession, service_id_or_device_id: int | str) -> InlineKeyboardMarkup:
     """
     Unified keyboard generator fetching dynamic settings (Support ID & Video Link).
+    Includes an automatic fallback to the Root Admin's Telegram username.
     """
     if isinstance(service_id_or_device_id, int):
         service = await session.get(VPNService, service_id_or_device_id)
@@ -668,6 +810,14 @@ async def create_secure_ip_update_keyboard(session: AsyncSession, service_id_or_
     app_settings = AppSettingsService(session)
     support_username = await app_settings.get_support_username()
     video_link = await app_settings.get_teaching_video_link()
+
+    if not support_username:
+        settings = get_settings()
+        if settings.root_admin_telegram_id:
+            from app.repositories.users import UsersRepository
+            root_user = await UsersRepository(session).get_by_telegram_id(settings.root_admin_telegram_id)
+            if root_user and root_user.telegram_username:
+                support_username = root_user.telegram_username
 
     return build_ip_registration_keyboard(
         device_id=device_id,

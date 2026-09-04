@@ -1,24 +1,28 @@
 # app/services/ip_manager.py
-
-import structlog
 from datetime import datetime, timezone
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import VPNService
-from app.services.controld import ControlDService
+
 from app.config import get_settings
+from app.models import VPNService
+from app.services.adguard import AdGuardHomeService
+from app.services.controld import ControlDService
 
 logger = structlog.get_logger(__name__)
 
+
 async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_ip: str) -> bool:
     """
-    Surgically swaps a user's authorized IP on their ControlD endpoint.
-    1. Deauthorizes old_ip from current slot if old_ip != new_ip.
-    2. Authorizes new_ip on current slot.
-    3. Saves service.authorized_ip = new_ip in database.
+    Surgically swaps and synchronizes a user's authorized IP across both Control D and AdGuard Home:
+    1. Deauthorizes old_ip from Control D endpoint and AdGuard Home ACL if old_ip != new_ip.
+    2. Authorizes clean_new_ip on Control D device endpoint.
+    3. Authorizes clean_new_ip on AdGuard Home allowed_clients list.
+    4. Commits service.authorized_ip = clean_new_ip to the local database.
     """
     if not service:
         return False
 
+    # 1. Validation & Safety Checks
     now = datetime.now(timezone.utc)
     expire_at = service.expire_at
     if expire_at:
@@ -29,43 +33,62 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
             return False
 
     device_id = service.controld_device_id
-    old_ip = service.authorized_ip
-    clean_new_ip = new_ip.strip()
-
     if not device_id:
         logger.error("ip_swap_failed_missing_device_id", service_id=service.id)
         return False
 
+    old_ip = service.authorized_ip
+    clean_new_ip = new_ip.strip()
+
     settings = get_settings()
     controld = ControlDService(settings)
+    adguard = AdGuardHomeService(settings)
 
-    # 1. If old_ip is recorded and different from new_ip, deauthorize old_ip
+    # 2. Deauthorize Old IP if it exists and has changed
     if old_ip and old_ip != clean_new_ip:
+        # Deauthorize from Control D
         try:
-            logger.info("deauthorizing_old_ip_before_new_ip_swap", service_id=service.id, device_id=device_id, old_ip=old_ip)
+            logger.info("deauthorizing_old_ip_controld", service_id=service.id, device_id=device_id, old_ip=old_ip)
             await controld.deauthorize_ip(device_id, old_ip)
         except Exception as exc:
-            logger.warning("old_ip_deauthorization_failed_proceeding", service_id=service.id, error=str(exc))
+            logger.warning("controld_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
 
-    # 2. Authorize new_ip on current slot
-    auth_success = False
+        # Deauthorize from AdGuard Home
+        if adguard.is_configured():
+            try:
+                logger.info("deauthorizing_old_ip_adguard", service_id=service.id, old_ip=old_ip)
+                await adguard.deauthorize_client_ip(old_ip)
+            except Exception as exc:
+                logger.warning("adguard_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
+
+    # 3. Authorize New IP on Control D
+    controld_success = False
     try:
-        logger.info("authorizing_new_ip", service_id=service.id, device_id=device_id, new_ip=clean_new_ip)
-        auth_success = await controld.authorize_ip(device_id, clean_new_ip)
+        logger.info("authorizing_new_ip_controld", service_id=service.id, device_id=device_id, new_ip=clean_new_ip)
+        controld_success = await controld.authorize_ip(device_id, clean_new_ip)
     except Exception as exc:
-        logger.error("new_ip_authorization_failed", service_id=service.id, error=str(exc))
+        logger.error("controld_new_ip_auth_failed", service_id=service.id, error=str(exc))
 
-    if not auth_success:
-        logger.error("api_authorization_failed_aborting_db_sync", service_id=service.id, new_ip=clean_new_ip)
+    if not controld_success:
+        logger.error("controld_auth_unsuccessful_aborting_db_sync", service_id=service.id, new_ip=clean_new_ip)
         return False
 
-    # 3. Save new_ip to database
+    # 4. Authorize New IP on AdGuard Home
+    if adguard.is_configured():
+        try:
+            logger.info("authorizing_new_ip_adguard", service_id=service.id, new_ip=clean_new_ip)
+            await adguard.allow_client_ip(clean_new_ip)
+        except Exception as exc:
+            # Non-fatal: Don't break purchase if local AdGuard Home has an issue
+            logger.warning("adguard_new_ip_auth_failed_non_fatal", service_id=service.id, error=str(exc))
+
+    # 5. Commit updated IP to database
     try:
         service.authorized_ip = clean_new_ip
         await session.commit()
-        logger.info("ip_swap_completed_successfully", service_id=service.id, old_ip=old_ip, new_ip=clean_new_ip)
+        logger.info("dual_ip_sync_successful", service_id=service.id, old_ip=old_ip, new_ip=clean_new_ip)
         return True
     except Exception as exc:
         await session.rollback()
-        logger.error("failed_to_commit_ip_swap_db_transaction", service_id=service.id, error=str(exc))
+        logger.error("failed_to_commit_ip_swap_transaction", service_id=service.id, error=str(exc))
         return False

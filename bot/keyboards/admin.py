@@ -26,6 +26,16 @@ from app.services.settings_service import SETTING_DEFINITIONS
 class AdminActionCallback(CallbackData, prefix="adm"):
     action: str
 
+class AdminOrderCallback(CallbackData, prefix="adm_ord"):
+    action: str
+    order_id: int = 0
+    page: int = 0
+
+
+class AdminPaymentCallback(CallbackData, prefix="adm_pay"):
+    action: str
+    payment_id: int
+
 
 class AdminPaymentCallback(CallbackData, prefix="adm_pay"):
     action: str

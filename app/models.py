@@ -176,7 +176,6 @@ class User(TimestampMixin, Base):
 class Plan(TimestampMixin, Base):
     __tablename__ = "plans"
 
-
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
@@ -192,6 +191,22 @@ class Plan(TimestampMixin, Base):
     services: Mapped[list[VPNService]] = relationship(back_populates="plan")
     config_inventory_items: Mapped[list[ConfigInventory]] = relationship(back_populates="plan")
 
+    def __init__(self, **kwargs):
+        # Gracefully translate legacy duration_days into duration_hours
+        if "duration_days" in kwargs:
+            days = kwargs.pop("duration_days")
+            if "duration_hours" not in kwargs:
+                kwargs["duration_hours"] = (days * 24) if days is not None else 720
+        super().__init__(**kwargs)
+
+    @property
+    def duration_days(self) -> int:
+        return (self.duration_hours or 0) // 24 if self.duration_hours else 0
+
+    @duration_days.setter
+    def duration_days(self, value: int | None) -> None:
+        self.duration_hours = ((value or 0) * 24) if value is not None else 720
+        
 
 class Order(TimestampMixin, Base):
     __tablename__ = "orders"

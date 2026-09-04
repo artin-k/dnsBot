@@ -39,27 +39,31 @@ from bot.keyboards.buy import PlanCallback, BUY_BACK_TO_MENU  # Ensure imports a
 
 def plans_keyboard(plans: list[Plan], counts: dict = None) -> InlineKeyboardMarkup:
     """
-    Generates a clean purchase keyboard for DNS plans.
-    Completely removes legacy V2Ray volume (GB) and stock (موجودی) text.
+    Generates purchase keyboard for DNS plans with Telegram Bot API button styles.
     """
     builder = InlineKeyboardBuilder()
     
     for plan in plans:
-        # Format the price with commas (e.g., 1,100,000)
         formatted_price = f"{plan.price:,}"
-        
-        # --- FIXED: Only show Plan Title and Formatted Price ---
         builder.button(
-            text=f"🔹 {plan.title} - {formatted_price} تومان 🔹",
-            callback_data=PlanCallback(plan_id=plan.id)
+            text=f"🔹 {plan.title} — {formatted_price} تومان 🔹",
+            callback_data=PlanCallback(plan_id=plan.id),
+            style="primary"  # 🔵 Blue style for plan items
         )
-        # -------------------------------------------------------
 
-    # Test account and Back buttons
-    builder.button(text="🎁 دریافت اکانت تست (۲ ساعته) 🆓", callback_data="get_test_account")
-    builder.button(text="↩️ بازگشت", callback_data=BUY_BACK_TO_MENU)
+    # 🟢 Green style for free test account
+    builder.button(
+        text="🎁 دریافت اکانت تست (۲ ساعته) 🆓",
+        callback_data="get_test_account",
+        style="success"
+    )
+    # 🔴 Red style for Back
+    builder.button(
+        text="↩️ بازگشت",
+        callback_data=BUY_BACK_TO_MENU,
+        style="danger"
+    )
     builder.adjust(1)
-    
     return builder.as_markup()
 
 def pre_invoice_keyboard(plan_id: int, discount_roll_id: int = 0) -> InlineKeyboardMarkup:

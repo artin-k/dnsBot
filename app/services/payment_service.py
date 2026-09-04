@@ -21,7 +21,7 @@ from app.repositories.dice_rolls import DiceRollsRepository
 from app.repositories.services import ServicesRepository
 from app.repositories.wallet_transactions import WalletTransactionsRepository
 from app.services.affiliate_service import AffiliateService
-from app.services.controld import ControlDService
+from app.services.controld import ControlDService, get_controld_device_ips
 from app.services.order_service import OrderService
 from app.services.settings_service import AppSettingsService
 from app.services.slot_manager import get_least_populated_personal_slot
@@ -344,10 +344,9 @@ class PaymentService:
         service.status = VPNServiceStatus.ACTIVE.value
         await self.session.flush()
 
-        # Dynamic resolvers lookup - No dynamic TTL updates to protect permanent slots [cite: 1]
-        from run_web_ip_updater import get_controld_device_ips
+        from app.services.controld import get_controld_device_ips
         ips_data = await get_controld_device_ips(service.controld_device_id, self.settings)
-
+    
         return ApprovedPaymentResult(
             user_telegram_id=user.telegram_id,
             order_kind=OrderKind.RENEWAL.value,
