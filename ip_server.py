@@ -630,7 +630,8 @@ async def paystar_redirect(token: str):
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <meta name="referrer" content="origin-when-cross-origin" />
+            <!-- Forces the browser to send your exact domain to Paystar's security check -->
+            <meta name="referrer" content="origin" />
             <title>در حال انتقال...</title>
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
@@ -663,7 +664,8 @@ async def paystar_redirect(token: str):
                 <h3 style="margin-bottom: 10px;">در حال انتقال به درگاه بانکی...</h3>
                 <p style="color: #94a3b8; font-size: 14px;">لطفاً چند لحظه صبر کنید.</p>
                 
-                <form id="paymentForm" action="https://core.paystar.click/api/pardakht/payment" method="POST">
+                <!-- REVERTED TO OFFICIAL .ir DOMAIN -->
+                <form id="paymentForm" action="https://core.paystar.ir/api/pardakht/payment" method="POST">
                     <input type="hidden" name="token" value="{clean_token}">
                     <noscript>
                         <p style="color: #ef4444; margin-top: 20px;">جاوااسکریپت در مرورگر شما غیرفعال است.</p>
@@ -694,7 +696,7 @@ async def paystar_redirect(token: str):
     except Exception as exc:
         logger.exception("failed_to_process_paystar_redirect_route", token=token)
         return _failed_html(f"خطای داخلی در اتصال به درگاه بانکی: {str(exc)}", bot_username=bot_user)
-
+    
 # ============================================================================
 # PAYSTAR GATEWAY CALLBACK & RESULT PAGES
 # ============================================================================
