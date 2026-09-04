@@ -111,67 +111,6 @@ async def get_controld_device_ips(device_id: str, settings_obj) -> dict:
         "ipv4_secondary": "76.76.10.162",
     }
 
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard(request: Request, uid: int = Query(...), token: str = Query(...)):
-    if not verify_admin_web_token(uid, token):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, 
-            detail="دسترسی غیرمجاز است. لطفا از طریق دکمه مدیریت ربات تلگرام وارد شوید."
-        )
-
-    async with async_session_maker() as session:
-        # Fetch services with their associated user joined cleanly
-        stmt = (
-            select(VPNService)
-            .options(joinedload(VPNService.user))
-            .order_by(VPNService.created_at.desc())
-        )
-        res = await session.execute(stmt)
-        services = res.scalars().unique().all()
-
-        dashboard_data = []
-        for service in services:
-            expire_at = service.expire_at
-            shamsi_expire = "-"
-            if expire_at:
-                if expire_at.tzinfo is None:
-                    expire_at = expire_at.replace(tzinfo=timezone.utc)
-                tehran_tz = ZoneInfo("Asia/Tehran")
-                tehran_expire = expire_at.astimezone(tehran_tz)
-                try:
-                    naive_tehran = tehran_expire.replace(tzinfo=None)
-                    shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M")
-                except Exception:
-                    shamsi_expire = tehran_expire.strftime("%Y-%m-%d %H:%M")
-
-            slot_name = "ثبت نشده / Unmapped"
-            for _num, config in SLOT_CONFIGS.items():
-                if config["device_id"] == service.controld_device_id:
-                    slot_name = config["name"]
-                    break
-
-            user = service.user
-            dashboard_data.append({
-                "telegram_id": user.telegram_id if user else 0,
-                "telegram_username": user.telegram_username if user and user.telegram_username else "-",
-                "first_name": user.first_name if user and user.first_name else "-",
-                "service_id": service.id,
-                "controld_device_id": service.controld_device_id or "",
-                "authorized_ip": service.authorized_ip or "ثبت نشده (No IP)",
-                "expire_at_shamsi": shamsi_expire,
-                "status": "فعال" if service.status == "active" else "منقضی شده",
-                "slot_name": slot_name
-            })
-
-    return templates.TemplateResponse(
-        "admin.html", 
-        {
-            "request": request, 
-            "users": dashboard_data, 
-            "uid": uid, 
-            "token": token
-        }
-    )
 
 def verify_admin_web_token(uid: int, token: str) -> bool:
     admin_ids = set(settings.admin_ids)
@@ -195,105 +134,7 @@ async def _apply_purchase_route(order: Order, service: VPNService, settings_obj)
     _username, service_pk, slot_num_str = _parse_purchase_metadata(order.custom_username)
     return service_pk, slot_num_str
 
-def _render_vpn_detected_html(
-    title: str,
-    heading: str,
-    message: str,
-    detected_ip: str,
-    country: str,
-    isp: str,
-    bot_username: str = "bot"
-) -> HTMLResponse:
-    """Renders a sleek warning page when a VPN or foreign proxy is detected."""
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="fa" dir="rtl">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>{escape(title)}</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
-            body {{
-                font-family: 'Vazirmatn', Tahoma, sans-serif;
-                background-color: #0f172a;
-                color: #f8fafc;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 20px;
-            }}
-            .theme-card {{
-                background-color: #1e293b;
-                border: 1px solid #eab308;
-                border-radius: 16px;
-                padding: 36px;
-                box-shadow: 0 10px 25px -5px rgba(234, 179, 8, 0.2);
-                max-width: 550px;
-                width: 100%;
-                text-align: center;
-            }}
-            .warning-icon {{
-                width: 75px;
-                height: 75px;
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin: 0 auto 20px;
-                font-size: 38px;
-                background-color: rgba(234, 179, 8, 0.1);
-                color: #eab308;
-                border: 2px solid rgba(234, 179, 8, 0.3);
-            }}
-            .info-ip {{
-                background-color: #0f172a;
-                border: 1px solid #334155;
-                font-family: monospace;
-                font-size: 1.15rem;
-                color: #f59e0b;
-            }}
-            .btn-retry {{
-                background-color: #eab308;
-                color: #0f172a;
-                border: none;
-                font-weight: bold;
-            }}
-            .btn-retry:hover {{
-                background-color: #ca8a04;
-                color: #0f172a;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="theme-card">
-            <div class="warning-icon">⚠️</div>
-            <h1 class="h4 mb-3 fw-bold text-warning">{escape(heading)}</h1>
-            <p class="mb-3 text-light" style="font-size: 15px; line-height: 1.8;">{escape(message)}</p>
-            
-            <div class="info-ip py-2 px-3 rounded-3 mb-3 text-center">
-                آی‌پی شناسایی‌شده: <b>{escape(detected_ip)}</b><br>
-                <small class="text-secondary">کشور: {escape(country)} | شبکه: {escape(isp)}</small>
-            </div>
 
-            <p class="text-secondary small mb-4">
-                برای فعال شدن دی‌ان‌اس، باید آی‌پی واقعی مودم یا اینترنت شما ثبت شود.<br>
-                <b>۱. فیلترشکن و پروکسی تلگرام را خاموش کنید.</b><br>
-                <b>۲. دکمه زیر را برای بررسی مجدد بزنید:</b>
-            </p>
-
-            <button onclick="location.reload()" class="btn btn-retry py-2 px-4 rounded-3 w-100 mb-2">🔄 فیلترشکن را خاموش کردم، بررسی مجدد</button>
-            <a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">بازگشت به ربات تلگرام</a>
-        </div>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content, status_code=200)
-
-
-# ip_server.py & run_web_ip_updater.py
 
 async def _build_paystar_context(order: Order, service: VPNService, settings_obj) -> dict[str, str]:
     raw_username, service_pk, pop_code = _parse_purchase_metadata(order.custom_username)
@@ -537,134 +378,15 @@ def _render_capture_ip_html(
     """
     return HTMLResponse(content=html_content)
 
-
-@app.get("/capture-ip/{token}", response_class=HTMLResponse)
-async def capture_ip(request: Request, token: str):
-    """Processes dynamic client IP collection from an expiring token securely [cite: 1]."""
-    bot_user = await get_bot_username()
-
-    # 1. Path sanitization to match both standard and compact hex UUID tokens
-    token = token.strip()
-    if not re.match(r"^[a-fA-F0-9-]{32,36}$", token):
-        return _render_capture_ip_html(
-            title="خطا در ثبت آی‌پی",
-            heading="لینک وارد شده نامعتبر است",
-            message="ساختار توکن امنیتی این لینک نامعتبر است. لطفاً از طریق ربات مجدداً تلاش کنید.",
-            is_success=False,
-            bot_username=bot_user
-        )
-
-    ip_check = await verify_user_ip(client_ip)
-    if ip_check.is_vpn:
-        return _render_vpn_detected_html(
-            title="فیلترشکن روشن است",
-            heading="⚠️ فیلترشکن شما روشن است!",
-            message=ip_check.error_message or "آی‌پی سرور فیلترشکن شناسایی شد. لطفاً ابتدا فیلترشکن را خاموش کنید.",
-            detected_ip=client_ip,
-            country=ip_check.country,
-            isp=ip_check.isp,
-            bot_username=bot_user,
-        )
-
-    async with async_session_maker() as session:
-        # 2. Database validation query
-        stmt = (
-            select(IPAuthToken)
-            .options(joinedload(IPAuthToken.service).joinedload(VPNService.user))
-            .where(IPAuthToken.token == token)
-            .limit(1)
-        )
-        res = await session.execute(stmt)
-        token_record = res.scalars().first()
-
-        if not token_record:
-            return _render_capture_ip_html(
-                title="خطا در ثبت آی‌پی",
-                heading="لینک وارد شده نامعتبر است",
-                message="توکن مورد نظر یافت نشد. ممکن است این لینک قدیمی یا نامعتبر باشد.",
-                is_success=False,
-                bot_username=bot_user
-            )
-
-        if token_record.is_used:
-            return _render_capture_ip_html(
-                title="خطا در ثبت آی‌پی",
-                heading="لینک استفاده شده است",
-                message="این لینک یک‌بار مصرف پیش از این مورد استفاده قرار گرفته است. لطفاً لینک جدیدی از دکمه‌های ربات تلگرام دریافت کنید.",
-                is_success=False,
-                bot_username=bot_user
-            )
-
-        # 3. Expiration checks
-        now = datetime.now(timezone.utc)
-        expires_at = token_record.expires_at
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-            
-        if now > expires_at:
-            return _render_capture_ip_html(
-                title="خطا در ثبت آی‌پی",
-                heading="انقضای لینک امنیتی",
-                message="مهلت استفاده از این لینک (۱۰ دقیقه) به پایان رسیده است. لطفاً یک لینک تازه از منوی ربات تلگرام دریافت کنید.",
-                is_success=False,
-                bot_username=bot_user
-            )
-
-        service = token_record.service
-        if not service:
-            return _render_capture_ip_html(
-                title="خطا در ثبت آی‌پی",
-                heading="سرویس یافت نشد",
-                message="اشتراک متناظر با این لینک امنیتی در سیستم یافت نشد یا حذف گردیده است.",
-                is_success=False,
-                bot_username=bot_user
-            )
-
-        # 4. Resolve the client public IP cleanly
-        client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
-        if client_ip and "," in client_ip:
-            client_ip = client_ip.split(",")[0].strip()
-
-        if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", client_ip):
-            return _render_capture_ip_html(
-                title="خطا در ثبت آی‌پی",
-                heading="آی‌پی نامعتبر است",
-                message="آی‌پی ارسالی توسط مرورگر شما یک آدرس IPv4 استاندارد عمومی نیست. لطفاً اتصال اینترنت خود را بررسی کنید.",
-                is_success=False,
-                bot_username=bot_user
-            )
-
-        # 5. Remote and Local registration sync
-        success = await update_device_ip_safe(session, service, client_ip)
-        
-        if success:
-            token_record.is_used = True
-            await session.commit()
-            
-            return _render_capture_ip_html(
-                title="ثبت آی‌پی موفقیت‌آمیز",
-                heading="✅ ثبت آی‌پی با موفقیت انجام شد!",
-                message="آی‌پی فعلی دستگاه شما با موفقیت در پروفایل امنیتی ثبت شد. اکنون می‌توانید بدون نیاز به فیلترشکن و پروکسی تلگرام از دی‌ان‌اس اختصاصی خود روی این دستگاه استفاده کنید.",
-                is_success=True,
-                client_ip=client_ip,
-                bot_username=bot_user
-            )
-        else:
-            return _render_capture_ip_html(
-                title="خطا در ثبت آی‌پی",
-                heading="خطای ارتباطی با سرور",
-                message="ارتباط با پنل ابری دی‌ان‌اس برقرار نشد. لطفاً چند لحظه بعد مجدداً تلاش کنید.",
-                is_success=False,
-                bot_username=bot_user
-            )
-
 def _render_vpn_detected_html(
     detected_ip: str,
     country: str,
     isp: str,
+    error_message: str | None = None,
     bot_username: str = "bot"
 ) -> HTMLResponse:
-    """Renders a warning card when foreign IP / VPN is detected."""
+    """Renders the warning modal when a foreign IP or VPN is detected."""
+    custom_msg = error_message or "آی‌پی شناسایی‌شده شما متعلق به سرور خارجی یا فیلترشکن است."
     html_content = f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -674,123 +396,115 @@ def _render_vpn_detected_html(
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
-        body {{
-            font-family: 'Vazirmatn', Tahoma, sans-serif;
-            background-color: #0f172a;
-            color: #f8fafc;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }}
-        .card-box {{
-            background-color: #1e293b;
-            border: 2px solid #eab308;
-            border-radius: 16px;
-            padding: 36px;
-            box-shadow: 0 10px 25px -5px rgba(234, 179, 8, 0.25);
-            max-width: 540px;
-            width: 100%;
-            text-align: center;
-        }}
-        .icon-box {{
-            width: 75px;
-            height: 75px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 20px;
-            font-size: 38px;
-            background-color: rgba(234, 179, 8, 0.12);
-            border: 2px solid rgba(234, 179, 8, 0.3);
-        }}
-        .ip-badge {{
-            background-color: #0f172a;
-            border: 1px solid #334155;
-            font-family: monospace;
-            font-size: 1.15rem;
-            color: #f59e0b;
-        }}
-        .btn-reload {{
-            background-color: #eab308;
-            color: #0f172a;
-            font-weight: bold;
-            border: none;
-            transition: all 0.2s;
-        }}
-        .btn-reload:hover {{
-            background-color: #ca8a04;
-            color: #0f172a;
-        }}
+        body {{ font-family: 'Vazirmatn', Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }}
+        .card-box {{ background-color: #1e293b; border: 2px solid #eab308; border-radius: 16px; padding: 36px; box-shadow: 0 10px 25px -5px rgba(234, 179, 8, 0.25); max-width: 540px; width: 100%; text-align: center; }}
+        .icon-box {{ width: 75px; height: 75px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 38px; background-color: rgba(234, 179, 8, 0.12); border: 2px solid rgba(234, 179, 8, 0.3); }}
+        .ip-badge {{ background-color: #0f172a; border: 1px solid #334155; font-family: monospace; font-size: 1.15rem; color: #f59e0b; }}
+        .btn-reload {{ background-color: #eab308; color: #0f172a; font-weight: bold; border: none; transition: all 0.2s; }}
+        .btn-reload:hover {{ background-color: #ca8a04; color: #0f172a; }}
     </style>
 </head>
 <body>
     <div class="card-box">
         <div class="icon-box">⚠️</div>
         <h1 class="h4 mb-3 fw-bold text-warning">فیلترشکن شما روشن است!</h1>
-        <p class="text-light mb-3" style="font-size: 15px; line-height: 1.8;">
-            آی‌پی شناسایی‌شده شما متعلق به سرور خارجی است.<br>
-            برای فعال‌سازی DNS، ثبت آی‌پی <b>فقط با اینترنت مستقیم ایران</b> امکان‌پذیر است.
-        </p>
-        
+        <p class="text-light mb-3" style="font-size: 15px; line-height: 1.8;">{escape(custom_msg)}<br>برای فعال‌سازی DNS، ثبت آی‌پی <b>فقط با اینترنت مستقیم ایران</b> امکان‌پذیر است.</p>
         <div class="ip-badge py-2 px-3 rounded-3 mb-3 text-center">
-            آی‌پی فیلترشکن: <b>{escape(detected_ip)}</b><br>
+            آی‌پی شناسایی‌شده: <b>{escape(detected_ip)}</b><br>
             <small class="text-secondary">کشور: {escape(country)} | ارائه‌دهنده: {escape(isp)}</small>
         </div>
-
         <div class="alert alert-dark text-start small mb-4 py-2 border-secondary" style="font-size: 13px;">
-            1️⃣ فیلترشکن و پروکسی تلگرام خود را خاموش کنید.<br>
-            2️⃣ مطمئن شوید به همان اینترنت/وای‌فای متصل هستید.<br>
+            1️⃣ فیلترشکن و پروکسی تلگرام خود را کاملاً خاموش کنید.<br>
+            2️⃣ مطمئن شوید به اینترنت اصلی/وای‌فای خود متصل هستید.<br>
             3️⃣ دکمه زیر را لمس کنید:
         </div>
-
-        <button onclick="location.reload()" class="btn btn-reload py-2 px-4 rounded-3 w-100 mb-2">
-            🔄 فیلترشکن را خاموش کردم، بررسی مجدد
-        </button>
-        <a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">
-            بازگشت به ربات تلگرام
-        </a>
+        <button onclick="location.reload()" class="btn btn-reload py-2 px-4 rounded-3 w-100 mb-2">🔄 فیلترشکن را خاموش کردم، بررسی مجدد</button>
+        <a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">بازگشت به ربات تلگرام</a>
     </div>
 </body>
 </html>"""
     return HTMLResponse(content=html_content, status_code=200)
 
-@app.get("/update-ip/{device_id}", response_class=HTMLResponse)
-async def update_device_ip(request: Request, device_id: str):
-    client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
-    if client_ip and "," in client_ip:
-        client_ip = client_ip.split(",")[0].strip()
 
-    dev_id = device_id.strip()
+@app.get("/capture-ip/{token}", response_class=HTMLResponse)
+async def capture_ip(request: Request, token: str):
     bot_user = await get_bot_username()
-    now = datetime.now(timezone.utc)
+    token = token.strip()
+    if not re.match(r"^[a-fA-F0-9-]{32,36}$", token):
+        return _render_capture_ip_html("خطا در ثبت آی‌پی", "لینک نامعتبر است", "ساختار توکن امنیتی نامعتبر است.", False, bot_username=bot_user)
 
-    # 1. Format validation
-    if not client_ip or not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", client_ip):
-        return _render_capture_ip_html(
-            title="خطا در ثبت آی‌پی",
-            heading="آی‌پی شناسایی نشد",
-            message="آدرس آی‌پی عمومی شما شناسایی نشد. لطفاً اتصال اینترنت خود را بررسی کرده و فیلترشکن را خاموش کنید.",
-            is_success=False,
-            bot_username=bot_user
-        )
+    client_ip, cdn_country = get_client_real_ip(request)
 
-    # 2. 🛡️ STRICT IRAN CHECK: Reject anything that is not from Iran!
-    from app.services.vpn_detector import verify_user_ip
+    # 🛡️ ANTI-VPN CHECK
     ip_check = await verify_user_ip(client_ip)
     if not ip_check.is_iran:
-        print(f"🚫 BLOCKED VPN IP: {client_ip} (Country: {ip_check.country_code})")
         return _render_vpn_detected_html(
             detected_ip=client_ip,
             country=ip_check.country,
             isp=ip_check.isp,
+            error_message=ip_check.error_message,
+            bot_username=bot_user,
+        )
+
+    async with async_session_maker() as session:
+        stmt = select(IPAuthToken).options(joinedload(IPAuthToken.service).joinedload(VPNService.user)).where(IPAuthToken.token == token).limit(1)
+        res = await session.execute(stmt)
+        token_record = res.scalars().first()
+
+        if not token_record or token_record.is_used:
+            return _render_capture_ip_html("خطا در ثبت آی‌پی", "لینک نامعتبر یا استفاده‌شده", "این توکن قبلاً استفاده شده یا معتبر نیست.", False, bot_username=bot_user)
+
+        now = datetime.now(timezone.utc)
+        expires_at = token_record.expires_at.replace(tzinfo=timezone.utc) if token_record.expires_at.tzinfo is None else token_record.expires_at
+        if now > expires_at:
+            return _render_capture_ip_html("خطا در ثبت آی‌پی", "انقضای لینک", "مهلت استفاده از این لینک گذشته است.", False, bot_username=bot_user)
+
+        service = token_record.service
+        if not service:
+            return _render_capture_ip_html("خطا در ثبت آی‌پی", "سرویس یافت نشد", "سرویس مورد نظر یافت نشد.", False, bot_username=bot_user)
+
+        success = await update_device_ip_safe(session, service, client_ip)
+        if success:
+            token_record.is_used = True
+            await session.commit()
+            return _render_capture_ip_html("ثبت آی‌پی موفقیت‌آمیز", "✅ ثبت آی‌پی با موفقیت انجام شد!", f"آی‌پی ایران ({client_ip}) با موفقیت ثبت شد.", True, client_ip, bot_user)
+        return _render_capture_ip_html("خطا در ثبت آی‌پی", "خطای سرور", "خطا در ثبت در سرور دی‌ان‌اس.", False, bot_username=bot_user)
+
+@app.get("/update-ip/{device_id}", response_class=HTMLResponse)
+async def update_device_ip(request: Request, device_id: str):
+    # 1. Extract real client IP and CDN-detected country
+    client_ip, cdn_country = get_client_real_ip(request)
+    dev_id = device_id.strip()
+    bot_user = await get_bot_username()
+    now = datetime.now(timezone.utc)
+
+    # 2. Format validation
+    if not client_ip or not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", client_ip):
+        return _render_capture_ip_html("خطا در ثبت آی‌پی", "آی‌پی شناسایی نشد", "آدرس آی‌پی عمومی شما به درستی شناسایی نشد.", False, bot_username=bot_user)
+
+    # 3. FAST-PATH: If ArvanCloud/Cloudflare already flagged non-IR country
+    if cdn_country and cdn_country != "IR":
+        return _render_vpn_detected_html(
+            detected_ip=client_ip,
+            country=cdn_country,
+            isp="VPN / Foreign Server",
+            error_message=f"فیلترشکن شما روشن است! لوکیشن اتصال: {cdn_country}",
             bot_username=bot_user
         )
 
+    # 4. 🛡️ STRICT ANTI-VPN CHECK
+    ip_check = await verify_user_ip(client_ip)
+    if not ip_check.is_iran:
+        return _render_vpn_detected_html(
+            detected_ip=client_ip,
+            country=ip_check.country,
+            isp=ip_check.isp,
+            error_message=ip_check.error_message,
+            bot_username=bot_user
+        )
+
+    # 5. Process active subscription and update
     async with async_session_maker() as db_session:
-        # Fetch all non-disabled subscriptions for this slot ordered newest first
         stmt = (
             select(VPNService)
             .where(
@@ -802,7 +516,6 @@ async def update_device_ip(request: Request, device_id: str):
         res = await db_session.execute(stmt)
         services_list = list(res.scalars().all())
 
-        # Safe Python-level timezone parsing & expiration check
         active_service = None
         for service in services_list:
             exp = service.expire_at
@@ -817,19 +530,18 @@ async def update_device_ip(request: Request, device_id: str):
             return _render_capture_ip_html(
                 title="اشتراک منقضی شده است",
                 heading="❌ این لوکیشن (سرور) برای شما منقضی شده است",
-                message="هیچ اشتراک فعالی برای این لوکیشن یافت نشد. اگر اشتراک فعال دارید، لطفاً ابتدا از بخش «اشتراک‌های من» در ربات تلگرام لوکیشن خود را به این سرور تغییر دهید یا اقدام به تمدید نمایید.",
+                message="هیچ اشتراک فعالی برای این لوکیشن یافت نشد.",
                 is_success=False,
                 bot_username=bot_user
             )
 
-        # ✅ DUAL SYNC: Atomically updates Control D + AdGuard Home ACL + Database
         success = await update_device_ip_safe(db_session, active_service, client_ip)
 
         if success:
             return _render_capture_ip_html(
                 title="ثبت آی‌پی موفقیت‌آمیز",
                 heading="✅ ثبت آی‌پی با موفقیت انجام شد!",
-                message="آی‌پی فعلی دستگاه شما با موفقیت برای هر دو سرویس Control D و AdGuard Home ثبت شد. اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود روی این دستگاه استفاده کنید.",
+                message="آی‌پی ایران شما با موفقیت ثبت شد. اکنون می‌توانید بدون نیاز به فیلترشکن از دی‌ان‌اس اختصاصی خود استفاده کنید.",
                 is_success=True,
                 client_ip=client_ip,
                 bot_username=bot_user
@@ -838,7 +550,7 @@ async def update_device_ip(request: Request, device_id: str):
             return _render_capture_ip_html(
                 title="خطا در ثبت آی‌پی",
                 heading="خطای ارتباطی",
-                message="خطا در برقراری ارتباط با سرور دی‌ان‌اس. لطفاً چند لحظه بعد مجدداً تلاش کنید.",
+                message="خطا در برقراری ارتباط با سرور دی‌ان‌اس.",
                 is_success=False,
                 bot_username=bot_user
             )
@@ -1381,3 +1093,36 @@ def _success_html(message: str, bot_username: str = "bot") -> HTMLResponse:
 </body>
 </html>"""
     return HTMLResponse(content=html_content, status_code=200)
+
+def get_client_real_ip(request: Request) -> tuple[str, str | None]:
+    """
+    Extracts the true client IP and country header behind ArvanCloud, Cloudflare, or Nginx.
+    Returns: (client_ip, country_code_if_available)
+    """
+    headers = request.headers
+
+    # 1. ArvanCloud (ابر آروان)
+    ar_ip = headers.get("ar-real-ip")
+    ar_country = headers.get("ar-real-country") or headers.get("x-country-code")
+    if ar_ip:
+        return ar_ip.strip(), (ar_country.strip().upper() if ar_country else None)
+
+    # 2. Cloudflare
+    cf_ip = headers.get("cf-connecting-ip")
+    cf_country = headers.get("cf-ipcountry")
+    if cf_ip:
+        return cf_ip.strip(), (cf_country.strip().upper() if cf_country else None)
+
+    # 3. Standard Nginx / Reverse Proxy headers
+    real_ip = headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip(), None
+
+    xff = headers.get("x-forwarded-for")
+    if xff:
+        # First IP in XFF chain is the client
+        return xff.split(",")[0].strip(), None
+
+    # 4. Fallback to socket host
+    fallback = request.client.host if request.client else ""
+    return fallback, None
