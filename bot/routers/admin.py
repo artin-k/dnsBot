@@ -194,6 +194,7 @@ async def admin_action_navigation(
         return
 
     if action == "add_plan":
+        from bot.states.admin import AdminAddPlanStates
         await state.set_state(AdminAddPlanStates.title)
         await callback.message.answer("عنوان تعرفه را ارسال کنید:")
         return
@@ -204,16 +205,35 @@ async def admin_action_navigation(
         return
 
     if action == "broadcast":
-        # Add your FSM broadcast state trigger here
-        await callback.message.edit_text("لطفاً پیام همگانی خود را ارسال کنید:")
+        from bot.states.admin import AdminBroadcastStates
+        await state.set_state(AdminBroadcastStates.text)
+        await callback.message.edit_text("لطفاً متن پیام همگانی خود را ارسال کنید:")
         return
         
     if action == "tutorials_admin":
-        await callback.message.answer("بخش مدیریت آموزش‌ها در حال ساخت است...")
+        builder = InlineKeyboardBuilder()
+        builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="cat_comms"))
+        builder.adjust(1)
+        await callback.message.edit_text(
+            "📚 <b>مدیریت آموزش‌ها</b>\n\nدر نسخه فعلی، آموزش‌ها به صورت استاتیک در فایل‌های کیبورد ربات (`bot/keyboards/tutorials.py`) تعریف شده‌اند و برای تغییر محتوای آن‌ها باید کدهای این بخش را ویرایش کنید.",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
         return
         
     if action == "support_admin":
-        await callback.message.answer("بخش مدیریت پشتیبانی در حال ساخت است...")
+        support_username = await AppSettingsService(session).get_support_username()
+        support_text = f"@{escape(support_username)}" if support_username else "ثبت نشده"
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✏️ ویرایش آیدی پشتیبانی", callback_data=AdminSettingCallback(action="edit", key=SUPPORT_USERNAME))
+        builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="cat_comms"))
+        builder.adjust(1)
+        await callback.message.edit_text(
+            f"☎️ <b>مدیریت پشتیبانی</b>\n\nآیدی پشتیبانی فعلی ربات: {support_text}\n\nبرای تغییر آیدی پشتیبانی روی دکمه زیر کلیک کنید:",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
+        )
         return
 
     if action == "video_link_admin":
@@ -228,7 +248,6 @@ async def admin_action_navigation(
             parse_mode="HTML",
         )
         return
-
 
 @router.message(Command("teaching_video_link"), StateFilter("*"))
 async def cmd_teaching_video_link(message: Message, session: AsyncSession, settings: Settings) -> None:
