@@ -1033,3 +1033,9 @@ def get_client_real_ip(request: Request) -> tuple[str, str | None]:
     # 4. Fallback to socket host
     fallback = request.client.host if request.client else ""
     return fallback, None
+
+
+if __name__ == "__main__":
+    import uvicorn
+    # Ensure this port matches what you had in run_web_ip_updater.py
+    uvicorn.run("ip_server:app", host="127.0.0.1", port=8000, reload=False)
