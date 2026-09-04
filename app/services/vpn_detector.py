@@ -19,19 +19,20 @@ class IPVerificationResult(NamedTuple):
     error_message: str | None
 
 
-# In-memory cache (ip -> (result, expire_timestamp)) to prevent repeated lookups
+# In-memory cache (ip -> (result, expire_timestamp))
 _CACHE: dict[str, tuple[IPVerificationResult, float]] = {}
 CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
 async def verify_user_ip(ip: str) -> IPVerificationResult:
     """
-    Checks whether the IP is from Iran (IR).
-    If it's from any foreign country or private network, marks it as VPN/Blocked.
+    STRICT IRAN ENFORCER:
+    Verifies if an IP is located in Iran (IR).
+    If it is from any other country (VPN/Proxy/Datacenter), returns is_iran=False.
     """
     clean_ip = ip.strip()
 
-    # 1. Reject private / local IPs (e.g. 127.0.0.1, 192.168.x.x, 10.x.x.x)
+    # 1. Reject local/private IPs (e.g. 127.0.0.1, 192.168.x.x, 10.x.x.x)
     try:
         ip_obj = ipaddress.ip_address(clean_ip)
         if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved or ip_obj.is_link_local:
@@ -60,56 +61,51 @@ async def verify_user_ip(ip: str) -> IPVerificationResult:
         if now < expire_at:
             return cached_result
 
-    # 3. Primary Lookup: ipwho.is (Fast, HTTPS, Free)
-    async with httpx.AsyncClient(timeout=3.5) as client:
+    # 3. Primary Engine: api.country.is (Blazing fast, ~30ms, no rate limits, works from Iran)
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        try:
+            resp = await client.get(f"https://api.country.is/{clean_ip}")
+            if resp.status_code == 200:
+                data = resp.json()
+                cc = str(data.get("country", "")).upper()
+                if cc:
+                    if cc != "IR":
+                        result = IPVerificationResult(
+                            is_iran=False,
+                            is_vpn=True,
+                            country=cc,
+                            country_code=cc,
+                            isp="VPN / Foreign Server",
+                            error_message=f"فیلترشکن شما روشن است! آی‌پی شما متعلق به کشور {cc} شناسایی شد.",
+                        )
+                        _CACHE[clean_ip] = (result, now + CACHE_TTL_SECONDS)
+                        logger.info("ip_blocked_non_iran", ip=clean_ip, country=cc)
+                        return result
+                    else:
+                        result = IPVerificationResult(
+                            is_iran=True,
+                            is_vpn=False,
+                            country="ایران",
+                            country_code="IR",
+                            isp="Iran Domestic ISP",
+                            error_message=None,
+                        )
+                        _CACHE[clean_ip] = (result, now + CACHE_TTL_SECONDS)
+                        logger.info("ip_approved_iran", ip=clean_ip)
+                        return result
+        except Exception as exc:
+            logger.warning("country_is_check_failed_trying_backup", ip=clean_ip, error=str(exc))
+
+    # 4. Backup Engine: ipwho.is
+    async with httpx.AsyncClient(timeout=3.0) as client:
         try:
             resp = await client.get(f"https://ipwho.is/{clean_ip}")
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success"):
-                    cc = data.get("country_code", "").upper()
-                    country = data.get("country", "نامشخص")
-                    isp = data.get("connection", {}).get("isp", "نامشخص")
-
-                    # STRICT IRAN CHECK: Reject anything that is not IR
-                    if cc != "IR":
-                        result = IPVerificationResult(
-                            is_iran=False,
-                            is_vpn=True,
-                            country=country,
-                            country_code=cc,
-                            isp=isp,
-                            error_message=f"فیلترشکن شما روشن است! آی‌پی شما متعلق به کشور {country} ({cc}) شناسایی شد.",
-                        )
-                        _CACHE[clean_ip] = (result, now + CACHE_TTL_SECONDS)
-                        return result
-
-                    # Confirmed Iran IP
-                    result = IPVerificationResult(
-                        is_iran=True,
-                        is_vpn=False,
-                        country="ایران",
-                        country_code="IR",
-                        isp=isp,
-                        error_message=None,
-                    )
-                    _CACHE[clean_ip] = (result, now + CACHE_TTL_SECONDS)
-                    return result
-        except Exception as exc:
-            logger.warning("ipwhois_check_failed_trying_fallback", ip=clean_ip, error=str(exc))
-
-    # 4. Fallback Lookup: ip-api.com
-    async with httpx.AsyncClient(timeout=3.5) as client:
-        try:
-            resp = await client.get(
-                f"http://ip-api.com/json/{clean_ip}?fields=status,country,countryCode,isp"
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("status") == "success":
-                    cc = data.get("countryCode", "").upper()
-                    country = data.get("country", "نامشخص")
-                    isp = data.get("isp", "نامشخص")
+                    cc = str(data.get("country_code", "")).upper()
+                    country = data.get("country", cc)
+                    isp = data.get("connection", {}).get("isp", "Foreign")
 
                     if cc != "IR":
                         result = IPVerificationResult(
@@ -118,31 +114,31 @@ async def verify_user_ip(ip: str) -> IPVerificationResult:
                             country=country,
                             country_code=cc,
                             isp=isp,
-                            error_message=f"فیلترشکن شما روشن است! آی‌پی شما متعلق به کشور {country} ({cc}) شناسایی شد.",
+                            error_message=f"فیلترشکن شما روشن است! آی‌پی شما متعلق به کشور {country} ({cc}) است.",
+                        )
+                        _CACHE[clean_ip] = (result, now + CACHE_TTL_SECONDS)
+                        logger.info("ip_blocked_non_iran", ip=clean_ip, country=cc)
+                        return result
+                    else:
+                        result = IPVerificationResult(
+                            is_iran=True,
+                            is_vpn=False,
+                            country="ایران",
+                            country_code="IR",
+                            isp=isp,
+                            error_message=None,
                         )
                         _CACHE[clean_ip] = (result, now + CACHE_TTL_SECONDS)
                         return result
-
-                    # Confirmed Iran IP
-                    result = IPVerificationResult(
-                        is_iran=True,
-                        is_vpn=False,
-                        country="ایران",
-                        country_code="IR",
-                        isp=isp,
-                        error_message=None,
-                    )
-                    _CACHE[clean_ip] = (result, now + CACHE_TTL_SECONDS)
-                    return result
         except Exception as exc:
-            logger.warning("ip_api_check_failed", ip=clean_ip, error=str(exc))
+            logger.warning("ipwhois_check_failed", ip=clean_ip, error=str(exc))
 
-    # 5. Fail-safe: If both external lookup services are down, allow through
+    # 5. Strict Default: If lookups fail completely, BLOCK foreign IPs by default (Security first!)
     return IPVerificationResult(
-        is_iran=True,
-        is_vpn=False,
-        country="Iran",
-        country_code="IR",
+        is_iran=False,
+        is_vpn=True,
+        country="Unknown",
+        country_code="UNK",
         isp="Unknown",
-        error_message=None,
+        error_message="امکان اعتبارسنجی کشور آی‌پی وجود نداشت. لطفاً مطمئن شوید فیلترشکن خاموش است و مجدداً تلاش کنید.",
     )

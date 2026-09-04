@@ -759,7 +759,6 @@ def _render_vpn_detected_html(
 
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse)
 async def update_device_ip(request: Request, device_id: str):
-    """Detects, registers, and synchronizes client IP across Control D and AdGuard Home."""
     client_ip = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or request.client.host
     if client_ip and "," in client_ip:
         client_ip = client_ip.split(",")[0].strip()
@@ -768,19 +767,21 @@ async def update_device_ip(request: Request, device_id: str):
     bot_user = await get_bot_username()
     now = datetime.now(timezone.utc)
 
-    # Basic IPv4 format validation
+    # 1. Format validation
     if not client_ip or not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", client_ip):
         return _render_capture_ip_html(
             title="خطا در ثبت آی‌پی",
             heading="آی‌پی شناسایی نشد",
-            message="آدرس آی‌پی عمومی شما به درستی شناسایی نشد. لطفاً اتصال اینترنت خود را بررسی کرده و فیلترشکن را خاموش کنید.",
+            message="آدرس آی‌پی عمومی شما شناسایی نشد. لطفاً اتصال اینترنت خود را بررسی کرده و فیلترشکن را خاموش کنید.",
             is_success=False,
             bot_username=bot_user
         )
 
-    # STRICT IRAN CHECK: Reject non-IR IPs immediately
+    # 2. 🛡️ STRICT IRAN CHECK: Reject anything that is not from Iran!
+    from app.services.vpn_detector import verify_user_ip
     ip_check = await verify_user_ip(client_ip)
     if not ip_check.is_iran:
+        print(f"🚫 BLOCKED VPN IP: {client_ip} (Country: {ip_check.country_code})")
         return _render_vpn_detected_html(
             detected_ip=client_ip,
             country=ip_check.country,
