@@ -25,6 +25,14 @@ from app.repositories.reports import ReportsRepository
 from app.repositories.users import UsersRepository
 from app.services.payment_service import ApprovedPaymentResult
 from app.utils.formatting import format_money
+from app.models import User  
+from app.database import async_session_maker
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from sqlalchemy import select
+from aiogram.types import Message, CallbackQuery
+import asyncio
+from aiogram import Router, F
 
 def calculate_remaining_time_fa(expire_at) -> str:
     if not expire_at:
@@ -347,3 +355,55 @@ async def cmd_reset_all_tests(message: Message, session: AsyncSession, settings:
         await session.rollback()
         logger.error("failed_to_reset_all_tests", error=str(exc))
         await msg.edit_text(f"❌ خطا در ریست کردن اکانت‌های تست:\n<code>{str(exc)}</code>", parse_mode="HTML")
+
+class AdminBroadcastState(StatesGroup):
+    waiting_for_message = State()
+
+# 1. Trigger the Broadcast Prompt
+@router.callback_query(F.data == "admin_broadcast") # Adjust "admin_broadcast" to match your actual callback_data
+async def prompt_broadcast_message(call: CallbackQuery, state: FSMContext):
+    await call.message.answer(
+        "لطفاً پیام خود را ارسال کنید :\n\n"
+        "❌ برای لغو، کلمه `/cancel` را ارسال کنید."
+    )
+    await state.set_state(AdminBroadcastState.waiting_for_message)
+    await call.answer()
+
+# 2. Receive the message and broadcast it
+@router.message(AdminBroadcastState.waiting_for_message)
+async def execute_broadcast(message: Message, state: FSMContext):
+    if message.text and message.text.lower() == '/cancel':
+        await state.clear()
+        return await message.answer("عملیات ارسال پیام همگانی لغو شد.")
+
+    await state.clear()
+    status_msg = await message.answer("⏳ در حال ارسال پیام همگانی... لطفاً ربات را متوقف نکنید.")
+
+    success_count = 0
+    fail_count = 0
+
+    # Fetch all users from the database
+    async with async_session_maker() as session:
+        stmt = select(User.telegram_id).where(User.telegram_id.is_not(None))
+        res = await session.execute(stmt)
+        user_ids = res.scalars().all()
+
+    # Loop through users and send
+    for telegram_id in user_ids:
+        try:
+            # copy_to clones the exact message (including photos, videos, buttons)
+            await message.copy_to(chat_id=telegram_id)
+            success_count += 1
+            
+            # CRITICAL: 0.05s delay prevents Telegram from blocking your bot for spamming
+            await asyncio.sleep(0.05) 
+            
+        except Exception:
+            # Fails if the user blocked the bot or deleted their account
+            fail_count += 1
+
+    await status_msg.edit_text(
+        f"✅ پیام همگانی با موفقیت به پایان رسید!\n\n"
+        f"🟢 ارسال موفق: {success_count} کاربر\n"
+        f"🔴 ارسال ناموفق (ربات بلاک شده): {fail_count} کاربر"
+    )
