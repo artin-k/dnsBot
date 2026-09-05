@@ -34,7 +34,7 @@ from bot.utils.messages import render_dns_delivery_text
 
 
 from app.models import IPAuthToken
-from repositories import services
+from app.repositories import services
 from services.ip_manager import update_device_ip_safe
 import ipaddress
 from aiogram import Router, F
