@@ -150,3 +150,51 @@ class AdGuardHomeService:
                 logger.info("adguard_ip_deauthorized_successfully", ip=valid_ip)
                 return True
             return False
+
+    async def sync_user_client(self, service_id: int, username: str, ip_address: str | None = None) -> bool:
+        """
+        Creates or strictly updates a dedicated client in AdGuard Home.
+        Enforces exactly ONE active IP per user by overwriting the 'ids' array.
+        """
+        if not self.is_configured():
+            return True
+
+        # Generate a clean, unique panel name for this specific subscription
+        client_name = f"User_{service_id}_{username}"
+        
+        # If an IP is provided, it becomes the ONLY item in the array. 
+        # If None is provided (e.g., expiration), the array is emptied.
+        strict_ids = [ip_address] if ip_address else []
+
+        payload = {
+            "name": client_name,
+            "ids": strict_ids,
+            "use_global_settings": True,
+            "filtering_enabled": True,
+            "parental_enabled": False,
+            "safesearch_enabled": False,
+            "safebrowsing_enabled": False,
+            "use_global_blocked_services": True,
+            "upstreams": []
+        }
+
+        # 1. Attempt to create a brand new client
+        add_res = await self._request("POST", "/control/clients/add", payload=payload)
+        if add_res is not None:
+            logger.info("adguard_client_created", name=client_name, ip=ip_address)
+            return True
+
+        # 2. If creation failed (returns None), the client already exists.
+        # We issue an UPDATE command to overwrite their old IP with the new one.
+        update_payload = {
+            "name": client_name,
+            "data": payload
+        }
+        update_res = await self._request("POST", "/control/clients/update", payload=update_payload)
+        
+        if update_res is not None:
+            logger.info("adguard_client_strictly_updated", name=client_name, ip=ip_address)
+            return True
+
+        logger.error("adguard_client_sync_completely_failed", name=client_name)
+        return False

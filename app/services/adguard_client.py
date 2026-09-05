@@ -1,14 +1,61 @@
-# services/adguard_client.py
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import re
 from typing import Any
 import aiohttp
 
+# =========================================================================
+# Custom Exceptions
+# =========================================================================
+class AdGuardAPIError(Exception):
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(f"AdGuard API Error {status_code}: {message}")
 
+class AdGuardNetworkError(Exception):
+    pass
+
+class ValidationError(Exception):
+    pass
+
+# =========================================================================
+# Validation Helpers
+# =========================================================================
+UPSTREAM_PATTERN = re.compile(
+    r"^(?:(?:https|tls|quic|tcp|udp)://)?"
+    r"(?:[a-zA-Z0-9-._]+|\[[0-9a-fA-F:]+\])"
+    r"(?::\d{1,5})?"
+    r"(?:/[a-zA-Z0-9-._~%!$&'()*+,;=:@/]*)*$"
+    r"|^sdns://[a-zA-Z0-9-_]+$"
+)
+
+def validate_upstream_spec(upstream: str) -> str:
+    """Validates and sanitizes DNS upstream URLs."""
+    cleaned = upstream.strip()
+    if not UPSTREAM_PATTERN.match(cleaned):
+        raise ValidationError(f"Malformed upstream specification: {cleaned}")
+    return cleaned
+
+def sanitize_network_target(target: str) -> str:
+    """Validates and sanitizes IPv4/IPv6 addresses or CIDR blocks."""
+    cleaned = target.strip()
+    try:
+        if "/" in cleaned:
+            return str(ipaddress.ip_network(cleaned, strict=False))
+        return str(ipaddress.ip_address(cleaned))
+    except ValueError as exc:
+        raise ValidationError(f"Invalid IP/CIDR target: {cleaned}") from exc
+
+
+# =========================================================================
+# Main Client Class
+# =========================================================================
 class AdGuardHomeClient:
     """Non-blocking, resilient API client for AdGuard Home."""
-
+    
     def __init__(
         self,
         base_url: str,

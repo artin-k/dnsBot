@@ -81,14 +81,21 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
         logger.error("controld_auth_unsuccessful_aborting_db_sync", service_id=service.id, new_ip=clean_new_ip)
         return False
 
-    # 4. Authorize New IP on AdGuard Home
+    # 4. Authorize New IP on AdGuard Home (inside ip_manager.py)
     if adguard.is_configured():
         try:
             logger.info("authorizing_new_ip_adguard", service_id=service.id, new_ip=clean_new_ip)
+            
+            # Step A: Allow the IP through the global firewall
             await adguard.allow_client_ip(clean_new_ip)
+            
+            # Step B: Tie this single IP strictly to their AdGuard Client profile
+            username = service.user.username if service.user and service.user.username else f"u{service.user_id}"
+            await adguard.sync_user_client(service.id, username, clean_new_ip)
+            
         except Exception as exc:
             logger.warning("adguard_new_ip_auth_failed_non_fatal", service_id=service.id, error=str(exc))
-
+            
     # 5. Commit updated IP to database
     try:
         service.authorized_ip = clean_new_ip
