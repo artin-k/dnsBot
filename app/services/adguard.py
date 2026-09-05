@@ -78,6 +78,27 @@ class AdGuardHomeService:
                 logger.error("adguard_network_error", endpoint=endpoint, error=str(exc))
                 return None
 
+    async def _client_request(self, endpoint: str, payload: dict[str, Any]) -> tuple[int | None, str]:
+        if not self.is_configured():
+            return 200, "not configured"
+
+        url = f"{self._base_url}{endpoint}"
+        async with aiohttp.ClientSession(auth=self._auth, timeout=self._timeout) as session:
+            try:
+                async with session.post(url, json=payload) as resp:
+                    text = await resp.text()
+                    if resp.status >= 400:
+                        logger.warning(
+                            "adguard_client_api_error",
+                            status=resp.status,
+                            text=text,
+                            endpoint=endpoint,
+                        )
+                    return resp.status, text
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                logger.error("adguard_client_network_error", endpoint=endpoint, error=str(exc))
+                return None, str(exc)
+
     # --- Access Control List (Whitelist Authorization & Deauthorization) ---
     async def allow_client_ip(self, ip_address: str) -> bool:
         """Authorizes a client IP in AdGuard Home's allowed_clients list."""
@@ -151,7 +172,7 @@ class AdGuardHomeService:
                 return True
             return False
 
-    async def sync_user_client(self, service_id: int, username: str, ip_address: str | None = None) -> bool:
+    async def sync_user_client(self, service_id: int, username: str | None, ip_address: str | None = None) -> bool:
         """
         Creates or strictly updates a dedicated client in AdGuard Home.
         Enforces exactly ONE active IP per user by overwriting the 'ids' array.
@@ -159,12 +180,25 @@ class AdGuardHomeService:
         if not self.is_configured():
             return True
 
-        # Generate a clean, unique panel name for this specific subscription
-        client_name = f"User_{service_id}_{username}"
-        
-        # If an IP is provided, it becomes the ONLY item in the array. 
-        # If None is provided (e.g., expiration), the array is emptied.
-        strict_ids = [ip_address] if ip_address else []
+        clean_username = re.sub(r"[^A-Za-z0-9_-]+", "_", (username or "").strip()).strip("_")
+        if not clean_username:
+            clean_username = f"u{service_id}"
+
+        client_name = f"User_{service_id}_{clean_username}"
+
+        if ip_address:
+            try:
+                strict_ids = [validate_network_target(ip_address)]
+            except ValueError as exc:
+                logger.error(
+                    "invalid_ip_for_adguard_client_sync",
+                    service_id=service_id,
+                    ip=ip_address,
+                    error=str(exc),
+                )
+                return False
+        else:
+            strict_ids = []
 
         payload = {
             "name": client_name,
@@ -175,26 +209,38 @@ class AdGuardHomeService:
             "safesearch_enabled": False,
             "safebrowsing_enabled": False,
             "use_global_blocked_services": True,
-            "upstreams": []
+            "upstreams": [],
         }
 
-        # 1. Attempt to create a brand new client
-        add_res = await self._request("POST", "/control/clients/add", payload=payload)
-        if add_res is not None:
-            logger.info("adguard_client_created", name=client_name, ip=ip_address)
+        add_status, add_text = await self._client_request("/control/clients/add", payload)
+        if add_status in (200, 201):
+            logger.info("adguard_client_created", name=client_name, ids=strict_ids)
             return True
 
-        # 2. If creation failed (returns None), the client already exists.
-        # We issue an UPDATE command to overwrite their old IP with the new one.
+        if add_status != 400:
+            logger.error(
+                "adguard_client_add_failed_not_retryable",
+                name=client_name,
+                status=add_status,
+                text=add_text,
+            )
+            return False
+
         update_payload = {
             "name": client_name,
-            "data": payload
+            "data": payload,
         }
-        update_res = await self._request("POST", "/control/clients/update", payload=update_payload)
-        
-        if update_res is not None:
-            logger.info("adguard_client_strictly_updated", name=client_name, ip=ip_address)
+        update_status, update_text = await self._client_request("/control/clients/update", update_payload)
+        if update_status in (200, 201):
+            logger.info("adguard_client_strictly_updated", name=client_name, ids=strict_ids)
             return True
 
-        logger.error("adguard_client_sync_completely_failed", name=client_name)
+        logger.error(
+            "adguard_client_sync_completely_failed",
+            name=client_name,
+            add_status=add_status,
+            add_text=add_text,
+            update_status=update_status,
+            update_text=update_text,
+        )
         return False
