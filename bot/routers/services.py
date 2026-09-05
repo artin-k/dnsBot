@@ -1,15 +1,18 @@
 # bot/routers/services.py
 from html import escape
 from datetime import datetime, timezone, timedelta
+import ipaddress
+from sre_parse import State
 from zoneinfo import ZoneInfo
 import jdatetime
 import httpx
+from sqlalchemy.orm import joinedload
 import structlog
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, LinkPreviewOptions, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -31,6 +34,20 @@ from bot.utils.messages import render_dns_delivery_text
 
 
 from app.models import IPAuthToken
+from repositories import services
+from services.ip_manager import update_device_ip_safe
+import ipaddress
+from aiogram import Router, F
+from aiogram.types import CallbackQuery, Message, LinkPreviewOptions
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
+
+from app.database import async_session_maker
+from app.models import VPNService
+from app.services.ip_manager import update_device_ip_safe
+
 
 router = Router(name="services")
 logger = structlog.get_logger(__name__)
@@ -100,6 +117,7 @@ def _build_secure_ip_registration_keyboard(
 
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=capture_url)
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=capture_url)
+    builder.button(text="✍️ ثبت دستی آی‌پی",callback_data=f"manual_ip:{services.id}")
 
     if support_username:
         clean_sup = support_username.removeprefix("@").strip()
@@ -532,3 +550,71 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
         parse_mode="HTML",
     )
     await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
+
+class ManualIPState(StatesGroup):
+    waiting_for_ip = State()
+
+@router.callback_query(F.data.startswith("manual_ip:"))
+async def on_manual_ip_clicked(call: CallbackQuery, state: FSMContext):
+    service_id = int(call.data.split(":")[1])
+    await state.update_data(service_id=service_id)
+    
+    prompt_text = (
+        "لطفاً IP خود را وارد نمایید. \n"
+        "برای مشاهده IP فعلی خود، روی لینک زیر کلیک کنید:\n\n"
+        "🌐 https://ipnumberia.com\n\n"
+        "⚠️ نکته: حتماً VPN یا فیلترشکن خود را خاموش کنید و سپس IP نمایش‌داده‌شده را در بخش مربوطه وارد نمایید."
+    )
+    
+    await call.message.answer(
+        prompt_text,
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
+    )
+    await state.set_state(ManualIPState.waiting_for_ip)
+    await call.answer()
+
+@router.message(ManualIPState.waiting_for_ip, F.text)
+async def handle_manual_ip_submission(message: Message, state: FSMContext):
+    raw_ip = message.text.strip()
+    
+    # 1. Format validation
+    try:
+        ip_obj = ipaddress.IPv4Address(raw_ip)
+        if ip_obj.is_private or ip_obj.is_loopback:
+            return await message.answer("❌ این آی‌پی عمومی نیست (Private/Local). لطفاً آی‌پی اصلی اینترنت خود را وارد کنید.")
+    except ValueError:
+        return await message.answer("❌ فرمت آی‌پی نامعتبر است. لطفاً فقط ساختار عددی مانند `5.200.10.15` را ارسال کنید.")
+
+    data = await state.get_data()
+    service_id = data.get("service_id")
+    if not service_id:
+        await state.clear()
+        return await message.answer("❌ نشست منقضی شده است. لطفاً مجدداً دکمه ثبت دستی را بزنید.")
+
+    wait_msg = await message.answer("⏳ در حال ثبت و همگام‌سازی آی‌پی با سرورها...")
+
+    async with async_session_maker() as session:
+        stmt = (
+            select(VPNService)
+            .options(joinedload(VPNService.user))
+            .where(VPNService.id == service_id)
+            .limit(1)
+        )
+        res = await session.execute(stmt)
+        service = res.scalars().first()
+
+        if not service:
+            await wait_msg.delete()
+            await state.clear()
+            return await message.answer("❌ سرویس مربوطه در سیستم یافت نشد.")
+
+        # Runs Control D + AdGuard persistent client sync
+        success = await update_device_ip_safe(session, service, raw_ip)
+
+    await wait_msg.delete()
+    await state.clear()
+
+    if success:
+        await message.answer(f"✅ آی‌پی شما با موفقیت ثبت و تنظیم شد!\n\n🌐 آی‌پی فعال: `{raw_ip}`")
+    else:
+        await message.answer("❌ خطا در همگام‌سازی با سرورها. لطفاً دقایقی دیگر تلاش کنید یا با پشتیبانی تماس بگیرید.")

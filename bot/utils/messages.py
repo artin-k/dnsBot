@@ -42,7 +42,7 @@ def render_dns_delivery_text(
 
     # Build AdGuard Home Section
     agh_primary = settings.adguard_primary_dns or "94.183.180.215"
-    agh_secondary = settings.adguard_secondary_dns or "94.183.180.215"
+    agh_secondary = settings.adguard_secondary_dns or "0.0.0.0"
     agh_doh = settings.adguard_doh_url
 
     adguard_block = f"""
