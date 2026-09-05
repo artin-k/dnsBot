@@ -1,7 +1,7 @@
 # app/services/ip_manager.py
 from datetime import datetime, timezone
-from sqlalchemy import select  # <-- FIXED
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -10,6 +10,7 @@ from app.services.adguard import AdGuardHomeService
 from app.services.controld import ControlDService
 
 logger = structlog.get_logger(__name__)
+
 
 async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_ip: str) -> bool:
     if not service:
@@ -37,25 +38,61 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
     controld = ControlDService(settings)
     adguard = AdGuardHomeService(settings)
 
-    # 2. Deauthorize Old IP if it exists and has changed
+    # -------------------------------------------------------------------------
+    # 2. PRIMARY: Authorize New IP on Control D
+    # -------------------------------------------------------------------------
+    controld_success = False
+    try:
+        logger.info("authorizing_new_ip_controld", service_id=service.id, device_id=device_id, new_ip=clean_new_ip)
+        controld_success = await controld.authorize_ip(device_id, clean_new_ip)
+    except Exception as exc:
+        logger.error("controld_new_ip_auth_failed", service_id=service.id, error=str(exc))
+
+    if not controld_success:
+        logger.error("controld_auth_unsuccessful_aborting_sync", service_id=service.id, new_ip=clean_new_ip)
+        return False
+
+    # -------------------------------------------------------------------------
+    # 3. SECONDARY: Sync New IP & Client Object on AdGuard Home
+    # -------------------------------------------------------------------------
+    if adguard.is_configured():
+        try:
+            logger.info("authorizing_new_ip_adguard", service_id=service.id, new_ip=clean_new_ip)
+            
+            # Step A: Allow IP through global firewall
+            await adguard.allow_client_ip(clean_new_ip)
+            
+            # Step B: Safe username resolution (avoids MissingGreenlet crash)
+            user_obj = service.__dict__.get("user")
+            username = user_obj.username if user_obj and user_obj.username else f"u{service.user_id}"
+            clean_username = "".join(c for c in username if c.isalnum() or c in ("_", "-"))
+
+            # Step C: Register/update dedicated 1-to-1 client object
+            await adguard.sync_user_client(service.id, clean_username, clean_new_ip)
+            
+        except Exception as exc:
+            logger.warning("adguard_sync_failed_non_fatal", service_id=service.id, error=str(exc))
+
+    # -------------------------------------------------------------------------
+    # 4. CLEANUP: Deauthorize Old IP if Changed (Guarded by Shared-Slot Check)
+    # -------------------------------------------------------------------------
     if old_ip and old_ip != clean_new_ip:
-        # NEW CHECK: Are any other active users sharing the old IP?
         active_shared_ip_stmt = select(VPNService).where(
             VPNService.authorized_ip == old_ip,
             VPNService.status == "active",
             VPNService.id != service.id
         ).limit(1)
         has_active_sharers = (await session.execute(active_shared_ip_stmt)).scalars().first()
-        
+
         if not has_active_sharers:
-            # Deauthorize from Control D
+            # Drop from Control D
             try:
                 logger.info("deauthorizing_old_ip_controld", service_id=service.id, device_id=device_id, old_ip=old_ip)
                 await controld.deauthorize_ip(device_id, old_ip)
             except Exception as exc:
                 logger.warning("controld_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
 
-            # Deauthorize from AdGuard Home
+            # Drop from AdGuard global whitelist
             if adguard.is_configured():
                 try:
                     logger.info("deauthorizing_old_ip_adguard", service_id=service.id, old_ip=old_ip)
@@ -69,34 +106,9 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
                 old_ip=old_ip,
             )
 
-    # 3. Authorize New IP on Control D
-    controld_success = False
-    try:
-        logger.info("authorizing_new_ip_controld", service_id=service.id, device_id=device_id, new_ip=clean_new_ip)
-        controld_success = await controld.authorize_ip(device_id, clean_new_ip)
-    except Exception as exc:
-        logger.error("controld_new_ip_auth_failed", service_id=service.id, error=str(exc))
-
-    if not controld_success:
-        logger.error("controld_auth_unsuccessful_aborting_db_sync", service_id=service.id, new_ip=clean_new_ip)
-        return False
-
-    # 4. Authorize New IP on AdGuard Home (inside ip_manager.py)
-    if adguard.is_configured():
-        try:
-            logger.info("authorizing_new_ip_adguard", service_id=service.id, new_ip=clean_new_ip)
-            
-            # Step A: Allow the IP through the global firewall
-            await adguard.allow_client_ip(clean_new_ip)
-            
-            # Step B: Tie this single IP strictly to their AdGuard Client profile
-            username = service.user.username if service.user and service.user.username else f"u{service.user_id}"
-            await adguard.sync_user_client(service.id, username, clean_new_ip)
-            
-        except Exception as exc:
-            logger.warning("adguard_new_ip_auth_failed_non_fatal", service_id=service.id, error=str(exc))
-            
-    # 5. Commit updated IP to database
+    # -------------------------------------------------------------------------
+    # 5. Database Commit
+    # -------------------------------------------------------------------------
     try:
         service.authorized_ip = clean_new_ip
         await session.commit()
