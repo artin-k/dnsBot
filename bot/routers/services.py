@@ -1,53 +1,33 @@
 # bot/routers/services.py
-from html import escape
-from datetime import datetime, timezone, timedelta
 import ipaddress
-from sre_parse import State
-from zoneinfo import ZoneInfo
-import jdatetime
-import httpx
-from sqlalchemy.orm import joinedload
-import structlog
+import uuid
+from datetime import datetime, timedelta, timezone
+from html import escape
 
+import structlog
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, LinkPreviewOptions, Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy.orm import joinedload
 
-from app.config import Settings, get_settings, SLOT_CONFIGS
-from app.models import Plan, VPNService
+from app.config import SLOT_CONFIGS, Settings, get_settings
+from app.database import async_session_maker
+from app.models import IPAuthToken, Plan, VPNService
 from app.repositories.services import ServicesRepository
 from app.repositories.users import UsersRepository
 from app.services.controld import ControlDService
-from app.utils.formatting import format_datetime
-from bot import menu_actions
-from bot import texts
-from bot.keyboards.main_menu import main_menu_keyboard
-import uuid
-# bot/routers/services.py
+from app.services.ip_manager import update_device_ip_safe
 from app.services.settings_service import AppSettingsService
+from app.utils.formatting import format_datetime
+from bot import menu_actions, texts
+from bot.keyboards.main_menu import main_menu_keyboard
 from bot.utils.auto_clean import schedule_message_deletion
 from bot.utils.messages import render_dns_delivery_text
-
-
-from app.models import IPAuthToken
-from app.repositories import services
-from services.ip_manager import update_device_ip_safe
-import ipaddress
-from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message, LinkPreviewOptions
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select
-from sqlalchemy.orm import joinedload
-
-from app.database import async_session_maker
-from app.models import VPNService
-from app.services.ip_manager import update_device_ip_safe
-
 
 router = Router(name="services")
 logger = structlog.get_logger(__name__)
@@ -56,7 +36,6 @@ WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 
 
 def is_service_active(service: VPNService) -> bool:
-    """A service is ACTIVE if its status is not 'disabled' and expire_at is in the future."""
     if not service or service.status == "disabled":
         return False
     now = datetime.now(timezone.utc)
@@ -69,7 +48,6 @@ def is_service_active(service: VPNService) -> bool:
 
 
 def format_service_item_display(service: VPNService, index: int) -> str:
-    """Parses active subscription metadata cleanly for localized server names."""
     raw_username = service.username or ""
     service_display = "کل ترافیک اینترنت (Default)"
     country_display = "پیش‌فرض"
@@ -103,10 +81,10 @@ def format_service_item_display(service: VPNService, index: int) -> str:
 
 def _build_secure_ip_registration_keyboard(
     token: str,
+    service_id: int,
     support_username: str = "",
     video_link: str = "",
 ) -> InlineKeyboardMarkup:
-    """Build a keyboard whose registration link identifies one service only."""
     builder = InlineKeyboardBuilder()
 
     base_url = WEB_SERVER_BASE_URL.strip().rstrip("/")
@@ -117,7 +95,7 @@ def _build_secure_ip_registration_keyboard(
 
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=capture_url)
     builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=capture_url)
-    builder.button(text="✍️ ثبت دستی آی‌پی",callback_data=f"manual_ip:{services.id}")
+    builder.button(text="✍️ ثبت دستی آی‌پی", callback_data=f"manual_ip:{service_id}")
 
     if support_username:
         clean_sup = support_username.removeprefix("@").strip()
@@ -139,7 +117,6 @@ async def create_secure_ip_update_keyboard(
     session: AsyncSession,
     service_id: int,
 ) -> InlineKeyboardMarkup:
-    """Issue a single-use token and build the service-bound capture-IP keyboard."""
     service = await session.get(VPNService, service_id)
     if service is None:
         raise ValueError(f"Cannot issue an IP registration token for missing service {service_id}")
@@ -155,8 +132,6 @@ async def create_secure_ip_update_keyboard(
             is_used=False,
         )
     )
-    # The Telegram message is sent after this function returns, so the token
-    # must already be durable when its URL is exposed to the user.
     await session.commit()
 
     app_settings = AppSettingsService(session)
@@ -172,13 +147,13 @@ async def create_secure_ip_update_keyboard(
 
     return _build_secure_ip_registration_keyboard(
         token=token,
+        service_id=service.id,
         support_username=support_username,
         video_link=video_link,
     )
 
 
 def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
-    """Simple standard buttons for service management."""
     builder = InlineKeyboardBuilder()
     builder.button(text="🔗 لینک‌های اتصال", callback_data=f"manage_links:{service_id}")
     builder.button(text="🗺 تنظیمات لوکیشن سرور", callback_data=f"change_default_loc_select:{service_id}")
@@ -193,7 +168,6 @@ async def _show_my_services_page(
     page: int,
     session: AsyncSession,
 ) -> None:
-    """Simple standard layout for My Services."""
     user_id = callback_or_message.from_user.id
     user = await UsersRepository(session).get_by_telegram_id(user_id)
     if not user:
@@ -280,7 +254,6 @@ async def handle_my_services_page(callback: CallbackQuery, session: AsyncSession
 
 @router.callback_query(F.data.startswith("manage_service:"), StateFilter("*"))
 async def handle_manage_service(callback: CallbackQuery, session: AsyncSession) -> None:
-    """Displays the administrative options for the subscription."""
     await callback.answer()
     if callback.message is None:
         return
@@ -314,7 +287,6 @@ async def handle_manage_service(callback: CallbackQuery, session: AsyncSession) 
 
 @router.callback_query(F.data.startswith("manage_links:"), StateFilter("*"))
 async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) -> None:
-    """Generates the connection links showing both Control D and AdGuard Home."""
     await callback.answer()
     if callback.message is None:
         return
@@ -369,7 +341,6 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
 
 @router.callback_query(F.data.startswith("manage_status:"), StateFilter("*"))
 async def handle_manage_status(callback: CallbackQuery, session: AsyncSession) -> None:
-    """Displays the live connection status of the service."""
     await callback.answer()
     if callback.message is None:
         return
@@ -390,7 +361,6 @@ async def _show_default_loc_page(
     settings: Settings | None = None,
     session: AsyncSession | None = None,
 ) -> None:
-    """Simple location switcher between Germany & Turkey."""
     if isinstance(service_or_id, int):
         if session is None:
             from app.database import async_session_maker
@@ -406,17 +376,14 @@ async def _show_default_loc_page(
         return
 
     builder = InlineKeyboardBuilder()
-
     current_device = service.controld_device_id
     is_germany_active = current_device == SLOT_CONFIGS[1]["device_id"]
     is_turkey_active = current_device == SLOT_CONFIGS[5]["device_id"]
 
-    # Germany Button
     builder.button(
         text="🇩🇪 آلمان (فرانکفورت)" + (" (فعال)" if is_germany_active else ""),
         callback_data=f"apply_def_loc:{service.id}:1",
     )
-    # Turkey Button
     builder.button(
         text="🇹🇷 ترکیه (استانبول)" + (" (فعال)" if is_turkey_active else ""),
         callback_data=f"apply_def_loc:{service.id}:5",
@@ -463,7 +430,6 @@ async def handle_def_loc_page(callback: CallbackQuery, session: AsyncSession, se
     await callback.answer()
     if callback.message is None:
         return
-
     parts = callback.data.split(":")
     service_id = int(parts[1])
     await _show_default_loc_page(callback, service_id, settings=settings, session=session)
@@ -471,7 +437,6 @@ async def handle_def_loc_page(callback: CallbackQuery, session: AsyncSession, se
 
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    """Migrates a user's IP registration from one static slot to another statically."""
     await callback.answer()
     if callback.message is None:
         return
@@ -487,8 +452,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
 
     if not is_service_active(service):
         await callback.message.answer(
-            "❌ <b>این اشتراک منقضی شده است.</b>\n\n"
-            "امکان تغییر لوکیشن برای سرویس‌های منقضی شده وجود ندارد. لطفاً ابتدا اقدام به تمدید نمایید.",
+            "❌ <b>این اشتراک منقضی شده است.</b>\n\nامکان تغییر لوکیشن برای سرویس‌های منقضی شده وجود ندارد.",
             parse_mode="HTML",
         )
         return
@@ -520,14 +484,14 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
             logger.info("surgically_deauthorizing_old_slot_ip", service_id=service.id, old_device_id=old_device_id, ip=user_ip)
             await controld.deauthorize_ip(old_device_id, user_ip)
         except Exception as exc:
-            logger.warning("old_slot_ip_deauthorization_failed_proceeding", service_id=service.id, error=str(exc))
+            logger.warning("old_slot_ip_deauth_failed", service_id=service.id, error=str(exc))
 
     if user_ip:
         try:
             logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=user_ip)
             await controld.authorize_ip(new_device_id, user_ip)
         except Exception as exc:
-            logger.error("new_slot_ip_authorization_failed", service_id=service.id, error=str(exc))
+            logger.error("new_slot_ip_auth_failed", service_id=service.id, error=str(exc))
 
     raw_username = service.username.split("|")[0].strip() if service.username else "دستگاه"
     service.username = f"{raw_username}|default|{slot_num}"
@@ -544,11 +508,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     )
 
     markup = await create_secure_ip_update_keyboard(session, service.id)
-    sent_msg = await callback.message.answer(
-        text=success_text,
-        reply_markup=markup,
-        parse_mode="HTML",
-    )
+    sent_msg = await callback.message.answer(text=success_text, reply_markup=markup, parse_mode="HTML")
     await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
 
 class ManualIPState(StatesGroup):
@@ -566,10 +526,7 @@ async def on_manual_ip_clicked(call: CallbackQuery, state: FSMContext):
         "⚠️ نکته: حتماً VPN یا فیلترشکن خود را خاموش کنید و سپس IP نمایش‌داده‌شده را در بخش مربوطه وارد نمایید."
     )
     
-    await call.message.answer(
-        prompt_text,
-        link_preview_options=LinkPreviewOptions(is_disabled=True)
-    )
+    await call.message.answer(prompt_text, link_preview_options=LinkPreviewOptions(is_disabled=True))
     await state.set_state(ManualIPState.waiting_for_ip)
     await call.answer()
 
@@ -577,7 +534,6 @@ async def on_manual_ip_clicked(call: CallbackQuery, state: FSMContext):
 async def handle_manual_ip_submission(message: Message, state: FSMContext):
     raw_ip = message.text.strip()
     
-    # 1. Format validation
     try:
         ip_obj = ipaddress.IPv4Address(raw_ip)
         if ip_obj.is_private or ip_obj.is_loopback:
@@ -608,7 +564,6 @@ async def handle_manual_ip_submission(message: Message, state: FSMContext):
             await state.clear()
             return await message.answer("❌ سرویس مربوطه در سیستم یافت نشد.")
 
-        # Runs Control D + AdGuard persistent client sync
         success = await update_device_ip_safe(session, service, raw_ip)
 
     await wait_msg.delete()
