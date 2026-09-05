@@ -215,7 +215,7 @@ async def admin_action_navigation(
     if action == "admin_broadcast":
         from bot.states.admin import AdminBroadcastStates
         await state.set_state(AdminBroadcastStates.text)
-        await callback.message.edit_text("لطفاً متن پیام همگانی خود را ارسال کنید:")
+        await callback.message.edit_text("لطفاً پیام خود را ارسال کنید :\n\n❌ برای لغو، کلمه /cancel را ارسال کنید.")
         return
         
     if action == "tutorials_admin":
@@ -356,21 +356,9 @@ async def cmd_reset_all_tests(message: Message, session: AsyncSession, settings:
         logger.error("failed_to_reset_all_tests", error=str(exc))
         await msg.edit_text(f"❌ خطا در ریست کردن اکانت‌های تست:\n<code>{str(exc)}</code>", parse_mode="HTML")
 
-class AdminBroadcastState(StatesGroup):
-    waiting_for_message = State()
+from bot.states.admin import AdminBroadcastStates
 
-# 1. Trigger the Broadcast Prompt
-@router.callback_query(F.data == "admin_broadcast") # Adjust "admin_broadcast" to match your actual callback_data
-async def prompt_broadcast_message(call: CallbackQuery, state: FSMContext):
-    await call.message.answer(
-        "لطفاً پیام خود را ارسال کنید :\n\n"
-        "❌ برای لغو، کلمه `/cancel` را ارسال کنید."
-    )
-    await state.set_state(AdminBroadcastState.waiting_for_message)
-    await call.answer()
-
-# 2. Receive the message and broadcast it
-@router.message(AdminBroadcastState.waiting_for_message)
+@router.message(AdminBroadcastStates.text)
 async def execute_broadcast(message: Message, state: FSMContext):
     if message.text and message.text.lower() == '/cancel':
         await state.clear()
