@@ -125,10 +125,11 @@ def _approved_message(
 🔹 <b>تاریخ انقضاء:</b> <code>{escape(expire_str)}</code>
 🔷 <b>زمان باقی‌مانده:</b> {escape(duration_text)}
 ━━━━━━━━━━━━━━━━━━━━━
-🔹 Primary: <code>{escape(ipv4_primary)}</code>
-🔹 Secondary: <code>{escape(ipv4_secondary)}</code>
 
 {agh_section}
+
+🔹 Primary: <code>{escape(ipv4_primary)}</code>
+🔹 Secondary: <code>{escape(ipv4_secondary)}</code>
 ━━━━━━━━━━━━━━━━━━━━━
 📋 <b>مراحل فعال‌سازی:</b>
 1️⃣ فیلترشکن و پروکسی تلگرام خود را خاموش کنید.
