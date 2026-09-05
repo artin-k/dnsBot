@@ -212,7 +212,7 @@ async def admin_action_navigation(
         await callback.message.edit_text("⚙️ تنظیمات ربات:", reply_markup=bot_settings_keyboard())
         return
 
-    if action == "broadcast":
+    if action == "admin_broadcast":
         from bot.states.admin import AdminBroadcastStates
         await state.set_state(AdminBroadcastStates.text)
         await callback.message.edit_text("لطفاً متن پیام همگانی خود را ارسال کنید:")

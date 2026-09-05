@@ -188,7 +188,7 @@ def admin_services_keyboard() -> InlineKeyboardMarkup:
 
 def admin_communications_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="📢 پیام همگانی", callback_data=AdminActionCallback(action="broadcast"))
+    builder.button(text="📢 پیام همگانی", callback_data=AdminActionCallback(action="admin_broadcast"))
     builder.button(text="📚 آموزش‌ها", callback_data=AdminActionCallback(action="tutorials_admin"))
     builder.button(text="🎥 لینک ویدیو آموزشی", callback_data=AdminActionCallback(action="video_link_admin"))
     builder.button(text="☎️ پشتیبانی", callback_data=AdminActionCallback(action="support_admin"))
