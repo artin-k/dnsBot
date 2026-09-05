@@ -459,12 +459,12 @@ async def capture_ip(request: Request, token: str):
         if not service:
             return _render_capture_ip_html("خطا در ثبت آی‌پی", "سرویس یافت نشد", "سرویس مورد نظر یافت نشد.", False, bot_username=bot_user)
 
-        # update_device_ip_safe commits the service IP. Marking the token first
-        # makes token consumption and the IP update a single DB commit.
-        token_record.is_used = True
         success = await update_device_ip_safe(session, service, client_ip)
         if success:
+            token_record.is_used = True
+            await session.commit()
             return _render_capture_ip_html("ثبت آی‌پی موفقیت‌آمیز", "✅ ثبت آی‌پی با موفقیت انجام شد!", f"آی‌پی ایران ({client_ip}) با موفقیت ثبت شد.", True, client_ip, bot_user)
+
         return _render_capture_ip_html("خطا در ثبت آی‌پی", "خطای سرور", "خطا در ثبت در سرور دی‌ان‌اس.", False, bot_username=bot_user)
 
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse, status_code=status.HTTP_410_GONE)
