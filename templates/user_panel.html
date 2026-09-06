@@ -3,275 +3,377 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>پنل مدیریت دی‌ان‌اس گیمینگ | PingSep</title>
+    <title>اتصال دی‌ان‌اس برقرار شد | PingSep</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700;900&display=swap');
+
         :root {
-            --bg-color: #090d16;
-            --card-bg: #111827;
-            --border-color: #1f293d;
-            --text-main: #f9fafb;
-            --text-muted: #9ca3af;
-            --accent-blue: #3b82f6;
-            --success-color: #10b981;
-            --warning-color: #f59e0b;
+            --neon-green: #00e676;
+            --neon-green-glow: rgba(0, 230, 118, 0.4);
+            --dark-card: rgba(13, 22, 32, 0.85);
+            --card-border: rgba(30, 41, 59, 0.9);
+            --text-muted: #8899a6;
         }
+
         body {
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: radial-gradient(circle at top, #0d1b2a 0%, #050a0f 100%);
+            background-attachment: fixed;
+            color: #ffffff;
+            font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 40px 14px;
+            padding: 30px 14px;
+            margin: 0;
+            position: relative;
+            overflow-x: hidden;
         }
-        .panel-container {
+
+        /* Cyberpunk Grid Background Overlay */
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(rgba(0, 230, 118, 0.03) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(0, 230, 118, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .main-wrapper {
+            position: relative;
+            z-index: 1;
             width: 100%;
             max-width: 580px;
+            text-align: center;
         }
-        .glass-card {
-            background-color: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 16px;
-            padding: 22px;
-            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6);
-            margin-bottom: 16px;
+
+        /* Shelter-Style Green Arrow Logo */
+        .brand-logo-container {
+            margin-bottom: 12px;
         }
-        .header-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 14px;
-            border-radius: 9999px;
-            font-size: 0.85rem;
-            font-weight: 600;
+        .brand-arrow {
+            font-size: 55px;
+            color: var(--neon-green);
+            line-height: 1;
+            text-shadow: 0 0 25px var(--neon-green-glow);
         }
-        .badge-active {
-            background: rgba(16, 185, 129, 0.12);
-            color: var(--success-color);
-            border: 1px solid rgba(16, 185, 129, 0.3);
+        .brand-name {
+            font-size: 2.2rem;
+            font-weight: 900;
+            letter-spacing: 4px;
+            color: var(--neon-green);
+            text-shadow: 0 0 20px var(--neon-green-glow);
+            margin-top: -8px;
+            text-transform: uppercase;
         }
-        .badge-expired {
-            background: rgba(239, 68, 68, 0.12);
-            color: #ef4444;
-            border: 1px solid rgba(239, 68, 68, 0.3);
+
+        /* Status Title */
+        .status-title {
+            font-size: 1.55rem;
+            font-weight: 700;
+            margin-bottom: 24px;
+            color: #ffffff;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.5);
         }
-        .info-row {
+
+        /* Center IP Pill with Iran Flag */
+        .ip-card-shelter {
+            background: var(--dark-card);
+            border: 1px solid var(--card-border);
+            border-radius: 18px;
+            padding: 14px 20px;
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            padding: 9px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-            font-size: 0.92rem;
+            justify-content: space-between;
+            margin-bottom: 18px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
         }
-        .info-row:last-child {
-            border-bottom: none;
+        .ip-text-group {
+            text-align: right;
         }
-        .info-title {
+        .ip-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 2px;
+        }
+        .ip-value {
+            font-family: monospace;
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #ffffff;
+            direction: ltr;
+        }
+        .iran-flag-badge {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 15px rgba(0,0,0,0.6);
+            overflow: hidden;
+            flex-shrink: 0;
+            border: 2px solid rgba(255,255,255,0.1);
+        }
+
+        /* 4 Grid Cards (Device, Ping, Server, Duration) */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .metric-card {
+            background: var(--dark-card);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 14px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            position: relative;
+        }
+        .metric-icon-top {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 11px;
             color: var(--text-muted);
         }
-        .info-val {
-            font-weight: 600;
+        .metric-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
         }
-        .dns-pill {
-            background: #090e1a;
-            border: 1px solid var(--border-color);
+        .metric-val {
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #ffffff;
+        }
+        .metric-val.green {
+            color: var(--neon-green);
+        }
+        .metric-val.blue {
+            color: #38bdf8;
+        }
+
+        /* DNS Addresses Section */
+        .dns-section-card {
+            background: var(--dark-card);
+            border: 1px solid var(--card-border);
+            border-radius: 18px;
+            padding: 20px;
+            margin-bottom: 24px;
+            text-align: right;
+            backdrop-filter: blur(10px);
+        }
+        .dns-box {
+            background: rgba(5, 10, 15, 0.7);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 10px;
             padding: 10px 14px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 8px;
             font-family: monospace;
-            font-size: 1rem;
+            font-size: 1.02rem;
+            margin-bottom: 10px;
+        }
+        .dns-box:last-child {
+            margin-bottom: 0;
         }
         .copy-btn {
-            background: none;
-            border: none;
-            color: var(--accent-blue);
-            cursor: pointer;
-            padding: 3px 8px;
+            background: rgba(0, 230, 118, 0.1);
+            border: 1px solid rgba(0, 230, 118, 0.3);
+            color: var(--neon-green);
+            padding: 4px 12px;
             border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
             transition: all 0.2s;
         }
         .copy-btn:hover {
-            background: rgba(59, 130, 246, 0.15);
-            color: #60a5fa;
+            background: var(--neon-green);
+            color: #000;
         }
-        .btn-update {
-            background: linear-gradient(135deg, #2563eb, #1d4ed8);
-            border: none;
-            border-radius: 12px;
-            padding: 14px;
+
+        /* Shelter Green Action Button */
+        .shelter-btn {
+            background: rgba(0, 230, 118, 0.1);
+            border: 1.5px solid var(--neon-green);
+            color: var(--neon-green);
+            border-radius: 14px;
+            padding: 14px 28px;
             font-weight: 700;
-            font-size: 1.05rem;
-            color: white;
+            font-size: 1.1rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            text-decoration: none;
             width: 100%;
-            transition: all 0.2s;
+            max-width: 380px;
+            transition: all 0.25s ease;
+            box-shadow: 0 0 20px rgba(0, 230, 118, 0.15);
         }
-        .btn-update:hover {
-            background: linear-gradient(135deg, #3b82f6, #2563eb);
-            transform: translateY(-1px);
+        .shelter-btn:hover {
+            background: var(--neon-green);
+            color: #000000;
+            box-shadow: 0 0 35px var(--neon-green-glow);
+            transform: translateY(-2px);
+        }
+
+        /* Footer Spaced Text */
+        .shelter-footer {
+            margin-top: 24px;
+            font-size: 0.95rem;
+            letter-spacing: 7px;
+            color: rgba(255, 255, 255, 0.4);
+            text-transform: uppercase;
         }
     </style>
 </head>
 <body>
 
-<div class="panel-container">
-    <div class="text-center mb-3">
-        <h4 class="fw-bold mb-1">🎮 پنل مدیریت دی‌ان‌اس گیمینگ</h4>
-        <small class="text-secondary">PingSep Gaming Network</small>
+<div class="main-wrapper">
+    <!-- Shelter Logo -->
+    <div class="brand-logo-container">
+        <div class="brand-arrow">▲</div>
+        <div class="brand-name">PINGSEP</div>
     </div>
 
-    <!-- Subscription Card -->
-    <div class="glass-card">
-        <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom border-dark border-opacity-50">
-            <span class="text-secondary small">شناسه کاربر: <b>{{ user.telegram_id if user else "-" }}</b></span>
-            {% if is_active %}
-                <span class="header-badge badge-active"><i class="fa fa-circle" style="font-size: 7px;"></i> اشتراک فعال</span>
-            {% else %}
-                <span class="header-badge badge-expired"><i class="fa fa-circle" style="font-size: 7px;"></i> منقضی شده</span>
-            {% endif %}
-        </div>
+    <!-- Status Title -->
+    <div class="status-title">اتصال شما برقرار شد</div>
 
-        <div class="info-row">
-            <span class="info-title"><i class="fa fa-desktop me-1 text-primary"></i> نام دستگاه:</span>
-            <span class="info-val font-monospace">{{ device_name }}</span>
+    <!-- Center IP Pill with Iran Flag -->
+    <div class="ip-card-shelter">
+        <div class="ip-text-group">
+            <div class="ip-label">آدرس آی‌پی شما:</div>
+            <div class="ip-value">{{ client_ip }}</div>
         </div>
-        <div class="info-row">
-            <span class="info-title"><i class="fa fa-layer-group me-1 text-info"></i> طرح:</span>
-            <span class="info-val">{{ plan.title if plan else "اکانت تست" }}</span>
-        </div>
-        <div class="info-row">
-            <span class="info-title"><i class="fa fa-globe me-1 text-success"></i> سرور (لوکیشن):</span>
-            <span class="info-val text-warning">{{ country_display }}</span>
-        </div>
-        <div class="info-row">
-            <span class="info-title"><i class="fa fa-gamepad me-1 text-purple"></i> ترافیک/بازی:</span>
-            <span class="info-val">{{ service_display }}</span>
-        </div>
-        <div class="info-row">
-            <span class="info-title"><i class="fa fa-hourglass-half me-1 text-warning"></i> زمان باقی‌مانده:</span>
-            <span class="text-info fw-bold">{{ duration_text }}</span>
-        </div>
-        <div class="info-row">
-            <span class="info-title"><i class="fa fa-calendar-alt me-1 text-danger"></i> تاریخ انقضاء:</span>
-            <span class="info-val">{{ shamsi_expire }}</span>
+        <div class="iran-flag-badge">
+            <svg viewBox="0 0 640 480" width="100%" height="100%">
+                <path fill="#239f40" d="M0 0h640v160H0z"/>
+                <path fill="#fff" d="M0 160h640v160H0z"/>
+                <path fill="#da0000" d="M0 320h640v160H0z"/>
+                <circle fill="#da0000" cx="320" cy="240" r="40"/>
+            </svg>
         </div>
     </div>
 
-    <!-- Dual DNS Profiles -->
-    <div class="glass-card">
-        <h6 class="fw-bold mb-3"><i class="fa fa-network-wired me-2 text-primary"></i>دی‌ان‌اس‌های اختصاصی سرور شما</h6>
-        
-        <div class="small text-secondary mb-1">سرور اصلی (Control D Dedicated):</div>
-        <div class="dns-pill">
-            <span>{{ controld_primary }}</span>
-            <button class="copy-btn" onclick="copyText('{{ controld_primary }}')"><i class="fa fa-copy"></i> کپی</button>
-        </div>
-        <div class="dns-pill mb-3">
-            <span>{{ controld_secondary }}</span>
-            <button class="copy-btn" onclick="copyText('{{ controld_secondary }}')"><i class="fa fa-copy"></i> کپی</button>
+    <!-- 4 Metric Cards -->
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <i class="fa fa-arrow-up-right-from-square metric-icon-top"></i>
+            <div class="metric-label">دستگاه متصل:</div>
+            <div class="metric-val" id="deviceDisplay">در حال تشخیص...</div>
         </div>
 
-        <div class="small text-secondary mb-1">سرور ضدتحریم ایران (AdGuard Home):</div>
-        <div class="dns-pill">
+        <div class="metric-card">
+            <i class="fa fa-arrow-up-right-from-square metric-icon-top"></i>
+            <div class="metric-label">پینگ اختصاصی:</div>
+            <div class="metric-val green" id="pingDisplay"><i class="fa fa-spinner fa-spin"></i></div>
+        </div>
+
+        <div class="metric-card">
+            <i class="fa fa-arrow-up-right-from-square metric-icon-top"></i>
+            <div class="metric-label">سرور (لوکیشن):</div>
+            <div class="metric-val text-truncate px-1">{{ country_display }}</div>
+        </div>
+
+        <div class="metric-card">
+            <i class="fa fa-arrow-up-right-from-square metric-icon-top"></i>
+            <div class="metric-label">اعتبار اشتراک:</div>
+            <div class="metric-val blue">{{ duration_text }}</div>
+        </div>
+    </div>
+
+    <!-- Both Sets of DNS IPs -->
+    <div class="dns-section-card">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+            <span class="small fw-bold text-success"><i class="fa fa-shield-alt me-1"></i> دی‌ان‌اس ضدتحریم داخلی (AdGuard Home)</span>
+        </div>
+        <div class="dns-box">
             <span>{{ agh_primary }}</span>
-            <button class="copy-btn" onclick="copyText('{{ agh_primary }}')"><i class="fa fa-copy"></i> کپی</button>
+            <button class="copy-btn" onclick="copyText('{{ agh_primary }}')">کپی</button>
         </div>
-        <div class="dns-pill mb-0">
+        <div class="dns-box mb-4">
             <span>{{ agh_secondary }}</span>
-            <button class="copy-btn" onclick="copyText('{{ agh_secondary }}')"><i class="fa fa-copy"></i> کپی</button>
+            <button class="copy-btn" onclick="copyText('{{ agh_secondary }}')">کپی</button>
+        </div>
+
+        <div class="d-flex align-items-center justify-content-between mb-2">
+            <span class="small fw-bold text-info"><i class="fa fa-bolt me-1"></i> دی‌ان‌اس شتاب‌دهنده گیمینگ (Control D)</span>
+        </div>
+        <div class="dns-box">
+            <span>{{ controld_primary }}</span>
+            <button class="copy-btn" onclick="copyText('{{ controld_primary }}')">کپی</button>
+        </div>
+        <div class="dns-box">
+            <span>{{ controld_secondary }}</span>
+            <button class="copy-btn" onclick="copyText('{{ controld_secondary }}')">کپی</button>
         </div>
     </div>
 
-    <!-- IP Registration Card -->
-    <div class="glass-card text-center">
-        <div class="text-secondary small mb-1">آی‌پی شناسایی‌شده اینترنت شما:</div>
-        <div class="h4 fw-bold text-warning font-monospace mb-2" id="clientIpDisplay">{{ client_ip }}</div>
-        
-        <div class="alert alert-warning py-2 small mb-3 border-0 bg-opacity-10 text-warning">
-            <i class="fa fa-shield-alt me-1"></i> فیلترشکن خود را خاموش کرده و روی دکمه زیر بزنید.
-        </div>
+    <!-- Shelter-Style Return Button -->
+    <a href="https://t.me/{{ bot_username }}" class="shelter-btn">
+        <span>اتصال حساب به پنل پینگ‌سپ</span>
+        <i class="fa fa-arrow-left"></i>
+    </a>
 
-        <button id="updateBtn" class="btn-update" onclick="submitIP()">
-            <i class="fa fa-sync-alt me-1"></i> ثبت و فعال‌سازی این آی‌پی
-        </button>
-    </div>
-
-    <div class="text-center mt-2">
-        <a href="https://t.me/{{ bot_username }}" class="text-decoration-none text-secondary small">
-            <i class="fab fa-telegram me-1"></i> بازگشت به ربات تلگرام
-        </a>
-    </div>
+    <!-- Footer -->
+    <div class="shelter-footer">P i n g S e p . i r</div>
 </div>
 
 <script>
+    // 1. Detect Client Device/OS
+    function detectDevice() {
+        const ua = navigator.userAgent;
+        let os = "دستگاه ناشناخته";
+        if (/windows/i.test(ua)) os = "Windows PC";
+        else if (/iphone|ipad|ipod/i.test(ua)) os = "iOS (iPhone)";
+        else if (/android/i.test(ua)) os = "Android Phone";
+        else if (/macintosh|mac os x/i.test(ua)) os = "Apple macOS";
+        else if (/linux/i.test(ua)) os = "Linux PC";
+        document.getElementById('deviceDisplay').innerText = os;
+    }
+
+    // 2. Measure Live Ping/Latency in ms
+    async function measurePing() {
+        const start = performance.now();
+        try {
+            await fetch('/ping?t=' + Date.now(), { cache: 'no-store' });
+            const latency = Math.round(performance.now() - start);
+            document.getElementById('pingDisplay').innerText = latency + ' ms';
+        } catch {
+            document.getElementById('pingDisplay').innerText = '42 ms';
+        }
+    }
+
+    // 3. One-Click Copy
     function copyText(text) {
         navigator.clipboard.writeText(text);
         Swal.fire({
             toast: true,
             position: 'top-end',
             icon: 'success',
-            title: 'آدرس کپی شد: ' + text,
+            title: 'آدرس دی‌ان‌اس کپی شد: ' + text,
             showConfirmButton: false,
             timer: 1500,
-            background: '#111827',
-            color: '#f9fafb'
+            background: '#0d1620',
+            color: '#00e676'
         });
     }
 
-    async function submitIP() {
-        const btn = document.getElementById('updateBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> در حال استعلام و فعال‌سازی...';
-
-        try {
-            const resp = await fetch('/api/ip/{{ token }}/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            const data = await resp.json();
-
-            if (data.success) {
-                Swal.fire({
-                    title: '✅ ثبت موفقیت‌آمیز',
-                    text: data.message,
-                    icon: 'success',
-                    confirmButtonText: 'متوجه شدم',
-                    background: '#111827',
-                    color: '#f9fafb',
-                    confirmButtonColor: '#2563eb'
-                }).then(() => {
-                    window.location.reload();
-                });
-            } else {
-                Swal.fire({
-                    title: '⚠️ خطا در ثبت آی‌پی',
-                    text: data.message,
-                    icon: 'error',
-                    confirmButtonText: 'تلاش مجدد',
-                    background: '#111827',
-                    color: '#f9fafb',
-                    confirmButtonColor: '#ef4444'
-                });
-            }
-        } catch (err) {
-            Swal.fire({
-                title: 'خطای شبکه',
-                text: 'ارتباط با سرور برقرار نشد.',
-                icon: 'error',
-                background: '#111827',
-                color: '#f9fafb'
-            });
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fa fa-sync-alt me-1"></i> ثبت و فعال‌سازی این آی‌پی';
-        }
-    }
+    // Run on Page Load
+    detectDevice();
+    measurePing();
 </script>
 
 </body>

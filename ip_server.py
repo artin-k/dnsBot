@@ -32,8 +32,8 @@ from app.services.payment_service import (
 from app.services.vpn_panel import VPNPanelService
 from app.services.paystar import PaystarService
 from app.services.ip_manager import update_device_ip_safe
-from bot.loader import create_bot
 from app.services.vpn_detector import verify_user_ip
+from bot.loader import create_bot
 from bot.utils.messages import send_dns_delivery_card
 
 logger = structlog.get_logger(__name__)
@@ -78,6 +78,7 @@ def _parse_purchase_metadata(raw_username: str | None) -> tuple[str, str, str | 
 
 
 async def get_controld_device_ips(device_id: str, settings_obj) -> dict:
+    from app.config import SLOT_CONFIGS
     for config in SLOT_CONFIGS.values():
         if config["device_id"] == device_id:
             return {
@@ -364,6 +365,48 @@ def _render_capture_ip_html(
     return HTMLResponse(content=html_content)
 
 
+def _render_vpn_detected_html(
+    detected_ip: str,
+    country: str,
+    isp: str,
+    error_message: str | None = None,
+    bot_username: str = "bot",
+) -> HTMLResponse:
+    custom_msg = error_message or "آی‌پی شناسایی‌شده شما متعلق به سرور خارجی یا فیلترشکن است."
+    html_content = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>فیلترشکن شما روشن است</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+        body {{ font-family: 'Vazirmatn', Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }}
+        .card-box {{ background-color: #1e293b; border: 2px solid #eab308; border-radius: 16px; padding: 36px; box-shadow: 0 10px 25px -5px rgba(234, 179, 8, 0.25); max-width: 540px; width: 100%; text-align: center; }}
+        .icon-box {{ width: 75px; height: 75px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 38px; background-color: rgba(234, 179, 8, 0.12); border: 2px solid rgba(234, 179, 8, 0.3); }}
+        .btn-reload {{ background-color: #eab308; color: #0f172a; font-weight: bold; border: none; transition: all 0.2s; }}
+        .btn-reload:hover {{ background-color: #ca8a04; color: #0f172a; }}
+    </style>
+</head>
+<body>
+    <div class="card-box">
+        <div class="icon-box">⚠️</div>
+        <h1 class="h4 mb-3 fw-bold text-warning">فیلترشکن شما روشن است!</h1>
+        <p class="text-light mb-3" style="font-size: 15px; line-height: 1.8;">{escape(custom_msg)}<br>ثبت آی‌پی و استفاده از DNS <b>فقط با اینترنت مستقیم ایران</b> امکان‌پذیر است.</p>
+        <div class="alert alert-dark text-start small mb-4 py-2 border-secondary" style="font-size: 13px;">
+            1️⃣ فیلترشکن و پروکسی تلگرام خود را کاملاً خاموش کنید.<br>
+            2️⃣ به اینترنت اصلی یا وای‌فای متصل شوید.<br>
+            3️⃣ دکمه بررسی مجدد را لمس کنید:
+        </div>
+        <button onclick="location.reload()" class="btn btn-reload py-2 px-4 rounded-3 w-100 mb-2">🔄 فیلترشکن را خاموش کردم، بررسی مجدد</button>
+        <a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">بازگشت به ربات تلگرام</a>
+    </div>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content, status_code=200)
+
+
 def get_client_real_ip(request: Request) -> tuple[str, str | None]:
     headers = request.headers
     ar_ip = headers.get("ar-real-ip")
@@ -389,12 +432,438 @@ def get_client_real_ip(request: Request) -> tuple[str, str | None]:
 
 
 # ============================================================================
-# USER DASHBOARD (SHELTER REPLICA)
+# LIVE LATENCY ENDPOINT
 # ============================================================================
+@app.get("/ping")
+async def ping():
+    return {"status": "ok", "timestamp": datetime.now(timezone.utc).timestamp()}
 
+
+# ============================================================================
+# LEGACY IP CAPTURE ROUTE (KEPT FOR BACKWARD COMPATIBILITY)
+# ============================================================================
+@app.get("/capture-ip/{token}", response_class=HTMLResponse)
+async def capture_ip(request: Request, token: str):
+    return await user_dashboard_view(request, token)
+
+
+@app.get("/update-ip/{device_id}", response_class=HTMLResponse, status_code=status.HTTP_410_GONE)
+async def retired_update_device_ip(device_id: str):
+    bot_user = await get_bot_username()
+    return _render_capture_ip_html(
+        "این لینک منقضی شده است",
+        "⚠️ لینک قدیمی است",
+        "لطفاً به ربات بازگردید و از لینک جدید ثبت IP استفاده کنید.",
+        False,
+        bot_username=bot_user,
+    )
+
+
+# ============================================================================
+# WEB ADMIN DASHBOARD
+# ============================================================================
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard(request: Request, uid: int = Query(...), token: str = Query(...)):
+    if not verify_admin_web_token(uid, token):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="دسترسی غیرمجاز است. لطفاً از طریق دکمه مدیریت ربات تلگرام وارد شوید.",
+        )
+
+    async with async_session_maker() as session:
+        repo = ServicesRepository(session)
+        raw_rows = await repo.get_admin_dashboard_data()
+
+        dashboard_data = []
+        for row in raw_rows:
+            expire_at = row.expire_at
+            shamsi_expire = "-"
+            if expire_at:
+                if expire_at.tzinfo is None:
+                    expire_at = expire_at.replace(tzinfo=timezone.utc)
+                tehran_tz = ZoneInfo("Asia/Tehran")
+                tehran_expire = expire_at.astimezone(tehran_tz)
+                try:
+                    naive_tehran = tehran_expire.replace(tzinfo=None)
+                    shamsi_expire = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M")
+                except Exception:
+                    shamsi_expire = tehran_expire.strftime("%Y-%m-%d %H:%M")
+
+            slot_name = "ثبت نشده / Unmapped"
+            for _num, config in SLOT_CONFIGS.items():
+                if config["device_id"] == row.controld_device_id:
+                    slot_name = config["name"]
+                    break
+
+            dashboard_data.append({
+                "telegram_id": row.telegram_id,
+                "telegram_username": row.telegram_username or "-",
+                "first_name": row.first_name or "-",
+                "service_id": row.service_id,
+                "controld_device_id": row.controld_device_id,
+                "authorized_ip": row.authorized_ip or "ثبت نشده (No IP)",
+                "expire_at_shamsi": shamsi_expire,
+                "status": "فعال" if row.status == "active" else "منقضی شده",
+                "slot_name": slot_name,
+            })
+
+    return templates.TemplateResponse(
+        request=request,
+        name="admin.html",
+        context={
+            "request": request,
+            "users": dashboard_data,
+            "uid": uid,
+            "token": token,
+        },
+    )
+
+
+@app.post("/admin/delete-ip")
+async def admin_delete_ip(
+    uid: int = Query(...),
+    token: str = Query(...),
+    service_id: int = Form(...),
+    device_id: str = Form(...),
+    ip: str = Form(...),
+):
+    if not verify_admin_web_token(uid, token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="دسترسی غیرمجاز.")
+
+    if not ip or ip == "ثبت نشده (No IP)":
+        return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=status.HTTP_303_SEE_OTHER)
+
+    controld = ControlDService(settings)
+    await controld.deauthorize_ip(device_id, ip)
+
+    from app.services.adguard import AdGuardHomeService
+    adguard = AdGuardHomeService(settings)
+    if adguard.is_configured():
+        await adguard.deauthorize_client_ip(ip)
+
+    async with async_session_maker() as session:
+        stmt = select(VPNService).where(VPNService.id == service_id).limit(1)
+        res = await session.execute(stmt)
+        service = res.scalars().first()
+        if service:
+            service.authorized_ip = None
+            await session.commit()
+
+    logger.info("admin_force_cleared_user_ip", service_id=service_id, cleared_ip=ip)
+    return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/add-ip")
+async def admin_add_ip(
+    uid: int = Query(...),
+    token: str = Query(...),
+    service_id: int = Form(...),
+    device_id: str = Form(...),
+    new_ip: str = Form(...),
+):
+    if not verify_admin_web_token(uid, token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="دسترسی غیرمجاز.")
+
+    new_ip = new_ip.strip()
+    if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", new_ip):
+        raise HTTPException(status_code=400, detail="فرمت آی‌پی عددی وارد شده معتبر نیست.")
+
+    async with async_session_maker() as session:
+        stmt = select(VPNService).where(VPNService.id == service_id).limit(1)
+        res = await session.execute(stmt)
+        service = res.scalars().first()
+
+        if not service:
+            raise HTTPException(status_code=404, detail="سرویس مورد نظر یافت نشد.")
+
+        success = await update_device_ip_safe(session, service, new_ip)
+        if not success:
+            raise HTTPException(status_code=500, detail="خطا در ثبت آی‌پی در پنل")
+
+    logger.info("admin_manually_overrode_user_ip", service_id=service_id, new_ip=new_ip)
+    return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# ============================================================================
+# PAYSTAR REDIRECT PROXY (GATEWAY)
+# ============================================================================
+@app.get("/paystar/redirect", response_class=HTMLResponse)
+async def paystar_redirect(token: str):
+    bot_user = await get_bot_username()
+    try:
+        clean_token = token.strip()
+        async with async_session_maker() as session:
+            payment = await PaymentsRepository(session).get_by_token_with_details(clean_token)
+            if payment is None or payment.order is None or payment.user is None:
+                return _failed_html("توکن پرداخت معتبر نیست یا منقضی شده است.", bot_username=bot_user)
+            if payment.method != "paystar":
+                return _failed_html("این لینک برای پرداخت آنلاین پی‌استار ثبت نشده است.", bot_username=bot_user)
+            if payment.status == PaymentStatus.APPROVED.value or payment.order.status == OrderStatus.COMPLETED.value:
+                return _success_html("این سفارش قبلاً با موفقیت پرداخت و نهایی شده است.", bot_username=bot_user)
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="fa" dir="rtl">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta name="referrer" content="origin" />
+            <title>در حال انتقال...</title>
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+                body {{
+                    font-family: 'Vazirmatn', Tahoma, sans-serif;
+                    background-color: #0f172a;
+                    color: #f8fafc;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                }}
+                .btn-fallback {{
+                    background-color: #3b82f6;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 12px 24px;
+                    font-weight: bold;
+                    cursor: pointer;
+                    margin-top: 20px;
+                    font-family: inherit;
+                }}
+            </style>
+        </head>
+        <body>
+            <div style="text-align: center;">
+                <h3 style="margin-bottom: 10px;">در حال انتقال به درگاه بانکی...</h3>
+                <p style="color: #94a3b8; font-size: 14px;">لطفاً چند لحظه صبر کنید.</p>
+                <form id="paymentForm" action="https://core.paystar.ir/api/pardakht/payment" method="POST">
+                    <input type="hidden" name="token" value="{clean_token}">
+                    <noscript>
+                        <p style="color: #ef4444; margin-top: 20px;">جاوااسکریپت در مرورگر شما غیرفعال است.</p>
+                    </noscript>
+                    <button type="submit" id="fallbackBtn" class="btn-fallback" style="display: none;">
+                        انتقال دستی به درگاه پرداخت
+                    </button>
+                </form>
+            </div>
+            <script>
+                document.addEventListener("DOMContentLoaded", function() {{
+                    document.getElementById("paymentForm").submit();
+                    setTimeout(function() {{
+                        document.getElementById("fallbackBtn").style.display = "inline-block";
+                    }}, 2500);
+                }});
+            </script>
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=html_content)
+
+    except Exception as exc:
+        logger.exception("failed_to_process_paystar_redirect_route", token=token, error=str(exc))
+        return _failed_html(f"خطای داخلی در اتصال به درگاه بانکی: {str(exc)}", bot_username=bot_user)
+
+
+PAYSTAR_STATUS_MESSAGES = {
+    -1: "درخواست نامعتبر است (خطای داخلی یا ساختار ناقص داده‌ها).",
+    -2: "درگاه پرداخت فعال نیست یا اطلاعات احراز هویت نامعتبر است.",
+    -3: "آدرس آی‌پی سرور برای این درگاه پرداخت در پنل پی‌استار مجاز نشده است.",
+    -4: "مبلغ ارسالی به درگاه نامعتبر است.",
+    -5: "تراکنش تکراری است یا قبلاً پردازش شده است.",
+    -6: "تراکنش در سیستم پی‌استار پیدا نشد.",
+    -7: "مهلت پرداخت به پایان رسیده و فاکتور منقضی شده است.",
+    -8: "شماره کارت واریزکننده مجاز نیست.",
+    -9: "مبلغ واریز شده با فاکتور سفارش مطابقت ندارد.",
+    -98: "پرداخت توسط کاربر لغو شد (انصراف در درگاه بانکی).",
+}
+
+
+@app.api_route("/paystar/callback", methods=["GET", "POST"], response_class=HTMLResponse)
+async def paystar_callback(request: Request):
+    bot_user = await get_bot_username()
+    try:
+        if request.method.upper() == "POST":
+            payload = await request.form()
+        else:
+            payload = request.query_params
+
+        try:
+            status_code = int(payload.get("status", 0))
+        except (TypeError, ValueError):
+            status_code = 0
+
+        order_id = str(payload.get("order_id", "")).strip()
+        ref_num = str(payload.get("ref_num", "")).strip()
+        card_number = str(payload.get("card_number", "")).strip()
+        tracking_code = str(payload.get("tracking_code", "")).strip()
+
+        if not order_id or not ref_num:
+            return _failed_html("اطلاعات برگشتی درگاه ناقص است.", bot_username=bot_user)
+
+        async with async_session_maker() as session:
+            order = await OrdersRepository(session).get_by_tracking_code_with_details(order_id)
+            payment = order.payment if order else None
+
+            if order is None or payment is None or order.user is None or order.plan is None:
+                return _failed_html(f"سفارش با کد پیگیری {order_id} در سیستم یافت نشد.", bot_username=bot_user)
+
+            if payment.status == PaymentStatus.APPROVED.value and order.status == OrderStatus.COMPLETED.value:
+                service_stmt = (
+                    select(VPNService)
+                    .options(joinedload(VPNService.plan))
+                    .where(VPNService.order_id == order.id)
+                    .limit(1)
+                )
+                service_res = await session.execute(service_stmt)
+                service = service_res.scalars().first()
+                if service is None:
+                    return _success_html("پرداخت این سفارش قبلاً با موفقیت تایید و ثبت شده است.", bot_username=bot_user)
+                context = await _build_paystar_context(order, service, settings)
+                return _render_paystar_success_html(order, payment, context)
+
+            if status_code != 1:
+                reason = PAYSTAR_STATUS_MESSAGES.get(status_code, f"تراکنش ناموفق بود (کد وضعیت: {status_code}).")
+                logger.warning("paystar_gateway_failed", status=status_code, order_id=order_id, reason=reason)
+                return _failed_html(reason, bot_username=bot_user)
+
+            paystar = PaystarService()
+            try:
+                is_verified = await paystar.verify_payment(
+                    amount_toman=order.amount,
+                    ref_num=ref_num,
+                    card_number=card_number,
+                    tracking_code=tracking_code,
+                )
+            except Exception as exc:
+                logger.exception("paystar_verify_failed", order_id=order_id, error=str(exc))
+                return _failed_html("خطا در برقراری ارتباط با سرور شاپرک/پی‌استار جهت تایید نهایی.", bot_username=bot_user)
+
+            if not is_verified:
+                return _failed_html("خطا در اعتبارسنجی تراکنش در شبکه بانکی (تراکنش تایید نشد).", bot_username=bot_user)
+
+            payment.method = "paystar"
+            payment.ref_id = ref_num
+            payment.authority = tracking_code or payment.authority
+
+            payment_service = PaymentService(session, VPNPanelService(), settings)
+            try:
+                await payment_service.approve_payment(payment.id)
+            except PaymentAlreadyProcessedError:
+                service_stmt = (
+                    select(VPNService)
+                    .options(joinedload(VPNService.plan))
+                    .where(VPNService.order_id == order.id)
+                    .limit(1)
+                )
+                service_res = await session.execute(service_stmt)
+                service = service_res.scalars().first()
+                if service is None:
+                    return _success_html("پرداخت قبلاً تایید و ثبت شده است.", bot_username=bot_user)
+                context = await _build_paystar_context(order, service, settings)
+                return _render_paystar_success_html(order, payment, context)
+            except PaymentExpiredError:
+                return _failed_html("مهلت پرداخت این سفارش به پایان رسیده و منقضی شده است.", bot_username=bot_user)
+            except PaymentApprovalError as exc:
+                logger.exception("paystar_approval_failed", order_id=order_id, error=str(exc))
+                return _failed_html("پرداخت بانکی تایید شد، اما در فعال‌سازی سرویس خطایی رخ داد.", bot_username=bot_user)
+
+            service_stmt = (
+                select(VPNService)
+                .options(joinedload(VPNService.plan))
+                .where(VPNService.order_id == order.id)
+                .limit(1)
+            )
+            service_res = await session.execute(service_stmt)
+            service = service_res.scalars().first()
+            if service is None:
+                return _failed_html("سرویس دی‌ان‌اس پس از پرداخت در سیستم یافت نشد.", bot_username=bot_user)
+
+            try:
+                await _apply_purchase_route(order, service, settings)
+            except Exception as exc:
+                logger.warning("paystar_route_update_failed", order_id=order_id, error=str(exc))
+
+            context = await _build_paystar_context(order, service, settings)
+            try:
+                await _send_paystar_success_message(order, payment, context)
+            except Exception as exc:
+                logger.warning("failed_to_send_paystar_telegram_message", error=str(exc))
+
+            return _render_paystar_success_html(order, payment, context)
+
+    except Exception as global_exc:
+        logger.exception("global_unhandled_callback_exception", error=str(global_exc))
+        return _failed_html(f"خطای غیرمنتظره سرور در ثبت نتیجه پرداخت: {str(global_exc)}", bot_username=bot_user)
+
+
+def _failed_html(reason: str, bot_username: str = "bot") -> HTMLResponse:
+    html_content = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>تراکنش ناموفق</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+        body {{ font-family: 'Vazirmatn', Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }}
+        .card-box {{ background-color: #1e293b; border: 1px solid #ef4444; border-radius: 16px; padding: 40px; box-shadow: 0 10px 25px -5px rgba(239, 68, 68, 0.2); max-width: 550px; width: 100%; text-align: center; }}
+        .icon-box {{ width: 75px; height: 75px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 38px; background-color: rgba(239, 68, 68, 0.1); color: #ef4444; border: 2px solid rgba(239, 68, 68, 0.3); }}
+        .reason-box {{ background-color: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px 16px; color: #f87171; font-size: 15px; line-height: 1.8; }}
+        .btn-telegram {{ background-color: #3b82f6; color: #ffffff; font-weight: bold; border: none; transition: all 0.2s; }}
+        .btn-telegram:hover {{ background-color: #2563eb; color: #ffffff; }}
+    </style>
+</head>
+<body>
+    <div class="card-box">
+        <div class="icon-box">❌</div>
+        <h1 class="h4 mb-3 fw-bold text-danger">تراکنش ناموفق بود</h1>
+        <div class="reason-box mb-4">{escape(reason)}</div>
+        <p class="text-secondary small mb-4">در صورتی که مبلغی کسر شده باشد، ظرف ۷۲ ساعت توسط بانک بازگردانده می‌شود.</p>
+        <a href="https://t.me/{escape(bot_username)}" class="btn btn-telegram py-2 px-4 rounded-3 text-decoration-none w-100">بازگشت به ربات تلگرام</a>
+    </div>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content, status_code=200)
+
+
+def _success_html(message: str, bot_username: str = "bot") -> HTMLResponse:
+    html_content = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>تراکنش موفق</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
+        body {{ font-family: 'Vazirmatn', Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }}
+        .card-box {{ background-color: #1e293b; border: 1px solid #10b981; border-radius: 16px; padding: 40px; box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.2); max-width: 550px; width: 100%; text-align: center; }}
+        .icon-box {{ width: 75px; height: 75px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 38px; background-color: rgba(16, 185, 129, 0.1); color: #10b981; border: 2px solid rgba(16, 185, 129, 0.3); }}
+        .btn-telegram {{ background-color: #10b981; color: #ffffff; font-weight: bold; border: none; transition: all 0.2s; }}
+        .btn-telegram:hover {{ background-color: #059669; color: #ffffff; }}
+    </style>
+</head>
+<body>
+    <div class="card-box">
+        <div class="icon-box">✅</div>
+        <h1 class="h4 mb-3 fw-bold text-success">پرداخت با موفقیت انجام شد</h1>
+        <p class="text-light mb-4">{escape(message)}</p>
+        <a href="https://t.me/{escape(bot_username)}" class="btn btn-telegram py-2 px-4 rounded-3 text-decoration-none w-100">بازگشت به ربات تلگرام</a>
+    </div>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content, status_code=200)
+
+
+# ============================================================================
+# USER DASHBOARD (SHELTER REPLICA WITH STRICT ANTI-VPN & AUTO-CONNECT)
+# ============================================================================
 @app.get("/ip/{token}", response_class=HTMLResponse)
 async def user_dashboard_view(request: Request, token: str):
-    """Renders the comprehensive Shelter-style user dashboard."""
     bot_user = await get_bot_username()
     token = token.strip()
 
@@ -403,6 +872,18 @@ async def user_dashboard_view(request: Request, token: str):
 
     client_ip, _ = get_client_real_ip(request)
 
+    # 1. Strict Anti-VPN & Iran Check
+    ip_check = await verify_user_ip(client_ip)
+    if not ip_check.is_iran:
+        return _render_vpn_detected_html(
+            detected_ip=client_ip,
+            country=ip_check.country,
+            isp=ip_check.isp,
+            error_message=ip_check.error_message,
+            bot_username=bot_user,
+        )
+
+    # 2. Fetch Subscription & Token
     async with async_session_maker() as session:
         stmt = (
             select(IPAuthToken)
@@ -417,28 +898,25 @@ async def user_dashboard_view(request: Request, token: str):
         token_record = res.scalars().first()
 
         if not token_record or not token_record.service:
-            return _render_capture_ip_html("خطا", "لینک منقضی یا نامعتبر", "این اشتراک یا توکن یافت نشد.", False, bot_username=bot_user)
+            return _render_capture_ip_html("خطا", "لینک نامعتبر یا منقضی", "این اشتراک یا توکن یافت نشد.", False, bot_username=bot_user)
 
         service = token_record.service
         now = datetime.now(timezone.utc)
         expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
 
         if now > expires_at:
-            return _render_capture_ip_html("خطا", "انقضای توکن", "مهلت استفاده از این لینک به پایان رسیده است. لطفاً از ربات دکمه ثبت آی‌پی را مجدداً بزنید.", False, bot_username=bot_user)
+            return _render_capture_ip_html("خطا", "انقضای توکن", "مهلت استفاده از این لینک گذشته است. لطفاً از ربات دکمه ثبت آی‌پی را مجدداً بزنید.", False, bot_username=bot_user)
 
-        # 1. Parse Server Location & Clean Device Name
+        # 3. Automatic IP Registration (Shelter Auto-Connect)
+        if service.authorized_ip != client_ip:
+            await update_device_ip_safe(session, service, client_ip)
+
+        # 4. Determine Server Location Name
         raw_username = service.username or ""
-        clean_device_name = raw_username.split("|")[0].strip() if raw_username else f"دستگاه-{service.id}"
-        service_display = "کل ترافیک اینترنت (Default)"
-        country_display = "🇩🇪 آلمان - فرانکفورت (Germany)"
-
+        country_display = "🇩🇪 آلمان (فرانکفورت)"
         if "|" in raw_username:
             parts = raw_username.split("|")
-            clean_device_name = parts[0]
-            service_pk = parts[1] if len(parts) > 1 else "default"
             slot_str = parts[2] if len(parts) > 2 else "1"
-            if service_pk != "default":
-                service_display = service_pk.capitalize()
             if slot_str.isdigit() and int(slot_str) in SLOT_CONFIGS:
                 country_display = SLOT_CONFIGS[int(slot_str)]["name"]
 
@@ -447,18 +925,15 @@ async def user_dashboard_view(request: Request, token: str):
                 country_display = cfg["name"]
                 break
 
-        # 2. Control D Resolver IPs
+        # 5. Retrieve Both Sets of DNS IPs
         controld_ips = await get_controld_device_ips(service.controld_device_id, settings) if service.controld_device_id else {
             "ipv4_primary": "76.76.2.162",
             "ipv4_secondary": "76.76.10.162",
         }
-
-        # 3. AdGuard Home Local IPs
         agh_primary = settings.adguard_primary_dns or "94.183.180.215"
         agh_secondary = settings.adguard_secondary_dns or "94.183.180.236"
-        agh_doh = settings.adguard_doh_url or ""
 
-        # 4. Persian Date formatting
+        # 6. Expiration Calculations
         duration_text = calculate_remaining_time_fa(service.expire_at)
         tehran_tz = ZoneInfo("Asia/Tehran")
         expire_target = service.expire_at if service.expire_at.tzinfo else service.expire_at.replace(tzinfo=timezone.utc)
@@ -474,19 +949,17 @@ async def user_dashboard_view(request: Request, token: str):
             "service": service,
             "user": service.user,
             "plan": service.plan,
-            "device_name": clean_device_name,
-            "service_display": service_display,
             "country_display": country_display,
+            "duration_text": duration_text,
+            "shamsi_expire": shamsi_expire,
             "controld_primary": controld_ips["ipv4_primary"],
             "controld_secondary": controld_ips["ipv4_secondary"],
             "agh_primary": agh_primary,
             "agh_secondary": agh_secondary,
-            "agh_doh": agh_doh,
-            "duration_text": duration_text,
-            "shamsi_expire": shamsi_expire,
             "is_active": service.status == "active" and (expire_target > now),
         }
         return templates.TemplateResponse(request=request, name="user_panel.html", context=context)
+
 
 @app.post("/api/ip/{token}/update")
 async def api_update_ip(request: Request, token: str):
@@ -531,8 +1004,8 @@ async def api_update_ip(request: Request, token: str):
 
 
 # ============================================================================
-# ENTRYPOINT (TOP LEVEL - OUTSIDE OF ANY FUNCTION)
+# ENTRYPOINT
 # ============================================================================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("ip_server:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("ip_server:app", host="127.0.0.1", port=8000, reload=False)

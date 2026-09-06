@@ -159,28 +159,28 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
     # -------------------------------------------------------------------------
     # 4. CLEANUP: Deauthorize Old IP if Changed (Guarded by Shared-Slot Check)
     # -------------------------------------------------------------------------
+    # 2. Deauthorize Old IP ONLY if no other active subscriber shares it
     if old_ip and old_ip != clean_new_ip:
-        if not await _has_active_ip_sharer(session, old_ip, service.id):
-            # Drop from Control D
+        active_shared_ip_stmt = select(VPNService).where(
+            VPNService.authorized_ip == old_ip,
+            VPNService.status == "active",
+            VPNService.id != service.id
+        ).limit(1)
+        has_active_sharers = (await session.execute(active_shared_ip_stmt)).scalars().first()
+
+        if not has_active_sharers:
             try:
-                logger.info("deauthorizing_old_ip_controld", service_id=service.id, device_id=device_id, old_ip=old_ip)
                 await controld.deauthorize_ip(device_id, old_ip)
             except Exception as exc:
-                logger.warning("controld_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
+                logger.warning("controld_old_ip_deauth_failed", error=str(exc))
 
-            # Drop from AdGuard global whitelist
             if adguard.is_configured():
                 try:
-                    logger.info("deauthorizing_old_ip_adguard", service_id=service.id, old_ip=old_ip)
                     await adguard.deauthorize_client_ip(old_ip)
                 except Exception as exc:
-                    logger.warning("adguard_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
+                    logger.warning("adguard_old_ip_deauth_failed", error=str(exc))
         else:
-            logger.info(
-                "skipping_old_ip_deauthorization_shared_by_active_service",
-                service_id=service.id,
-                old_ip=old_ip,
-            )
+            logger.info("skipping_ip_deauth_shared_with_another_active_user", shared_ip=old_ip)
 
     # -------------------------------------------------------------------------
     # 5. Database Commit

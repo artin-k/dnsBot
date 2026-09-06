@@ -115,42 +115,55 @@ def _build_secure_ip_registration_keyboard(
 
 async def create_secure_ip_update_keyboard(
     session: AsyncSession,
-    service_id: int,
+    service_id_or_device_id: int | str,
 ) -> InlineKeyboardMarkup:
-    service = await session.get(VPNService, service_id)
-    if service is None:
-        raise ValueError(f"Cannot issue an IP registration token for missing service {service_id}")
+    """Issues a secure single-use IPAuthToken and routes to the Shelter-style panel."""
+    builder = InlineKeyboardBuilder()
 
-    now = datetime.now(timezone.utc)
-    await session.execute(delete(IPAuthToken).where(IPAuthToken.service_id == service.id))
-    token = uuid.uuid4().hex
-    session.add(
-        IPAuthToken(
-            token=token,
-            service_id=service.id,
-            expires_at=now + timedelta(minutes=10),
-            is_used=False,
+    service = None
+    if isinstance(service_id_or_device_id, int):
+        service = await session.get(VPNService, service_id_or_device_id)
+    elif str(service_id_or_device_id).isdigit():
+        service = await session.get(VPNService, int(service_id_or_device_id))
+
+    device_id = service.controld_device_id if service else str(service_id_or_device_id)
+
+    if service:
+        now = datetime.now(timezone.utc)
+        raw_token = uuid.uuid4().hex
+
+        # Delete any expired tokens for this service and issue a fresh 15-minute token
+        await session.execute(delete(IPAuthToken).where(IPAuthToken.service_id == service.id))
+        session.add(
+            IPAuthToken(
+                token=raw_token,
+                service_id=service.id,
+                expires_at=now + timedelta(minutes=15),
+                is_used=False,
+            )
         )
-    )
-    await session.commit()
+        await session.commit()
+
+        panel_url = f"{WEB_SERVER_BASE_URL}/ip/{raw_token}"
+    else:
+        # Fallback if service object wasn't found
+        panel_url = f"{WEB_SERVER_BASE_URL}/"
+
+    builder.button(text="🌐 اتصال به پنل و ثبت آی‌پی 🌐", url=panel_url)
+    builder.button(text="🤖 ثبت آی‌پی دستی (در ربات) 🤖", callback_data=f"manual_ip_reg:{device_id}")
 
     app_settings = AppSettingsService(session)
     support_username = await app_settings.get_support_username()
+    if support_username:
+        clean_sup = support_username.removeprefix("@").strip()
+        builder.button(text="☎️ پشتیبانی آنلاین", url=f"https://t.me/{clean_sup}")
+
     video_link = await app_settings.get_teaching_video_link()
+    if video_link:
+        builder.button(text="🎥 ویدیو آموزشی", url=video_link)
 
-    if not support_username:
-        settings = get_settings()
-        if settings.root_admin_telegram_id:
-            root_user = await UsersRepository(session).get_by_telegram_id(settings.root_admin_telegram_id)
-            if root_user and root_user.telegram_username:
-                support_username = root_user.telegram_username
-
-    return _build_secure_ip_registration_keyboard(
-        token=token,
-        service_id=service.id,
-        support_username=support_username,
-        video_link=video_link,
-    )
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
@@ -211,13 +224,9 @@ async def _show_my_services_page(
         if is_service_active(service):
             builder.row(
                 InlineKeyboardButton(
-                    text="✳️ ثبت آی‌پی",
-                    callback_data=f"manage_links:{service.id}",
-                ),
-                InlineKeyboardButton(
-                    text="🛠 مدیریت",
+                    text="🛠 مدیریت و دریافت لینک اتصال",
                     callback_data=f"manage_service:{service.id}",
-                ),
+                )
             )
         else:
             builder.row(
