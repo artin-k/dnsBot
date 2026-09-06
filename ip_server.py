@@ -394,6 +394,7 @@ def get_client_real_ip(request: Request) -> tuple[str, str | None]:
 
 @app.get("/ip/{token}", response_class=HTMLResponse)
 async def user_dashboard_view(request: Request, token: str):
+    """Renders the comprehensive Shelter-style user dashboard."""
     bot_user = await get_bot_username()
     token = token.strip()
 
@@ -423,18 +424,47 @@ async def user_dashboard_view(request: Request, token: str):
         expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
 
         if now > expires_at:
-            return _render_capture_ip_html("خطا", "انقضای توکن", "مهلت استفاده از این لینک به پایان رسیده است. از ربات لینک جدید بگیرید.", False, bot_username=bot_user)
+            return _render_capture_ip_html("خطا", "انقضای توکن", "مهلت استفاده از این لینک به پایان رسیده است. لطفاً از ربات دکمه ثبت آی‌پی را مجدداً بزنید.", False, bot_username=bot_user)
 
-        device_id = service.controld_device_id
-        dns_ips = await get_controld_device_ips(device_id, settings) if device_id else {
+        # 1. Parse Server Location & Clean Device Name
+        raw_username = service.username or ""
+        clean_device_name = raw_username.split("|")[0].strip() if raw_username else f"دستگاه-{service.id}"
+        service_display = "کل ترافیک اینترنت (Default)"
+        country_display = "🇩🇪 آلمان - فرانکفورت (Germany)"
+
+        if "|" in raw_username:
+            parts = raw_username.split("|")
+            clean_device_name = parts[0]
+            service_pk = parts[1] if len(parts) > 1 else "default"
+            slot_str = parts[2] if len(parts) > 2 else "1"
+            if service_pk != "default":
+                service_display = service_pk.capitalize()
+            if slot_str.isdigit() and int(slot_str) in SLOT_CONFIGS:
+                country_display = SLOT_CONFIGS[int(slot_str)]["name"]
+
+        for cfg in SLOT_CONFIGS.values():
+            if cfg["device_id"] == service.controld_device_id:
+                country_display = cfg["name"]
+                break
+
+        # 2. Control D Resolver IPs
+        controld_ips = await get_controld_device_ips(service.controld_device_id, settings) if service.controld_device_id else {
             "ipv4_primary": "76.76.2.162",
             "ipv4_secondary": "76.76.10.162",
         }
 
+        # 3. AdGuard Home Local IPs
+        agh_primary = settings.adguard_primary_dns or "94.183.180.215"
+        agh_secondary = settings.adguard_secondary_dns or "94.183.180.236"
+        agh_doh = settings.adguard_doh_url or ""
+
+        # 4. Persian Date formatting
         duration_text = calculate_remaining_time_fa(service.expire_at)
         tehran_tz = ZoneInfo("Asia/Tehran")
         expire_target = service.expire_at if service.expire_at.tzinfo else service.expire_at.replace(tzinfo=timezone.utc)
-        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=expire_target.astimezone(tehran_tz).replace(tzinfo=None)).strftime("%Y/%m/%d")
+        shamsi_expire = jdatetime.datetime.fromgregorian(
+            datetime=expire_target.astimezone(tehran_tz).replace(tzinfo=None)
+        ).strftime("%Y/%m/%d - %H:%M")
 
         context = {
             "request": request,
@@ -444,14 +474,19 @@ async def user_dashboard_view(request: Request, token: str):
             "service": service,
             "user": service.user,
             "plan": service.plan,
-            "dns_primary": dns_ips["ipv4_primary"],
-            "dns_secondary": dns_ips["ipv4_secondary"],
+            "device_name": clean_device_name,
+            "service_display": service_display,
+            "country_display": country_display,
+            "controld_primary": controld_ips["ipv4_primary"],
+            "controld_secondary": controld_ips["ipv4_secondary"],
+            "agh_primary": agh_primary,
+            "agh_secondary": agh_secondary,
+            "agh_doh": agh_doh,
             "duration_text": duration_text,
             "shamsi_expire": shamsi_expire,
             "is_active": service.status == "active" and (expire_target > now),
         }
         return templates.TemplateResponse(request=request, name="user_panel.html", context=context)
-
 
 @app.post("/api/ip/{token}/update")
 async def api_update_ip(request: Request, token: str):
