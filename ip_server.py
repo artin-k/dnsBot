@@ -1046,7 +1046,116 @@ def get_client_real_ip(request: Request) -> tuple[str, str | None]:
     return fallback, None
 
 
-if __name__ == "__main__":
-    import uvicorn
-    # Ensure this port matches what you had in run_web_ip_updater.py
-    uvicorn.run("ip_server:app", host="127.0.0.1", port=8000, reload=False)
+@app.get("/ip/{token}", response_class=HTMLResponse)
+async def user_dashboard_view(request: Request, token: str):
+    """Renders the Shelter-styled user dashboard."""
+    bot_user = await get_bot_username()
+    token = token.strip()
+
+    if not re.match(r"^[a-fA-F0-9-]{32,36}$", token):
+        return _render_capture_ip_html("خطا", "لینک نامعتبر است", "ساختار توکن معتبر نیست.", False, bot_user)
+
+    client_ip, _ = get_client_real_ip(request)
+
+    async with async_session_maker() as session:
+        stmt = (
+            select(IPAuthToken)
+            .options(
+                joinedload(IPAuthToken.service).joinedload(VPNService.user),
+                joinedload(IPAuthToken.service).joinedload(VPNService.plan),
+            )
+            .where(IPAuthToken.token == token)
+            .limit(1)
+        )
+        res = await session.execute(stmt)
+        token_record = res.scalars().first()
+
+        if not token_record or not token_record.service:
+            return _render_capture_ip_html("خطا", "لینک منقضی یا نامعتبر", "این اشتراک یا توکن یافت نشد.", False, bot_user)
+
+        service = token_record.service
+        now = datetime.now(timezone.utc)
+        expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
+        
+        if now > expires_at:
+            return _render_capture_ip_html("خطا", "انقضای توکن", "مهلت استفاده از این لینک به پایان رسیده است. از ربات لینک جدید بگیرید.", False, bot_user)
+
+        # Retrieve DNS IPs
+        device_id = service.controld_device_id
+        dns_ips = await get_controld_device_ips(device_id, settings) if device_id else {
+            "ipv4_primary": "76.76.2.162",
+            "ipv4_secondary": "76.76.10.162"
+        }
+
+        # Calculate time and dates
+        duration_text = calculate_remaining_time_fa(service.expire_at)
+        tehran_tz = ZoneInfo("Asia/Tehran")
+        expire_target = service.expire_at if service.expire_at.tzinfo else service.expire_at.replace(tzinfo=timezone.utc)
+        shamsi_expire = jdatetime.datetime.fromgregorian(datetime=expire_target.astimezone(tehran_tz).replace(tzinfo=None)).strftime("%Y/%m/%d")
+
+        context = {
+            "request": request,
+            "token": token,
+            "client_ip": client_ip,
+            "bot_username": bot_user,
+            "service": service,
+            "user": service.user,
+            "plan": service.plan,
+            "dns_primary": dns_ips["ipv4_primary"],
+            "dns_secondary": dns_ips["ipv4_secondary"],
+            "duration_text": duration_text,
+            "shamsi_expire": shamsi_expire,
+            "is_active": service.status == "active" and (expire_target > now),
+        }
+        return templates.TemplateResponse("user_panel.html", context)
+
+
+@app.post("/api/ip/{token}/update")
+async def api_update_ip(request: Request, token: str):
+    """Validates Anti-VPN restrictions, registers the IP in Control D + AdGuard, and commits to PostgreSQL."""
+    token = token.strip()
+    client_ip, _ = get_client_real_ip(request)
+
+    # 1. Anti-VPN / Iran Validation
+    ip_check = await verify_user_ip(client_ip)
+    if not ip_check.is_iran:
+        return {
+            "success": False,
+            "message": ip_check.error_message or "فیلترشکن شما روشن است! فقط اتصالات مستقیم ایران مجاز هستند."
+        }
+
+    async with async_session_maker() as session:
+        stmt = (
+            select(IPAuthToken)
+            .options(joinedload(IPAuthToken.service))
+            .where(IPAuthToken.token == token)
+            .limit(1)
+        )
+        res = await session.execute(stmt)
+        token_record = res.scalars().first()
+
+        if not token_record or not token_record.service:
+            return {"success": False, "message": "اشتراک یا توکن معتبر یافت نشد."}
+
+        now = datetime.now(timezone.utc)
+        expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
+        if now > expires_at:
+            return {"success": False, "message": "این لینک منقضی شده است. لطفاً از طریق ربات لینک جدیدی دریافت کنید."}
+
+        service = token_record.service
+
+        # 2. Prevent duplicate hits
+        if service.authorized_ip == client_ip:
+            return {"success": True, "message": f"آی‌پی {client_ip} هم‌اکنون روی اشتراک شما فعال است."}
+
+        # 3. Safe multi-tenant deauthorization and authorization
+        success = await update_device_ip_safe(session, service, client_ip)
+        if success:
+            return {"success": True, "message": f"آی‌پی {client_ip} با موفقیت تایید و روی دی‌ان‌اس اختصاصی شما فعال شد."}
+        else:
+            return {"success": False, "message": "خطا در تنظیم دی‌ان‌اس روی سرورها. لطفاً لحظاتی دیگر تلاش کنید."}
+
+    if __name__ == "__main__":
+        import uvicorn
+        # Ensure this port matches what you had in run_web_ip_updater.py
+        uvicorn.run("ip_server:app", host="127.0.0.1", port=8000, reload=False)

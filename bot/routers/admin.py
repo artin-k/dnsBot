@@ -8,6 +8,7 @@ from html import escape
 from zoneinfo import ZoneInfo
 import jdatetime
 import httpx
+from sqlalchemy.orm import joinedload
 import structlog
 
 from aiogram import F, Router
@@ -19,7 +20,7 @@ from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings, SLOT_CONFIGS
-from app.models import User, VPNService, IPAuthToken
+from app.models import Order, User, VPNService, IPAuthToken
 from app.repositories.plans import PlansRepository
 from app.repositories.reports import ReportsRepository
 from app.repositories.users import UsersRepository
@@ -33,6 +34,17 @@ from sqlalchemy import select
 from aiogram.types import Message, CallbackQuery
 import asyncio
 from aiogram import Router, F
+from sqlalchemy import or_
+from bot.keyboards.admin import AdminServiceCallback, service_detail_keyboard
+
+from sqlalchemy import func
+from aiogram.types import InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from bot.routers.services import is_service_active
+
+PAGE_SIZE = 10
+
 
 def calculate_remaining_time_fa(expire_at) -> str:
     if not expire_at:
@@ -73,8 +85,11 @@ from bot.keyboards.admin import (
     admin_communications_keyboard,
     admin_settings_keyboard,
     bot_settings_keyboard,
+    pending_payments_keyboard,
+    services_admin_keyboard,
     setting_edit_keyboard,
     plans_management_keyboard,
+    test_accounts_keyboard,
     users_admin_keyboard,
     user_detail_keyboard,
 )
@@ -183,7 +198,6 @@ async def admin_action_navigation(
         "cat_sales": ("📦 فروش و تعرفه‌ها", admin_sales_keyboard()),
         "cat_users": ("👥 کاربران و زیرمجموعه‌ها", admin_users_affiliate_keyboard()),
         "cat_payments": ("💳 پرداخت‌ها و کیف پول", admin_payments_keyboard()),
-        "cat_services": ("🛍 سرویس‌ها", admin_services_keyboard()),
         "cat_comms": ("📣 ارتباطات", admin_communications_keyboard()),
         "cat_settings": ("⚙️ تنظیمات", admin_settings_keyboard()),
     }
@@ -257,6 +271,67 @@ async def admin_action_navigation(
             parse_mode="HTML",
         )
         return
+
+    if action == "users":
+        res = await session.execute(select(User).order_by(User.id.desc()).limit(30))
+        users = list(res.scalars().all())
+        await callback.message.edit_text("👥 لیست جدیدترین کاربران:", reply_markup=users_admin_keyboard(users))
+        return
+
+    if action == "services":
+        await show_admin_services_list(callback, page=0, session=session)
+        return
+
+    if action == "test_accounts":
+        from app.models import TestAccount
+        res = await session.execute(select(TestAccount))
+        accounts = list(res.scalars().all())
+        await callback.message.edit_text("🔑 مدیریت اکانت‌های تست:", reply_markup=test_accounts_keyboard(accounts))
+        return
+
+    if action == "payments":
+        from app.models import Payment
+        from sqlalchemy.orm import joinedload
+        res = await session.execute(
+            select(Payment)
+            .options(joinedload(Payment.order))
+            .where(Payment.status == "pending")
+        )
+        payments = list(res.scalars().all())
+        await callback.message.edit_text("💳 پرداخت‌های در انتظار تایید:", reply_markup=pending_payments_keyboard(payments))
+        return
+
+    if action == "affiliate":
+        from bot.keyboards.admin import affiliate_management_keyboard
+        await callback.message.edit_text("👥 سیستم زیرمجموعه‌گیری:", reply_markup=affiliate_management_keyboard())
+        return
+
+    if action == "open_channels_menu":
+        await state.clear()
+        # Import the menu generator from the external file and trigger it
+        from bot.routers.mandatory_channels import cmd_admin_channels
+        await cmd_admin_channels(callback, session, settings)
+        return
+    
+    if action == "orders":
+            await _show_recent_orders(callback, session)
+            return
+    
+    if action == "sales_report":
+        await _show_sales_report(callback, session)
+        return
+
+
+    if action == "cat_services":
+        await callback.message.edit_text(
+            "🛍 <b>بخش مدیریت اشتراک‌های DNS:</b>", 
+            reply_markup=admin_services_keyboard(), 
+            parse_mode="HTML"
+        )
+    return
+
+    
+    
 
 @router.message(Command("teaching_video_link"), StateFilter("*"))
 async def cmd_teaching_video_link(message: Message, session: AsyncSession, settings: Settings) -> None:
@@ -395,4 +470,398 @@ async def execute_broadcast(message: Message, state: FSMContext):
         f"✅ پیام همگانی با موفقیت به پایان رسید!\n\n"
         f"🟢 ارسال موفق: {success_count} کاربر\n"
         f"🔴 ارسال ناموفق (ربات بلاک شده): {fail_count} کاربر"
+    )
+
+    
+class AdminUserSearchState(StatesGroup):
+    waiting_for_query = State()
+
+# 1. Trigger the search prompt when the button is clicked
+@router.callback_query(AdminUserCallback.filter(F.action == "search"))
+async def prompt_user_search(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "🔎 <b>جستجوی کاربر</b>\n\n"
+        "لطفاً یکی از موارد زیر را ارسال کنید:\n"
+        "▫️ آیدی عددی (Telegram ID)\n"
+        "▫️ یوزرنیم تلگرام (بدون @)\n"
+        "▫️ نام کاربر\n\n"
+        "❌ برای لغو، کلمه `/cancel` را ارسال کنید.",
+        parse_mode="HTML"
+    )
+    await state.set_state(AdminUserSearchState.waiting_for_query)
+    await callback.answer()
+
+# 2. Receive the text and query the database
+@router.message(AdminUserSearchState.waiting_for_query, F.text)
+async def execute_user_search(message: Message, state: FSMContext, session: AsyncSession):
+    query = message.text.strip()
+    
+    if query.lower() == '/cancel':
+        await state.clear()
+        return await message.answer("عملیات جستجوی کاربر لغو شد.")
+
+    wait_msg = await message.answer("⏳ در حال جستجو در دیتابیس...")
+    await state.clear()
+
+    # Build the dynamic SQLAlchemy query
+    stmt = select(User)
+    
+    if query.isdigit():
+        # If input is numbers, search by Telegram ID or Internal DB ID
+        stmt = stmt.where(
+            or_(
+                User.telegram_id == int(query),
+                User.id == int(query)
+            )
+        )
+    else:
+        # If input is text, search by Username or First Name
+        clean_query = query.removeprefix("@")
+        stmt = stmt.where(
+            or_(
+                User.telegram_username.ilike(f"%{clean_query}%"),
+                User.first_name.ilike(f"%{clean_query}%")
+            )
+        )
+
+    # Limit to 30 results to prevent massive keyboard payloads
+    stmt = stmt.limit(30)
+    res = await session.execute(stmt)
+    users = list(res.scalars().all())
+
+    await wait_msg.delete()
+
+    if not users:
+        return await message.answer(
+            f"❌ هیچ کاربری با مشخصات «{escape(query)}» یافت نشد.",
+            parse_mode="HTML"
+        )
+
+    await message.answer(
+        f"🔎 نتایج جستجو برای «{escape(query)}»:\n(تعداد: {len(users)} کاربر)",
+        reply_markup=users_admin_keyboard(users),
+        parse_mode="HTML"
+    )
+
+
+class AdminServiceSearchState(StatesGroup):
+    waiting_for_query = State()
+
+@router.callback_query(AdminServiceCallback.filter())
+async def admin_service_callback_handler(callback: CallbackQuery, callback_data: AdminServiceCallback, state: FSMContext, session: AsyncSession):
+    action = callback_data.action
+    service_id = callback_data.service_id
+    await callback.answer()
+    
+    if action == "search":
+        await callback.message.edit_text(
+            "🔎 <b>جستجوی اشتراک</b>\n\nلطفاً آی‌پی (IP) یا نام کاربری دستگاه را ارسال کنید:\n❌ لغو: `/cancel`",
+            parse_mode="HTML"
+        )
+        await state.set_state(AdminServiceSearchState.waiting_for_query)
+        return
+        
+    if action == "detail":
+        stmt = select(VPNService).options(joinedload(VPNService.user)).where(VPNService.id == service_id)
+        res = await session.execute(stmt)
+        service = res.scalars().first()
+        
+        if not service:
+            return await callback.message.edit_text("❌ اشتراک یافت نشد.")
+            
+        status_fa = "🟢 فعال" if service.status == "active" else "🔴 غیرفعال"
+        ip = service.authorized_ip or "ثبت نشده"
+        owner = f"@{service.user.telegram_username}" if service.user and service.user.telegram_username else str(service.user.telegram_id if service.user else "نامشخص")
+        
+        text = (
+            f"🛍 <b>جزئیات اشتراک DNS</b>\n\n"
+            f"👤 <b>نام دستگاه:</b> <code>{escape(service.username or 'ندارد')}</code>\n"
+            f"👑 <b>مالک:</b> {escape(owner)}\n"
+            f"📌 <b>وضعیت:</b> {status_fa}\n"
+            f"🌐 <b>آی‌پی فعال:</b> <code>{escape(ip)}</code>\n"
+            f"🆔 <b>شناسه سرور:</b> <code>{escape(service.controld_device_id or 'ندارد')}</code>"
+        )
+        await callback.message.edit_text(text, reply_markup=service_detail_keyboard(service), parse_mode="HTML")
+        return
+
+@router.message(AdminServiceSearchState.waiting_for_query, F.text)
+async def execute_service_search(message: Message, state: FSMContext, session: AsyncSession):
+    query = message.text.strip()
+    if query.lower() == '/cancel':
+        await state.clear()
+        return await message.answer("لغو شد.")
+        
+    await state.clear()
+    wait_msg = await message.answer("⏳ در حال جستجو...")
+    
+    from sqlalchemy import or_
+    stmt = select(VPNService).where(
+        or_(
+            VPNService.authorized_ip.ilike(f"%{query}%"),
+            VPNService.username.ilike(f"%{query}%")
+        )
+    ).limit(30)
+    res = await session.execute(stmt)
+    services = list(res.scalars().all())
+    
+    await wait_msg.delete()
+    if not services:
+        return await message.answer("❌ اشتراکی یافت نشد.")
+        
+    await message.answer(f"🔎 نتایج برای «{escape(query)}»:", reply_markup=services_admin_keyboard(services))
+
+
+async def show_admin_services_list(callback: CallbackQuery, page: int, session: AsyncSession):
+    # 1. Total count
+    count_stmt = select(func.count(VPNService.id)).where(VPNService.is_test_account == False)
+    total_count = (await session.execute(count_stmt)).scalar() or 0
+    total_pages = max(1, (total_count + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+
+    # 2. Fetch page items with user joined
+    stmt = (
+        select(VPNService)
+        .options(joinedload(VPNService.user))
+        .where(VPNService.is_test_account == False)
+        .order_by(VPNService.id.desc())
+        .offset(page * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+    )
+    res = await session.execute(stmt)
+    services = list(res.scalars().all())
+
+    if not services:
+        return await callback.message.edit_text(
+            "🛍 هیچ اشتراک فعالی در دیتابیس یافت نشد.",
+            reply_markup=admin_services_keyboard()
+        )
+
+    # 3. Format detailed text list
+    lines = [f"🛍 <b>لیست اشتراک‌های DNS</b> (صفحه {page + 1} از {total_pages} | کل: {total_count})\n"]
+    now = datetime.now(timezone.utc)
+    
+    for s in services:
+        owner = f"@{s.user.telegram_username}" if s.user and s.user.telegram_username else str(s.user.telegram_id if s.user else "نامشخص")
+        ip = s.authorized_ip if s.authorized_ip else "❌ ثبت نشده"
+        
+        # Safe inline activity check
+        is_active = False
+        if s.status != "disabled" and s.expire_at:
+            exp = s.expire_at.replace(tzinfo=timezone.utc) if s.expire_at.tzinfo is None else s.expire_at
+            is_active = exp > now
+            
+        status_emoji = "🟢 فعال" if is_active else "🔴 منقضی/غیرفعال"
+        raw_name = (s.username or "نامشخص").split("|")[0].strip()
+        
+        lines.append(
+            f"🆔 <b>شناسه:</b> <code>#{s.id}</code>\n"
+            f"👤 <b>کاربر:</b> {escape(owner)}\n"
+            f"📱 <b>دستگاه:</b> <code>{escape(raw_name)}</code>\n"
+            f"🌐 <b>آی‌پی فعال:</b> <code>{escape(ip)}</code>\n"
+            f"📌 <b>وضعیت:</b> {status_emoji}\n"
+            f"────────────────────"
+        )
+
+    text_content = "\n".join(lines)
+
+    # 4. Navigation buttons
+    builder = InlineKeyboardBuilder()
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"admin_svc_page:{page - 1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"admin_svc_page:{page + 1}"))
+    
+    if nav_row:
+        builder.row(*nav_row)
+        
+    builder.row(InlineKeyboardButton(text="↩️ بازگشت به منوی سرویس‌ها", callback_data=AdminActionCallback(action="cat_services").pack()))
+
+    await callback.message.edit_text(text_content, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("admin_svc_page:"), StateFilter("*"))
+async def handle_admin_svc_page(callback: CallbackQuery, session: AsyncSession):
+    await callback.answer()
+    
+    # Extract the page number from callback data (e.g., "admin_svc_page:1" -> 1)
+    try:
+        page = int(callback.data.split(":")[1])
+        await show_admin_services_list(callback, page=page, session=session)
+    except Exception as e:
+        await callback.message.answer(f"❌ خطا در تغییر صفحه: {str(e)}")
+
+
+@router.callback_query(AdminUserCallback.filter())
+async def admin_user_callback_handler(callback: CallbackQuery, callback_data: AdminUserCallback, state: FSMContext, session: AsyncSession):
+    await callback.answer()
+    action = callback_data.action
+    user_id = callback_data.user_id
+    
+    if action == "search":
+        # Handled by the search FSM we added earlier
+        return
+
+    if action == "detail":
+        user = await session.get(User, user_id)
+        if not user:
+            return await callback.message.edit_text("❌ کاربر یافت نشد.")
+        
+        # Format user attributes safely
+        username = f"@{user.telegram_username}" if user.telegram_username else "ندارد"
+        name = user.first_name or "نامشخص"
+        balance = getattr(user, 'wallet_balance', 0)
+        is_admin_text = "بله ✅" if user.is_admin else "خیر ❌"
+        
+        text = (
+            f"👤 <b>مدیریت و جزئیات کاربر</b>\n\n"
+            f"🆔 <b>آیدی عددی:</b> <code>{user.telegram_id}</code>\n"
+            f"🏷 <b>یوزرنیم:</b> {escape(username)}\n"
+            f"📛 <b>نام:</b> {escape(name)}\n"
+            f"💰 <b>موجودی کیف پول:</b> {balance:,.0f} تومان\n"
+            f"👑 <b>دسترسی ادمین:</b> {is_admin_text}\n"
+        )
+        
+        await callback.message.edit_text(
+            text, 
+            reply_markup=user_detail_keyboard(user, viewer_id=callback.from_user.id), 
+            parse_mode="HTML"
+        )
+        return
+
+from app.repositories.reports import ReportsRepository
+from bot.keyboards.admin import AdminOrderCallback
+
+async def _show_sales_report(callback: CallbackQuery, session: AsyncSession) -> None:
+    report = await ReportsRepository(session).get_sales_report()
+    text = (
+        f"📈 <b>گزارش جامع فروش</b>\n\n"
+        f"<b>💵 فروش</b>\n"
+        f"امروز: <b>{format_money(report.today_sales)} تومان</b>\n"
+        f"این هفته: <b>{format_money(report.week_sales)} تومان</b>\n"
+        f"کل فروش: <b>{format_money(report.total_sales)} تومان</b>\n"
+        f"سفارش‌های موفق: <b>{report.completed_orders_count}</b>\n\n"
+        f"<b>🛍 اشتراک‌ها</b>\n"
+        f"فعال: <b>{report.active_subscriptions_count}</b>\n"
+        f"منقضی: <b>{report.expired_subscriptions_count}</b>"
+    )
+    await callback.message.edit_text(text, reply_markup=admin_sales_keyboard(), parse_mode="HTML")
+
+
+async def _show_recent_orders(callback: CallbackQuery, session: AsyncSession, page: int = 0) -> None:
+    limit = 8
+    offset = page * limit
+    result = await session.execute(
+        select(Order)
+        .order_by(Order.created_at.desc())
+        .limit(limit + 1)
+        .offset(offset)
+    )
+    orders = list(result.scalars().all())
+    has_next = len(orders) > limit
+    if has_next:
+        orders = orders[:limit]
+
+    if not orders and page == 0:
+        return await callback.message.edit_text("هنوز سفارشی ثبت نشده است.", reply_markup=admin_sales_keyboard())
+
+    builder = InlineKeyboardBuilder()
+    for order in orders:
+        status_emoji = "🟢" if order.status == "completed" else "🔴" if order.status in ("expired", "canceled") else "🟡"
+        builder.button(
+            text=f"{status_emoji} {order.tracking_code} | {format_money(order.amount)}ت",
+            callback_data=AdminOrderCallback(action="detail", order_id=order.id).pack(),
+        )
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=AdminOrderCallback(action="list", page=page - 1).pack()))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=AdminOrderCallback(action="list", page=page + 1).pack()))
+    
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="↩️ بازگشت", callback_data=AdminActionCallback(action="cat_sales").pack()))
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"🧾 لیست سفارش‌ها و رزروها (صفحه {page + 1})\nبرای مدیریت هر سفارش روی آن کلیک کنید:",
+        reply_markup=builder.as_markup()
+    )
+
+async def _show_sales_report(callback: CallbackQuery, session: AsyncSession) -> None:
+    from app.repositories.reports import ReportsRepository
+    from bot.keyboards.admin import admin_sales_keyboard
+    from app.utils.formatting import format_money
+
+    report = await ReportsRepository(session).get_sales_report()
+    text = (
+        f"📈 <b>گزارش جامع فروش</b>\n\n"
+        f"<b>💵 فروش</b>\n"
+        f"امروز: <b>{format_money(report.today_sales)} تومان</b>\n"
+        f"این هفته: <b>{format_money(report.week_sales)} تومان</b>\n"
+        f"کل فروش: <b>{format_money(report.total_sales)} تومان</b>\n"
+        f"سفارش‌های موفق: <b>{report.completed_orders_count}</b>\n\n"
+        f"<b>🛍 اشتراک‌ها</b>\n"
+        f"فعال: <b>{report.active_subscriptions_count}</b>\n"
+        f"منقضی: <b>{report.expired_subscriptions_count}</b>"
+    )
+    await callback.message.edit_text(text, reply_markup=admin_sales_keyboard(), parse_mode="HTML")
+
+
+async def _show_recent_orders(callback: CallbackQuery, session: AsyncSession, page: int = 0) -> None:
+    from app.models import Order
+    from sqlalchemy import select
+    from aiogram.types import InlineKeyboardButton
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from bot.keyboards.admin import admin_sales_keyboard, AdminActionCallback
+    from app.utils.formatting import format_money
+
+    # Dynamically define callback to prevent import errors
+    from aiogram.filters.callback_data import CallbackData
+    class LocalAdminOrderCallback(CallbackData, prefix="adm_ord"):
+        action: str
+        order_id: int = 0
+        page: int = 0
+
+    limit = 8
+    offset = page * limit
+    result = await session.execute(
+        select(Order)
+        .order_by(Order.created_at.desc())
+        .limit(limit + 1)
+        .offset(offset)
+    )
+    orders = list(result.scalars().all())
+    has_next = len(orders) > limit
+    if has_next:
+        orders = orders[:limit]
+
+    if not orders and page == 0:
+        return await callback.message.edit_text("هنوز سفارشی ثبت نشده است.", reply_markup=admin_sales_keyboard())
+
+    builder = InlineKeyboardBuilder()
+    for order in orders:
+        status_emoji = "🟢" if order.status == "completed" else "🔴" if order.status in ("expired", "canceled") else "🟡"
+        builder.button(
+            text=f"{status_emoji} {order.tracking_code} | {format_money(order.amount)}ت",
+            callback_data=LocalAdminOrderCallback(action="detail", order_id=order.id).pack(),
+        )
+
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=LocalAdminOrderCallback(action="list", page=page - 1).pack()))
+    if has_next:
+        nav_buttons.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=LocalAdminOrderCallback(action="list", page=page + 1).pack()))
+    
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    builder.row(InlineKeyboardButton(text="↩️ بازگشت", callback_data=AdminActionCallback(action="cat_sales").pack()))
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"🧾 لیست سفارش‌ها و رزروها (صفحه {page + 1})\nبرای مدیریت هر سفارش روی آن کلیک کنید:",
+        reply_markup=builder.as_markup()
     )

@@ -585,3 +585,20 @@ def broadcast_confirm_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+class AdminChannelCallback(CallbackData, prefix="adm_chan"):
+    action: str
+    channel_id: int = 0
+
+def admin_channels_keyboard(channels) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ افزودن کانال", callback_data=AdminChannelCallback(action="add"))
+    
+    for ch in channels:
+        builder.button(
+            text=f"🗑 حذف: {ch.title}", 
+            callback_data=AdminChannelCallback(action="delete", channel_id=ch.id)
+        )
+        
+    builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="panel"))
+    builder.adjust(1)
+    return builder.as_markup()

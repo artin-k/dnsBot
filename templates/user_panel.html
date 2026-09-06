@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>پنل مدیریت دی‌ان‌اس اختصاصی</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: #151d30;
+            --border-color: #23304d;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent-color: #3b82f6;
+            --success-color: #10b981;
+            --danger-color: #ef4444;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px 10px;
+        }
+        .panel-container {
+            width: 100%;
+            max-width: 580px;
+        }
+        .glass-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            margin-bottom: 16px;
+        }
+        .header-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .badge-active {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--success-color);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+        .badge-expired {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger-color);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        .info-title {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        .info-val {
+            font-weight: 600;
+            direction: ltr;
+        }
+        .dns-pill {
+            background: #0d1526;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-family: monospace;
+            font-size: 1.05rem;
+        }
+        .copy-btn {
+            background: none;
+            border: none;
+            color: var(--accent-color);
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+        .copy-btn:hover {
+            color: #60a5fa;
+        }
+        .btn-update {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            border: none;
+            border-radius: 12px;
+            padding: 14px;
+            font-weight: 600;
+            font-size: 1.05rem;
+            color: white;
+            width: 100%;
+            transition: all 0.2s ease;
+        }
+        .btn-update:hover {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+<body>
+
+<div class="panel-container">
+    <!-- Header -->
+    <div class="text-center mb-4">
+        <h4 class="fw-bold mb-1">🎮 پنل مدیریت دی‌ان‌اس گیمینگ</h4>
+        <small class="text-secondary">PingSep Gaming Network</small>
+    </div>
+
+    <!-- Status Card -->
+    <div class="glass-card">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <span class="text-secondary small">شناسه کاربر: {{ user.telegram_id }}</span>
+            {% if is_active %}
+                <span class="header-badge badge-active"><i class="fa fa-circle" style="font-size: 8px;"></i> اشتراک فعال</span>
+            {% else %}
+                <span class="header-badge badge-expired"><i class="fa fa-circle" style="font-size: 8px;"></i> منقضی شده</span>
+            {% endif %}
+        </div>
+
+        <div class="info-row">
+            <span class="info-title"><i class="fa fa-user me-1"></i> نام دستگاه:</span>
+            <span class="info-val">{{ service.username.split('|')[0] }}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-title"><i class="fa fa-layer-group me-1"></i> طرح اشتراک:</span>
+            <span>{{ plan.title if plan else "اکانت تست" }}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-title"><i class="fa fa-hourglass-half me-1"></i> زمان باقی‌مانده:</span>
+            <span class="text-info">{{ duration_text }}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-title"><i class="fa fa-calendar-alt me-1"></i> تاریخ انقضاء:</span>
+            <span class="info-val">{{ shamsi_expire }}</span>
+        </div>
+    </div>
+
+    <!-- DNS Addresses -->
+    <div class="glass-card">
+        <h6 class="fw-bold mb-3"><i class="fa fa-network-wired me-2 text-primary"></i>آدرس‌های دی‌ان‌اس اختصاصی شما</h6>
+        
+        <div class="dns-pill">
+            <span>{{ dns_primary }}</span>
+            <button class="copy-btn" onclick="copyText('{{ dns_primary }}')"><i class="fa fa-copy"></i> کپی</button>
+        </div>
+        <div class="dns-pill mb-0">
+            <span>{{ dns_secondary }}</span>
+            <button class="copy-btn" onclick="copyText('{{ dns_secondary }}')"><i class="fa fa-copy"></i> کپی</button>
+        </div>
+    </div>
+
+    <!-- IP Registration Action -->
+    <div class="glass-card text-center">
+        <div class="text-secondary small mb-1">آی‌پی شناسایی‌شده فعلی شما:</div>
+        <div class="h5 fw-bold text-warning font-monospace mb-2" id="clientIpDisplay">{{ client_ip }}</div>
+        
+        <div class="alert alert-warning py-2 small mb-3 border-0 bg-opacity-10 text-warning">
+            <i class="fa fa-shield-alt me-1"></i> پیش از ثبت، مطمئن شوید فیلترشکن خاموش است.
+        </div>
+
+        <button id="updateBtn" class="btn-update" onclick="submitIP()">
+            <i class="fa fa-sync-alt me-1"></i> ثبت و فعال‌سازی این آی‌پی
+        </button>
+    </div>
+
+    <div class="text-center mt-3">
+        <a href="https://t.me/{{ bot_username }}" class="text-decoration-none text-secondary small">
+            <i class="fab fa-telegram me-1"></i> بازگشت به ربات تلگرام
+        </a>
+    </div>
+</div>
+
+<script>
+    function copyText(text) {
+        navigator.clipboard.writeText(text);
+        Swal.fire({
+            toast: true,
+            position: 'top-end',
+            icon: 'success',
+            title: 'آدرس کپی شد',
+            showConfirmButton: false,
+            timer: 1500,
+            background: '#151d30',
+            color: '#f8fafc'
+        });
+    }
+
+    async function submitIP() {
+        const btn = document.getElementById('updateBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> در حال بررسی و اعتبارسنجی...';
+
+        try {
+            const resp = await fetch('/api/ip/{{ token }}/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await resp.json();
+
+            if (data.success) {
+                Swal.fire({
+                    title: '✅ ثبت موفقیت‌آمیز',
+                    text: data.message,
+                    icon: 'success',
+                    confirmButtonText: 'متوجه شدم',
+                    background: '#151d30',
+                    color: '#f8fafc',
+                    confirmButtonColor: '#2563eb'
+                }).then(() => {
+                    window.location.reload();
+                });
+            } else {
+                Swal.fire({
+                    title: '⚠️ خطا در ثبت آی‌پی',
+                    text: data.message,
+                    icon: 'error',
+                    confirmButtonText: 'تلاش مجدد',
+                    background: '#151d30',
+                    color: '#f8fafc',
+                    confirmButtonColor: '#ef4444'
+                });
+            }
+        } catch (err) {
+            Swal.fire({
+                title: 'خطای شبکه',
+                text: 'ارتباط با سرور برقرار نشد.',
+                icon: 'error',
+                background: '#151d30',
+                color: '#f8fafc'
+            });
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa fa-sync-alt me-1"></i> ثبت و فعال‌سازی این آی‌پی';
+        }
+    }
+</script>
+
+</body>
+</html>

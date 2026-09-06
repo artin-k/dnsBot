@@ -573,3 +573,48 @@ async def handle_manual_ip_submission(message: Message, state: FSMContext):
         await message.answer(f"✅ آی‌پی شما با موفقیت ثبت و تنظیم شد!\n\n🌐 آی‌پی فعال: `{raw_ip}`")
     else:
         await message.answer("❌ خطا در همگام‌سازی با سرورها. لطفاً دقایقی دیگر تلاش کنید یا با پشتیبانی تماس بگیرید.")
+
+
+async def create_secure_ip_update_keyboard(
+    session: AsyncSession,
+    service_id_or_device_id: int | str,
+) -> InlineKeyboardMarkup:
+    """Issues a secure single-use IPAuthToken and routes to the new interactive web dashboard."""
+    builder = InlineKeyboardBuilder()
+
+    service_id = None
+    if isinstance(service_id_or_device_id, int):
+        service_id = service_id_or_device_id
+    elif str(service_id_or_device_id).isdigit():
+        service_id = int(service_id_or_device_id)
+
+    if service_id:
+        now = datetime.now(timezone.utc)
+        raw_token = uuid.uuid4().hex
+        
+        # Invalidate prior tokens & issue a fresh 10-minute token
+        await session.execute(delete(IPAuthToken).where(IPAuthToken.service_id == service_id))
+        session.add(
+            IPAuthToken(
+                token=raw_token,
+                service_id=service_id,
+                expires_at=now + timedelta(minutes=10),
+                is_used=False,
+            )
+        )
+        await session.commit()
+        
+        panel_url = f"{WEB_SERVER_BASE_URL}/ip/{raw_token}"
+    else:
+        panel_url = f"{WEB_SERVER_BASE_URL}/update-ip/{service_id_or_device_id}"
+
+    builder.button(text="🌐 پنل مدیریت و ثبت آی‌پی 🌐", url=panel_url)
+    builder.button(text="🤖 ثبت آی‌پی دستی (در ربات) 🤖", callback_data=f"manual_ip_reg:{service_id_or_device_id}")
+
+    app_settings = AppSettingsService(session)
+    support_username = await app_settings.get_support_username()
+    if support_username:
+        builder.button(text="☎️ پشتیبانی آنلاین", url=f"https://t.me/{support_username.removeprefix('@')}")
+
+    builder.adjust(1)
+    return builder.as_markup()
