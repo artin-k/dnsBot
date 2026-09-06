@@ -461,7 +461,7 @@ async def capture_ip(request: Request, token: str):
 
         success = await update_device_ip_safe(session, service, client_ip)
         if success:
-            token_record.is_used = True
+            # token_record.is_used = True
             await session.commit()
             return _render_capture_ip_html("ثبت آی‌پی موفقیت‌آمیز", "✅ ثبت آی‌پی با موفقیت انجام شد!", f"آی‌پی ایران ({client_ip}) با موفقیت ثبت شد.", True, client_ip, bot_user)
 
