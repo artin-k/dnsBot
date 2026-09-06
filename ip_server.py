@@ -450,7 +450,7 @@ async def user_dashboard_view(request: Request, token: str):
             "shamsi_expire": shamsi_expire,
             "is_active": service.status == "active" and (expire_target > now),
         }
-        return templates.TemplateResponse("user_panel.html", context)
+        return templates.TemplateResponse(request=request, name="user_panel.html", context=context)
 
 
 @app.post("/api/ip/{token}/update")
