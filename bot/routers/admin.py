@@ -98,6 +98,15 @@ from bot.states.admin import AdminSettingsStates, AdminSearchStates, AdminAddPla
 
 # Sub-routers
 from bot.routers import admin_orders, admin_plans
+from bot.keyboards.admin import (
+    AdminPlanCallback,
+    plan_delete_confirm_keyboard,
+    plan_detail_keyboard,
+    plans_management_keyboard,
+)
+from sqlalchemy import update
+from app.models import ConfigInventory, AffiliateCommission, Payment, Order
+
 
 router = Router(name="admin")
 router.include_router(admin_orders.router)
@@ -865,3 +874,137 @@ async def _show_recent_orders(callback: CallbackQuery, session: AsyncSession, pa
         f"🧾 لیست سفارش‌ها و رزروها (صفحه {page + 1})\nبرای مدیریت هر سفارش روی آن کلیک کنید:",
         reply_markup=builder.as_markup()
     )
+
+from app.repositories.plans import PlansRepository
+from bot.keyboards.admin import (
+    AdminPlanCallback,
+    plan_delete_confirm_keyboard,
+    plan_detail_keyboard,
+    plans_management_keyboard,
+)
+from sqlalchemy import update
+from app.models import ConfigInventory, AffiliateCommission, Payment, Order, VPNService
+from html import escape
+
+# ---------------------------------------------------------
+# 1. HELPER FUNCTIONS (Must be placed BEFORE the handler)
+# ---------------------------------------------------------
+async def _show_plans(callback: CallbackQuery, session: AsyncSession, prefix: str = "") -> None:
+    plans = await PlansRepository(session).list_all()
+    if not plans:
+        text = f"{prefix}📦 <b>مدیریت تعرفه‌ها</b>\n\nهنوز تعرفه‌ای ثبت نشده است."
+    else:
+        lines = [f"{prefix}📦 <b>مدیریت تعرفه‌ها:</b>\n"]
+        for idx, p in enumerate(plans, 1):
+            status = "🟢 فعال" if p.is_active else "🔴 غیرفعال"
+            price_val = getattr(p, "price", 0)
+            lines.append(f"{idx}. <b>{escape(p.title)}</b> | {price_val:,} تومان | {status}")
+        text = "\n".join(lines)
+
+    await callback.message.edit_text(text, reply_markup=plans_management_keyboard(plans), parse_mode="HTML")
+
+
+async def _show_plan_detail(callback: CallbackQuery, plan, session: AsyncSession) -> None:
+    status = "🟢 فعال" if plan.is_active else "🔴 غیرفعال"
+    desc = plan.description or "ندارد"
+    price_val = getattr(plan, "price", 0)
+    duration = f"{plan.duration_hours} ساعت" if hasattr(plan, "duration_hours") else "-"
+
+    text = (
+        f"📦 <b>جزئیات تعرفه</b>\n\n"
+        f"🆔 <b>شناسه:</b> <code>#{plan.id}</code>\n"
+        f"📌 <b>عنوان:</b> {escape(plan.title)}\n"
+        f"💵 <b>قیمت:</b> {price_val:,} تومان\n"
+        f"⏳ <b>مدت اعتبار:</b> {duration}\n"
+        f"📝 <b>توضیحات:</b> {escape(desc)}\n"
+        f"📊 <b>وضعیت:</b> {status}"
+    )
+    await callback.message.edit_text(text, reply_markup=plan_detail_keyboard(plan), parse_mode="HTML")
+
+
+# ---------------------------------------------------------
+# 2. MAIN HANDLER
+# ---------------------------------------------------------
+@router.callback_query(AdminPlanCallback.filter())
+async def admin_plan_action(
+    callback: CallbackQuery,
+    callback_data: AdminPlanCallback,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    if not await _is_admin(callback.from_user.id if callback.from_user else None, session, settings):
+        await callback.answer("⛔ شما دسترسی مدیریت ندارید.", show_alert=True)
+        return
+
+    await callback.answer()
+    plans_repo = PlansRepository(session)
+    action = callback_data.action
+    plan_id = callback_data.plan_id
+
+    # 1. Handle Cancel / Back to Plans List
+    if action in {"cancel", "list"}:
+        await _show_plans(callback, session)
+        return
+
+    plan = await plans_repo.get(plan_id)
+    if plan is None:
+        await _show_plans(callback, session, prefix="❌ این تعرفه یافت نشد یا قبلاً حذف شده است.\n\n")
+        return
+
+    # 2. View Plan Details
+    if action == "detail":
+        await _show_plan_detail(callback, plan, session)
+        return
+
+    # 3. Toggle Active / Disabled
+    if action == "toggle":
+        await plans_repo.set_active(plan.id, not plan.is_active)
+        await session.commit()
+        refreshed = await plans_repo.get(plan.id)
+        await _show_plan_detail(callback, refreshed, session)
+        return
+
+    # 4. Show Delete Confirmation Prompt
+    if action == "delete":
+        await callback.message.edit_text(
+            f"⚠️ <b>آیا از حذف تعرفه {escape(plan.title)} مطمئن هستید؟</b>\n\n"
+            "در صورت تایید، تمام سفارش‌ها و موجودی‌های متصل به این تعرفه نیز پاکسازی خواهند شد.",
+            reply_markup=plan_delete_confirm_keyboard(plan),
+            parse_mode="HTML"
+        )
+        return
+
+    # 5. Execute Safe Cascade Deletion
+    if action == "delete_confirm":
+        try:
+            order_ids_subquery = select(Order.id).where(Order.plan_id == plan.id)
+
+            # Break circular foreign key dependencies safely
+            try:
+                await session.execute(
+                    update(ConfigInventory)
+                    .where(ConfigInventory.reserved_by_order_id.in_(order_ids_subquery))
+                    .values(reserved_by_order_id=None)
+                )
+                await session.execute(
+                    update(Order)
+                    .where(Order.plan_id == plan.id)
+                    .values(config_inventory_id=None)
+                )
+                await session.execute(delete(Payment).where(Payment.order_id.in_(order_ids_subquery)))
+                await session.execute(delete(AffiliateCommission).where(AffiliateCommission.order_id.in_(order_ids_subquery)))
+                await session.execute(delete(ConfigInventory).where(ConfigInventory.plan_id == plan.id))
+            except Exception:
+                pass
+
+            # Delete orders, services, and the plan record
+            await session.execute(delete(Order).where(Order.plan_id == plan.id))
+            await session.execute(delete(VPNService).where(VPNService.plan_id == plan.id))
+            await plans_repo.delete(plan.id)
+            await session.commit()
+
+            await _show_plans(callback, session, prefix="✅ تعرفه و رکوردهای مرتبط با موفقیت حذف شدند.\n\n")
+        except Exception as e:
+            await session.rollback()
+            await callback.message.answer(f"❌ خطا در حذف تعرفه: {str(e)}")
+        return
