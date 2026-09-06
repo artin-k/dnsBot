@@ -447,7 +447,6 @@ async def capture_ip(request: Request, token: str):
         res = await session.execute(stmt)
         token_record = res.scalars().first()
 
-        # REMOVED check for token_record.is_used so it can be reused infinitely within its time window!
         if not token_record:
             return _render_capture_ip_html("خطا در ثبت آی‌پی", "لینک نامعتبر", "این لینک وجود ندارد.", False, bot_username=bot_user)
 
@@ -460,13 +459,24 @@ async def capture_ip(request: Request, token: str):
         if not service:
             return _render_capture_ip_html("خطا در ثبت آی‌پی", "سرویس یافت نشد", "سرویس مورد نظر یافت نشد.", False, bot_username=bot_user)
 
-        # Run the update safely. We never set is_used = True, so they can retry or refresh freely.
+        # ✨ FIX: If the IP is already registered, return success immediately!
+        if service.authorized_ip == client_ip:
+            return _render_capture_ip_html(
+                title="ثبت آی‌پی موفقیت‌آمیز", 
+                heading="✅ آی‌پی شما فعال است!", 
+                message=f"آی‌پی فعلی شما ({client_ip}) از قبل روی این اشتراک ثبت و فعال می‌باشد.", 
+                is_success=True, 
+                client_ip=client_ip, 
+                bot_username=bot_user
+            )
+
+        # Run the update safely for a NEW IP.
         success = await update_device_ip_safe(session, service, client_ip)
         if success:
             return _render_capture_ip_html("ثبت آی‌پی موفقیت‌آمیز", "✅ ثبت آی‌پی با موفقیت انجام شد!", f"آی‌پی ایران ({client_ip}) با موفقیت ثبت شد.", True, client_ip, bot_user)
         
         return _render_capture_ip_html("خطا در ثبت آی‌پی", "خطای سرور", "خطا در ثبت در سرور دی‌ان‌اس. لطفاً دوباره تلاش کنید.", False, bot_username=bot_user)
-
+    
     
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse, status_code=status.HTTP_410_GONE)
 async def retired_update_device_ip(device_id: str):
