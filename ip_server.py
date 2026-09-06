@@ -447,26 +447,27 @@ async def capture_ip(request: Request, token: str):
         res = await session.execute(stmt)
         token_record = res.scalars().first()
 
-        if not token_record or token_record.is_used:
-            return _render_capture_ip_html("خطا در ثبت آی‌پی", "لینک نامعتبر یا استفاده‌شده", "این توکن قبلاً استفاده شده یا معتبر نیست.", False, bot_username=bot_user)
+        # REMOVED check for token_record.is_used so it can be reused infinitely within its time window!
+        if not token_record:
+            return _render_capture_ip_html("خطا در ثبت آی‌پی", "لینک نامعتبر", "این لینک وجود ندارد.", False, bot_username=bot_user)
 
         now = datetime.now(timezone.utc)
         expires_at = token_record.expires_at.replace(tzinfo=timezone.utc) if token_record.expires_at.tzinfo is None else token_record.expires_at
         if now > expires_at:
-            return _render_capture_ip_html("خطا در ثبت آی‌پی", "انقضای لینک", "مهلت استفاده از این لینک گذشته است.", False, bot_username=bot_user)
+            return _render_capture_ip_html("خطا در ثبت آی‌پی", "انقضای لینک", "مهلت استفاده از این لینک گذشته است. لطفاً از ربات لینک جدید دریافت کنید.", False, bot_username=bot_user)
 
         service = token_record.service
         if not service:
             return _render_capture_ip_html("خطا در ثبت آی‌پی", "سرویس یافت نشد", "سرویس مورد نظر یافت نشد.", False, bot_username=bot_user)
 
+        # Run the update safely. We never set is_used = True, so they can retry or refresh freely.
         success = await update_device_ip_safe(session, service, client_ip)
         if success:
-            # token_record.is_used = True
-            await session.commit()
             return _render_capture_ip_html("ثبت آی‌پی موفقیت‌آمیز", "✅ ثبت آی‌پی با موفقیت انجام شد!", f"آی‌پی ایران ({client_ip}) با موفقیت ثبت شد.", True, client_ip, bot_user)
+        
+        return _render_capture_ip_html("خطا در ثبت آی‌پی", "خطای سرور", "خطا در ثبت در سرور دی‌ان‌اس. لطفاً دوباره تلاش کنید.", False, bot_username=bot_user)
 
-        return _render_capture_ip_html("خطا در ثبت آی‌پی", "خطای سرور", "خطا در ثبت در سرور دی‌ان‌اس.", False, bot_username=bot_user)
-
+    
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse, status_code=status.HTTP_410_GONE)
 async def retired_update_device_ip(device_id: str):
     """Reject unsafe pre-token links; never select a service by shared slot."""
