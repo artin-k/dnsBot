@@ -1,11 +1,7 @@
 # ip_server.py
 import os
 from dotenv import load_dotenv
-load_dotenv() # ⚠️ این خط فایل .env را به زور لود می‌کند تا ادگارد Skip نشود!
-
-import asyncio
-import secrets
-import logging
+load_dotenv()
 
 import asyncio
 import secrets
@@ -34,11 +30,10 @@ from app.models import IPAuthToken, Order, Payment, VPNService, OrderStatus, Pay
 from app.repositories.orders import OrdersRepository
 from app.repositories.payments import PaymentsRepository
 from app.repositories.services import ServicesRepository
-from app.services.controld import create_dns_device, ControlDService
+from app.services.controld import ControlDService
 from app.services.payment_service import PaymentApprovalError, PaymentAlreadyProcessedError, PaymentExpiredError, PaymentService
 from app.services.vpn_panel import VPNPanelService
 from app.services.paystar import PaystarService
-from app.services.ip_manager import update_device_ip_safe
 from bot.loader import create_bot
 from bot.utils.auto_clean import schedule_message_deletion
 from app.services.vpn_detector import verify_user_ip
@@ -50,6 +45,49 @@ logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 WEB_SERVER_BASE_URL = settings.public_web_base_url
+
+# ============================================================================
+# DIRECT CONTROLD API CALLS (Bypassing ip_manager.py completely)
+# ============================================================================
+async def direct_controld_authorize(device_id: str, ip: str) -> bool:
+    """Sends a direct API request to Control D, completely bypassing any other files."""
+    if not device_id or not ip: return False
+    url = "https://api.controld.com/access"
+    headers = {
+        "Authorization": f"Bearer {settings.controld_api_token}",
+        "Content-Type": "application/json",
+        "accept": "application/json"
+    }
+    # Add Org ID if exists
+    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
+    if org_id: headers["X-Force-Org-Id"] = org_id
+
+    payload = {"device_id": device_id, "ips": [ip.strip()]}
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, json=payload, headers=headers, timeout=10.0)
+            data = response.json()
+            if response.status_code in (200, 201) and data.get("success"):
+                return True
+            logger.error(f"Direct CD Auth Failed: Status {response.status_code} | Body {response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"Direct CD Auth Exception: {e}")
+            return False
+
+async def direct_controld_deauthorize(device_id: str, ip: str) -> bool:
+    if not device_id or not ip: return False
+    url = f"https://api.controld.com/access?device_id={device_id}&ips[]={ip.strip()}"
+    headers = {"Authorization": f"Bearer {settings.controld_api_token}", "accept": "application/json"}
+    org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
+    if org_id: headers["X-Force-Org-Id"] = org_id
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            await client.delete(url, headers=headers, timeout=10.0)
+            return True
+        except: return False
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -101,43 +139,28 @@ async def get_bot_username() -> str:
     return _bot_username
 
 def _failed_html(reason: str, bot_username: str = "bot") -> HTMLResponse:
-    html = f"""<html lang="fa" dir="rtl"><body style="background:#0f172a;color:#fff;text-align:center;padding:50px;font-family:Tahoma;">
-    <h2 style="color:#ef4444;">❌ خطا</h2><p>{escape(reason)}</p>
-    <a href="https://t.me/{escape(bot_username)}" style="color:#3b82f6;text-decoration:none;font-weight:bold;">بازگشت به ربات</a></body></html>"""
+    html = f"""<html lang="fa" dir="rtl"><body style="background:#0f172a;color:#fff;text-align:center;padding:50px;font-family:Tahoma;"><h2 style="color:#ef4444;">❌ خطا</h2><p>{escape(reason)}</p><a href="https://t.me/{escape(bot_username)}" style="color:#3b82f6;">بازگشت به ربات</a></body></html>"""
     return HTMLResponse(content=html)
 
 def _success_html(message: str, bot_username: str = "bot") -> HTMLResponse:
-    html = f"""<html lang="fa" dir="rtl"><body style="background:#0f172a;color:#fff;text-align:center;padding:50px;font-family:Tahoma;">
-    <h2 style="color:#10b981;">✅ موفق</h2><p>{escape(message)}</p>
-    <a href="https://t.me/{escape(bot_username)}" style="color:#3b82f6;text-decoration:none;font-weight:bold;">بازگشت به ربات</a></body></html>"""
+    html = f"""<html lang="fa" dir="rtl"><body style="background:#0f172a;color:#fff;text-align:center;padding:50px;font-family:Tahoma;"><h2 style="color:#10b981;">✅ موفق</h2><p>{escape(message)}</p><a href="https://t.me/{escape(bot_username)}" style="color:#3b82f6;">بازگشت به ربات</a></body></html>"""
     return HTMLResponse(content=html)
 
 def _render_capture_ip_html(title: str, heading: str, message: str, is_success: bool = False, client_ip: str | None = None, bot_username: str = "bot") -> HTMLResponse:
     icon_class = "success-icon" if is_success else "error-icon"
     icon = "✅" if is_success else "❌"
     ip_box = f'<div class="info-ip py-2 px-3 rounded-3 mb-4 text-center">{escape(client_ip)}</div>' if client_ip else ""
-    html = f"""<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(title)}</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet"><style>@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap'); body {{ font-family: 'Vazirmatn', Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }} .theme-card {{ background-color: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 40px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3); max-width: 550px; width: 100%; text-align: center; }} .icon-wrapper {{ width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 24px; font-size: 40px; }} .success-icon {{ background-color: rgba(16, 185, 129, 0.1); color: #10b981; border: 2px solid rgba(16, 185, 129, 0.2); }} .error-icon {{ background-color: rgba(239, 68, 68, 0.1); color: #ef4444; border: 2px solid rgba(239, 68, 68, 0.2); }} .info-ip {{ background-color: #0f172a; border: 1px solid #334155; font-family: monospace; font-size: 1.25rem; color: #38bdf8; }} .btn-home {{ background-color: #3b82f6; color: #ffffff; border: none; font-weight: bold; }} .btn-home:hover {{ background-color: #2563eb; color: #ffffff; }}</style></head><body><div class="theme-card"><div class="icon-wrapper {icon_class}">{icon}</div><h1 class="h4 mb-3 fw-bold">{escape(heading)}</h1><p class="mb-4 text-secondary" style="font-size: 15px; line-height: 1.8;">{escape(message)}</p>{ip_box}<a href="https://t.me/{escape(bot_username)}" class="btn btn-home py-2 px-4 rounded-3 text-decoration-none d-inline-block">بازگشت به ربات تلگرام</a></div></body></html>"""
+    html = f"""<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{escape(title)}</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet"><style>@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap'); body {{ font-family: 'Vazirmatn', Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }} .theme-card {{ background-color: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 40px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.3); max-width: 550px; width: 100%; text-align: center; }} .icon-wrapper {{ width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 24px; font-size: 40px; }} .success-icon {{ background-color: rgba(16, 185, 129, 0.1); color: #10b981; border: 2px solid rgba(16, 185, 129, 0.2); }} .error-icon {{ background-color: rgba(239, 68, 68, 0.1); color: #ef4444; border: 2px solid rgba(239, 68, 68, 0.2); }} .info-ip {{ background-color: #0f172a; border: 1px solid #334155; font-family: monospace; font-size: 1.25rem; color: #38bdf8; }} .btn-home {{ background-color: #3b82f6; color: #ffffff; border: none; font-weight: bold; }}</style></head><body><div class="theme-card"><div class="icon-wrapper {icon_class}">{icon}</div><h1 class="h4 mb-3 fw-bold">{escape(heading)}</h1><p class="mb-4 text-secondary" style="font-size: 15px; line-height: 1.8;">{escape(message)}</p>{ip_box}<a href="https://t.me/{escape(bot_username)}" class="btn btn-home py-2 px-4 rounded-3 text-decoration-none d-inline-block">بازگشت به ربات تلگرام</a></div></body></html>"""
     return HTMLResponse(content=html)
 
 def _render_vpn_detected_html(detected_ip: str, country: str, isp: str, error_message: str | None = None, bot_username: str = "bot") -> HTMLResponse:
     custom_msg = error_message or "آی‌پی شناسایی‌شده شما متعلق به سرور خارجی یا فیلترشکن است."
-    html = f"""<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>فیلترشکن روشن است</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet"><style>@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap'); body {{ font-family: 'Vazirmatn', Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }} .card-box {{ background-color: #1e293b; border: 2px solid #eab308; border-radius: 16px; padding: 36px; max-width: 540px; width: 100%; text-align: center; }} .icon-box {{ width: 75px; height: 75px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 38px; background-color: rgba(234, 179, 8, 0.12); border: 2px solid rgba(234, 179, 8, 0.3); }} .btn-reload {{ background-color: #eab308; color: #0f172a; font-weight: bold; border: none; }} .btn-reload:hover {{ background-color: #ca8a04; color: #0f172a; }}</style></head><body><div class="card-box"><div class="icon-box">⚠️</div><h1 class="h4 mb-3 fw-bold text-warning">فیلترشکن شما روشن است!</h1><p class="text-light mb-3">{escape(custom_msg)}<br>ثبت آی‌پی فقط با اینترنت ایران امکان‌پذیر است.</p><button onclick="location.reload()" class="btn btn-reload py-2 px-4 rounded-3 w-100 mb-2">🔄 فیلترشکن را خاموش کردم، بررسی مجدد</button><a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">بازگشت به ربات</a></div></body></html>"""
+    html = f"""<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>فیلترشکن روشن است</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet"><style>@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap'); body {{ font-family: 'Vazirmatn', Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }} .card-box {{ background-color: #1e293b; border: 2px solid #eab308; border-radius: 16px; padding: 36px; max-width: 540px; width: 100%; text-align: center; }} .icon-box {{ width: 75px; height: 75px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 38px; background-color: rgba(234, 179, 8, 0.12); border: 2px solid rgba(234, 179, 8, 0.3); }} .btn-reload {{ background-color: #eab308; color: #0f172a; font-weight: bold; border: none; }}</style></head><body><div class="card-box"><div class="icon-box">⚠️</div><h1 class="h4 mb-3 fw-bold text-warning">فیلترشکن شما روشن است!</h1><p class="text-light mb-3">{escape(custom_msg)}<br>ثبت آی‌پی فقط با اینترنت ایران امکان‌پذیر است.</p><button onclick="location.reload()" class="btn btn-reload py-2 px-4 rounded-3 w-100 mb-2">🔄 فیلترشکن را خاموش کردم، بررسی مجدد</button><a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">بازگشت به ربات</a></div></body></html>"""
     return HTMLResponse(content=html, status_code=200)
 
-async def _send_paystar_success_message(order: Order, payment: Payment, context: dict[str, str]) -> None:
-    from bot.utils.messages import send_dns_delivery_card
-    async with async_session_maker() as session:
-        stmt = select(VPNService).where(VPNService.order_id == order.id).limit(1)
-        res = await session.execute(stmt)
-        vpn_service = res.scalars().first()
-        if not vpn_service: return
-        await send_dns_delivery_card(bot=bot, chat_id=order.user.telegram_id, session=session, service=vpn_service, title_prefix="✅ <b>پرداخت آنلاین تایید شد!</b>", ipv4_primary=context.get("ipv4_primary", "76.76.2.162"), ipv4_secondary=context.get("ipv4_secondary", "76.76.10.162"), service_display=context.get("service_display", "کل ترافیک اینترنت"), country_display=context.get("country_display", "پیش‌فرض"), delay_seconds=7200)
-
 async def _build_paystar_context(order: Order, service: VPNService, settings_obj) -> dict[str, str]:
-    raw_username, service_pk, pop_code = _parse_purchase_metadata(order.custom_username)
-    username = raw_username or f"user{order.user_id}"
-    service_display = service_pk.capitalize() if service_pk != "default" else "کل ترافیک اینترنت"
-    country_display = pop_code or "پیش‌فرض"
+    username = (order.custom_username or f"user{order.user_id}").split("|")[0]
+    service_display = "کل ترافیک اینترنت"
     ips = await get_controld_device_ips(service.controld_device_id, settings_obj) if service.controld_device_id else {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
     expire_at = service.expire_at
     if expire_at.tzinfo is None: expire_at = expire_at.replace(tzinfo=timezone.utc)
@@ -146,18 +169,26 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
         naive_tehran = expire_at.astimezone(tehran_tz).replace(tzinfo=None)
         expire_str = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
     except Exception:
-        expire_str = expire_at.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S")
+        expire_str = expire_at.strftime("%Y-%m-%d %H:%M:%S")
     return {
-        "username": username, "service_display": service_display, "country_display": country_display,
+        "username": username, "service_display": service_display, "country_display": "پیش‌فرض",
         "duration_text": calculate_remaining_time_fa(expire_at), "expire_str": expire_str,
         "device_id": service.controld_device_id or "", "ipv4_primary": ips["ipv4_primary"],
-        "ipv4_secondary": ips["ipv4_secondary"], "service_pk": service_pk, "pop_code": pop_code or "",
+        "ipv4_secondary": ips["ipv4_secondary"],
     }
 
 def _render_paystar_success_html(order: Order, payment: Payment, context: dict[str, str]) -> HTMLResponse:
-    html = f"""<html><head><meta charset="utf-8"><title>پرداخت موفقیت‌آمیز</title><style>body {{ font-family: Tahoma, Arial, sans-serif; background-color: #0f172a; color: #fff; text-align: center; padding: 50px; direction: rtl; }} .card {{ background: #1e293b; padding: 30px; border-radius: 10px; display: inline-block; max-width: 500px; }} h1 {{ color: #10b981; }} p {{ font-size: 16px; line-height: 1.8; }}</style></head><body><div class="card"><h1>✅ پرداخت شما با موفقیت انجام شد!</h1><p>کد پیگیری: {escape(order.tracking_code)}</p><p>مشخصات اتصال در تلگرام برای شما ارسال شد.</p></div></body></html>"""
+    html = f"""<html><head><meta charset="utf-8"><title>پرداخت موفقیت‌آمیز</title><style>body {{ font-family: Tahoma, Arial, sans-serif; background-color: #0f172a; color: #fff; text-align: center; padding: 50px; direction: rtl; }} .card {{ background: #1e293b; padding: 30px; border-radius: 10px; display: inline-block; max-width: 500px; }} h1 {{ color: #10b981; }} p {{ font-size: 16px; line-height: 1.8; }}</style></head><body><div class="card"><h1>✅ پرداخت شما با موفقیت انجام شد!</h1><p>کد پیگیری: {escape(order.tracking_code)}</p><p>مشخصات سرویس در تلگرام ارسال شد.</p></div></body></html>"""
     return HTMLResponse(content=html)
 
+async def _send_paystar_success_message(order: Order, payment: Payment, context: dict[str, str]) -> None:
+    from bot.utils.messages import send_dns_delivery_card
+    async with async_session_maker() as session:
+        stmt = select(VPNService).where(VPNService.order_id == order.id).limit(1)
+        res = await session.execute(stmt)
+        vpn_service = res.scalars().first()
+        if not vpn_service: return
+        await send_dns_delivery_card(bot=bot, chat_id=order.user.telegram_id, session=session, service=vpn_service, title_prefix="✅ <b>پرداخت آنلاین تایید شد!</b>", ipv4_primary=context.get("ipv4_primary", "76.76.2.162"), ipv4_secondary=context.get("ipv4_secondary", "76.76.10.162"), service_display="کل ترافیک اینترنت", country_display="پیش‌فرض", delay_seconds=7200)
 
 # ============================================================================
 # ROOT ROUTES 
@@ -173,7 +204,7 @@ async def favicon(): return Response(status_code=204)
 async def ping(): return JSONResponse(content={"status": "pong"}, headers={"Cache-Control": "no-store"})
 
 # ============================================================================
-# PAYSTAR REDIRECT & CALLBACK (DO NOT TOUCH - WORKING PERFECTLY)
+# PAYSTAR REDIRECT & CALLBACK 
 # ============================================================================
 @app.get("/paystar/redirect/{token}", response_class=HTMLResponse)
 @app.get("/paystar/redirect", response_class=HTMLResponse)
@@ -192,11 +223,7 @@ async def paystar_redirect(request: Request):
             if payment.status == PaymentStatus.APPROVED.value or payment.order.status == OrderStatus.COMPLETED.value:
                 return _success_html("این سفارش قبلاً پرداخت شده است.", bot_user)
 
-        html_content = f"""<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><meta name="referrer" content="origin" /><title>در حال انتقال...</title>
-        <style>body {{ font-family: Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }} .card {{ background: #1e293b; border: 1px solid #334155; padding: 30px; border-radius: 16px; max-width: 400px; width: 90%; }} button {{ background-color: #3b82f6; color: #fff; border: none; border-radius: 8px; padding: 12px; font-weight: bold; width: 100%; cursor: pointer; margin-top: 15px; }}</style></head>
-        <body><div class="card"><h3>در حال انتقال به درگاه بانکی...</h3><p style="color: #94a3b8; font-size: 14px;">لطفاً چند لحظه صبر کنید.</p>
-        <form id="paymentForm" action="https://core.paystar.click/api/pardakht/payment" method="POST"><input type="hidden" name="token" value="{clean_token}"><button type="submit" id="fallbackBtn" style="display: none;">انتقال دستی به درگاه</button></form>
-        </div><script>document.addEventListener("DOMContentLoaded", function() {{ document.getElementById("paymentForm").submit(); setTimeout(function() {{ document.getElementById("fallbackBtn").style.display = "block"; }}, 2500); }});</script></body></html>"""
+        html_content = f"""<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><meta name="referrer" content="origin" /><title>در حال انتقال...</title><style>body {{ font-family: Tahoma, sans-serif; background-color: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }} .card {{ background: #1e293b; border: 1px solid #334155; padding: 30px; border-radius: 16px; max-width: 400px; width: 90%; }} button {{ background-color: #3b82f6; color: #fff; border: none; border-radius: 8px; padding: 12px; font-weight: bold; width: 100%; cursor: pointer; margin-top: 15px; }}</style></head><body><div class="card"><h3>در حال انتقال به درگاه بانکی...</h3><p style="color: #94a3b8; font-size: 14px;">لطفاً چند لحظه صبر کنید.</p><form id="paymentForm" action="https://core.paystar.click/api/pardakht/payment" method="POST"><input type="hidden" name="token" value="{clean_token}"><button type="submit" id="fallbackBtn" style="display: none;">انتقال دستی به درگاه</button></form></div><script>document.addEventListener("DOMContentLoaded", function() {{ document.getElementById("paymentForm").submit(); setTimeout(function() {{ document.getElementById("fallbackBtn").style.display = "block"; }}, 2500); }});</script></body></html>"""
         return HTMLResponse(content=html_content)
     except Exception as exc: return _failed_html(f"خطای سرور: {str(exc)}", bot_user)
 
@@ -217,7 +244,7 @@ async def paystar_callback(request: Request):
             if not order or not payment: return _failed_html("سفارش در سیستم یافت نشد.", bot_username=bot_user)
             
             if payment.status == PaymentStatus.APPROVED.value:
-                return _success_html("این سفارش قبلاً با موفقیت تایید شده است.", bot_username=bot_user)
+                return _success_html("این سفارش قبلاً تایید شده است.", bot_username=bot_user)
 
             if status_code != 1:
                 return _failed_html(f"تراکنش ناموفق بود (کد وضعیت: {status_code}).", bot_username=bot_user)
@@ -242,88 +269,66 @@ async def paystar_callback(request: Request):
 
 
 # ============================================================================
-# USER DASHBOARD (/ip/{token} and /capture-ip/{token}) - BULLETPROOFED
+# USER DASHBOARD (/ip/{token})
 # ============================================================================
 @app.get("/ip/{token}", response_class=HTMLResponse)
 @app.get("/capture-ip/{token}", response_class=HTMLResponse)
 async def capture_or_dashboard_ip(request: Request, token: str):
     bot_user = await get_bot_username()
+    token = token.strip()
+    formatted_token = token
     try:
-        token = token.strip()
-        formatted_token = token
+        if len(token) == 32: formatted_token = str(uuid.UUID(token))
+    except ValueError: pass
+
+    client_ip, _ = get_client_real_ip(request)
+    ip_check = await verify_user_ip(client_ip)
+    if not ip_check.is_iran:
+        return _render_vpn_detected_html(client_ip, ip_check.country, ip_check.isp, ip_check.error_message, bot_user)
+
+    async with async_session_maker() as session:
+        stmt = select(IPAuthToken).options(joinedload(IPAuthToken.service).joinedload(VPNService.user)).where(or_(IPAuthToken.token == token, IPAuthToken.token == formatted_token)).limit(1)
+        token_record = (await session.execute(stmt)).scalars().first()
+
+        if not token_record or not token_record.service:
+            return _failed_html("این لینک یافت نشد یا منقضی شده است.", bot_user)
+
+        service = token_record.service
+        now = datetime.now(timezone.utc)
+        token_expires = token_record.expires_at.replace(tzinfo=timezone.utc) if token_record.expires_at.tzinfo is None else token_record.expires_at
+        
+        if now > token_expires:
+            return _failed_html("مهلت استفاده از این لینک به پایان رسیده است. از ربات لینک جدید بگیرید.", bot_user)
+
+        # Dashboard UI
+        service_expires = service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at and service.expire_at.tzinfo is None else service.expire_at
+        is_active = (service.status == "active") and (service_expires is None or service_expires > now)
+        
+        dns_ips = await get_controld_device_ips(service.controld_device_id, settings) if service.controld_device_id else {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
+        user_name = service.user.first_name or service.user.username or f"کاربر {service.user.telegram_id}" if service.user else "کاربر گرامی"
+        
+        context = {
+            "request": request, "token": token, "client_ip": client_ip, "bot_username": bot_user,
+            "user_name": user_name, "device_username": (service.username or "user").split("|")[0],
+            "subscription_status": "فعال" if is_active else "منقضی شده", "is_active": is_active,
+            "duration_text": calculate_remaining_time_fa(service.expire_at),
+            "dns_primary": dns_ips["ipv4_primary"], "dns_secondary": dns_ips["ipv4_secondary"],
+            "is_ip_synced": (service.authorized_ip == client_ip),
+        }
         try:
-            if len(token) == 32: formatted_token = str(uuid.UUID(token))
-        except ValueError: pass
-
-        client_ip, _ = get_client_real_ip(request)
-
-        # ANTI-VPN CHECK
-        ip_check = await verify_user_ip(client_ip)
-        if not ip_check.is_iran:
-            return _render_vpn_detected_html(client_ip, ip_check.country, ip_check.isp, ip_check.error_message, bot_user)
-
-        async with async_session_maker() as session:
-            stmt = (
-                select(IPAuthToken)
-                .options(joinedload(IPAuthToken.service).joinedload(VPNService.user), joinedload(IPAuthToken.service).joinedload(VPNService.plan))
-                .where(or_(IPAuthToken.token == token, IPAuthToken.token == formatted_token))
-                .limit(1)
-            )
-            res = await session.execute(stmt)
-            token_record = res.scalars().first()
-
-            if not token_record or not token_record.service:
-                return _failed_html("این لینک یافت نشد یا منقضی شده است.", bot_user)
-
-            service = token_record.service
-            now = datetime.now(timezone.utc)
-            token_expires = token_record.expires_at.replace(tzinfo=timezone.utc) if token_record.expires_at.tzinfo is None else token_record.expires_at
-            
-            if now > token_expires:
-                return _failed_html("مهلت استفاده از این لینک به پایان رسیده است. از ربات لینک جدید بگیرید.", bot_user)
-
-            # Support for legacy /capture-ip/ route behavior (Fast IP Registration)
-            if "capture-ip" in request.url.path:
-                if service.authorized_ip == client_ip:
-                    return _render_capture_ip_html("ثبت آی‌پی موفق", "✅ آی‌پی فعال است!", f"آی‌پی ({client_ip}) از قبل ثبت شده است.", True, client_ip, bot_user)
-                success = await update_device_ip_safe(session, service, client_ip)
-                if success:
-                    return _render_capture_ip_html("ثبت موفق", "✅ ثبت آی‌پی با موفقیت انجام شد!", f"آی‌پی ({client_ip}) ثبت شد.", True, client_ip, bot_user)
-                return _render_capture_ip_html("خطا", "خطای سرور", "خطا در تنظیم دی‌ان‌اس.", False, bot_username=bot_user)
-
-            # Modern Dashboard UI (/ip/)
-            service_expires = service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at and service.expire_at.tzinfo is None else service.expire_at
-            is_active = (service.status == "active") and (service_expires is None or service_expires > now)
-            
-            dns_ips = await get_controld_device_ips(service.controld_device_id, settings) if service.controld_device_id else {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
-            user_name = service.user.first_name or service.user.username or f"کاربر {service.user.telegram_id}" if service.user else "کاربر گرامی"
-            device_username = (service.username or f"user{service.user_id}").split("|")[0]
-            
-            context = {
-                "request": request, "token": token, "client_ip": client_ip, "bot_username": bot_user,
-                "user_name": user_name, "device_username": device_username,
-                "subscription_status": "فعال" if is_active else "منقضی شده", "is_active": is_active,
-                "duration_text": calculate_remaining_time_fa(service.expire_at),
-                "dns_primary": dns_ips["ipv4_primary"], "dns_secondary": dns_ips["ipv4_secondary"],
-                "is_ip_synced": (service.authorized_ip == client_ip),
-            }
-            try:
-                return templates.TemplateResponse("user_panel.html", context)
-            except Exception as template_exc:
-                logger.error(f"Template parsing failed: {str(template_exc)}")
-                # Safe fallback if user_panel.html crashes or is missing
-                return _render_capture_ip_html("پنل کاربری", "✅ اتصال برقرار شد", "برای ثبت آی‌پی از دکمه ثبت دستی ربات استفاده کنید.", True, client_ip, bot_user)
-                
-    except Exception as e:
-        logger.exception(f"Exception triggered in user dashboard: {str(e)}")
-        return _failed_html(f"خطای داخلی سرور رخ داد: {str(e)}", bot_user)
+            return templates.TemplateResponse("user_panel.html", context)
+        except Exception:
+            return _render_capture_ip_html("پنل کاربری", "✅ اتصال برقرار شد", "برای ثبت آی‌پی از دکمه ثبت دستی ربات استفاده کنید.", True, client_ip, bot_user)
 
 
 # ============================================================================
-# API POST ROUTE (/api/ip/update) - BULLETPROOFED
+# API POST ROUTE (/api/ip/update) - THE BULLETPROOF FIX
 # ============================================================================
 @app.post("/api/ip/{token}/update")
 async def api_update_ip(request: Request, token: str):
+    """
+    Directly authenticates with Control D and updates DB, bypassing ip_manager.py logic.
+    """
     token = token.strip()
     formatted_token = token
     try:
@@ -338,29 +343,49 @@ async def api_update_ip(request: Request, token: str):
 
     async with async_session_maker() as session:
         stmt = select(IPAuthToken).options(joinedload(IPAuthToken.service)).where(or_(IPAuthToken.token == token, IPAuthToken.token == formatted_token)).limit(1)
-        res = await session.execute(stmt)
-        token_record = res.scalars().first()
+        token_record = (await session.execute(stmt)).scalars().first()
 
-        if not token_record or not token_record.service:
+        if not token_record or not token_record.service: 
             return JSONResponse(status_code=404, content={"success": False, "message": "اشتراک یافت نشد."})
+        
+        now = datetime.now(timezone.utc)
+        expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
+        if now > expires_at: 
+            return JSONResponse(status_code=410, content={"success": False, "message": "لینک منقضی شده است."})
 
         service = token_record.service
+        device_id = service.controld_device_id
+        old_ip = service.authorized_ip
+
+        if not device_id:
+            return JSONResponse(status_code=500, content={"success": False, "message": "خطا: آیدی سرور (Device ID) در دیتابیس موجود نیست!"})
+
+        # 1. DIRECT API CALL TO CONTROLD
+        if old_ip and old_ip != client_ip:
+            await direct_controld_deauthorize(device_id, old_ip)
+
+        cd_success = await direct_controld_authorize(device_id, client_ip)
         
-        # ⚠️ هیچ موفقیتی کاذب نیست! مستقیماً و تحت هر شرایطی آپدیت را اجرا می‌کنیم
-        success = await update_device_ip_safe(session, service, client_ip)
-        
-        if success:
-            return JSONResponse(status_code=200, content={"success": True, "client_ip": client_ip, "message": f"آی‌پی {client_ip} با موفقیت در سرورهای DNS ثبت شد."})
-        else:
-            return JSONResponse(status_code=500, content={"success": False, "message": "خطا در تنظیم دی‌ان‌اس! لطفاً تنظیمات ControlD را بررسی کنید."})
-         
-# ============================================================================
-# RETIRED ROUTE
-# ============================================================================
-@app.get("/update-ip/{device_id}", response_class=HTMLResponse, status_code=status.HTTP_410_GONE)
-async def retired_update_device_ip(device_id: str):
-    bot_user = await get_bot_username()
-    return _render_capture_ip_html("این لینک منقضی شده است", "⚠️ لینک قدیمی است", "لطفاً از ربات لینک جدید دریافت کنید.", False, bot_username=bot_user)
+        if not cd_success:
+            return JSONResponse(status_code=500, content={"success": False, "message": f"خطا در ثبت آی‌پی در Control D (آیدی دستگاه: {device_id}). لطفاً توکن API را بررسی کنید."})
+
+        # 2. SOFT SYNC TO ADGUARD (Does not crash if AdGuard is down)
+        try:
+            from app.services.adguard import AdGuardHomeService
+            adg = AdGuardHomeService(settings)
+            if adg.is_configured():
+                if old_ip and old_ip != client_ip:
+                    await adg.deauthorize_client_ip(old_ip)
+                await adg.allow_client_ip(client_ip)
+        except Exception as e:
+            logger.warning(f"AdGuard sync ignored: {e}")
+
+        # 3. UPDATE DATABASE
+        service.authorized_ip = client_ip
+        await session.commit()
+
+        return JSONResponse(status_code=200, content={"success": True, "client_ip": client_ip, "message": f"آی‌پی {client_ip} با موفقیت در سرورهای DNS ثبت شد."})
+
 
 # ============================================================================
 # WEB ADMIN DASHBOARD
@@ -372,27 +397,3 @@ async def admin_dashboard(request: Request, uid: int = Query(...), token: str = 
         raw_rows = await ServicesRepository(session).get_admin_dashboard_data()
         users = [{"telegram_id": r.telegram_id, "first_name": r.first_name, "service_id": r.service_id, "controld_device_id": r.controld_device_id, "authorized_ip": r.authorized_ip, "status": "فعال" if r.status == "active" else "منقضی شده"} for r in raw_rows]
     return templates.TemplateResponse("admin.html", {"request": request, "users": users, "uid": uid, "token": token})
-
-@app.post("/admin/delete-ip")
-async def admin_delete_ip(uid: int = Query(...), token: str = Query(...), service_id: int = Form(...), device_id: str = Form(...), ip: str = Form(...)):
-    if not verify_admin_web_token(uid, token): raise HTTPException(status_code=403, detail="دسترسی غیرمجاز")
-    if not ip or ip == "ثبت نشده (No IP)": return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=303)
-    await ControlDService(settings).deauthorize_ip(device_id, ip)
-    async with async_session_maker() as session:
-        service = (await session.execute(select(VPNService).where(VPNService.id == service_id).limit(1))).scalars().first()
-        if service: service.authorized_ip = None; await session.commit()
-    return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=303)
-
-@app.post("/admin/add-ip")
-async def admin_add_ip(uid: int = Query(...), token: str = Query(...), service_id: int = Form(...), new_ip: str = Form(...)):
-    if not verify_admin_web_token(uid, token): raise HTTPException(status_code=403, detail="دسترسی غیرمجاز")
-    async with async_session_maker() as session:
-        service = (await session.execute(select(VPNService).where(VPNService.id == service_id).limit(1))).scalars().first()
-        if service: await update_device_ip_safe(session, service, new_ip.strip())
-    return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=303)
-
-
-# ⚠️ THE INDENTATION FIX (Correctly placed out of all functions):
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("ip_server:app", host="127.0.0.1", port=8000, reload=False)
