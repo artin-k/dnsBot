@@ -137,8 +137,13 @@ async def root_redirect():
 async def serve_logo():
     import os
     from fastapi import HTTPException
-    if os.path.exists("logo.jpg"):
-        return FileResponse("logo.jpg")
+    from fastapi.responses import FileResponse
+    
+    # Explicitly look inside the templates folder
+    image_path = os.path.join("templates", "logo.jpg")
+    
+    if os.path.exists(image_path):
+        return FileResponse(image_path)
     raise HTTPException(status_code=404, detail="Logo not found")
 
 @app.get("/ping")
