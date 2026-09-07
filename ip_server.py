@@ -48,20 +48,20 @@ security = httpx
 
 def calculate_remaining_time_fa(expire_at: datetime | None) -> str:
     if not expire_at:
-        return "۳۰ روز"
+        return "█│█░ ╪▒┘ê╪▓"
     now = datetime.now(timezone.utc)
     if expire_at.tzinfo is None:
         expire_at = expire_at.replace(tzinfo=timezone.utc)
     delta = expire_at - now
     total_seconds = delta.total_seconds()
     if total_seconds <= 0:
-        return "پایان یافته"
+        return "┘╛╪º█î╪º┘å █î╪º┘ü╪¬┘ç"
     total_hours = int(total_seconds // 3600)
     if total_hours >= 24:
-        return f"{total_hours // 24} روز"
+        return f"{total_hours // 24} ╪▒┘ê╪▓"
     if total_hours > 0:
-        return f"{total_hours} ساعت"
-    return f"{int(total_seconds // 60)} دقیقه"
+        return f"{total_hours} ╪│╪º╪╣╪¬"
+    return f"{int(total_seconds // 60)} ╪»┘é█î┘é┘ç"
 
 
 def _parse_purchase_metadata(raw_username: str | None) -> tuple[str, str, str | None]:
@@ -140,7 +140,7 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
     raw_username, service_pk, pop_code = _parse_purchase_metadata(order.custom_username)
     username = raw_username or f"user{order.user_id}"
 
-    service_display = service_pk.capitalize() if service_pk != "default" else "🌐 کل ترافیک اینترنت"
+    service_display = service_pk.capitalize() if service_pk != "default" else "≡ƒîÉ ┌⌐┘ä ╪¬╪▒╪º┘ü█î┌⌐ ╪º█î┘å╪¬╪▒┘å╪¬"
     
     # Fast non-blocking lookups with short timeout guards
     if service.plan and service.plan.controld_profile_id and service_pk != "default":
@@ -159,7 +159,7 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
         except Exception:
             pass
 
-    country_display = pop_code or "پیش‌فرض"
+    country_display = pop_code or "┘╛█î╪┤ΓÇî┘ü╪▒╪╢"
 
     # Fast IP lookup from local SLOT_CONFIGS
     ips = await get_controld_device_ips(service.controld_device_id, settings_obj) if service.controld_device_id else {
@@ -175,7 +175,7 @@ async def _build_paystar_context(order: Order, service: VPNService, settings_obj
         tehran_tz = ZoneInfo("Asia/Tehran")
         tehran_expire = expire_at.astimezone(tehran_tz)
         naive_tehran = tehran_expire.replace(tzinfo=None)
-        # 🛠 FIX: Defined expire_str directly to resolve the UnboundLocalError [cite: 1]
+        # ≡ƒ¢á FIX: Defined expire_str directly to resolve the UnboundLocalError [cite: 1]
         expire_str = jdatetime.datetime.fromgregorian(datetime=naive_tehran).strftime("%Y/%m/%d - %H:%M:%S")
     except Exception:
         expire_str = expire_at.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S")
@@ -198,7 +198,7 @@ def _render_paystar_success_html(order: Order, payment: Payment, context: dict[s
     <html>
     <head>
         <meta charset="utf-8">
-        <title>پرداخت موفقیت‌آمیز</title>
+        <title>┘╛╪▒╪»╪º╪«╪¬ ┘à┘ê┘ü┘é█î╪¬ΓÇî╪ó┘à█î╪▓</title>
         <style>
             body {{ font-family: Tahoma, Arial, sans-serif; background-color: #f4f6f9; text-align: center; padding: 50px; direction: rtl; }}
             .card {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: inline-block; max-width: 720px; }}
@@ -209,18 +209,18 @@ def _render_paystar_success_html(order: Order, payment: Payment, context: dict[s
     </head>
     <body>
         <div class="card">
-            <h1>✅ پرداخت شما با موفقیت انجام شد!</h1>
-            <p>کد رهگیری سفارش: <b>{escape(order.tracking_code)}</b></p>
-            <p>کد پیگیری تراکنش: <b>{escape(payment.ref_id or "-")}</b></p>
-            <p>نام کاربری دستگاه: <b>{escape(context["username"])}</b></p>
-            <p>برنامه/بازی: <b>{escape(context["service_display"])}</b></p>
-            <p>سرور (کشور): <b>{escape(context["country_display"])}</b></p>
-            <p>مدت اعتبار: <b>{escape(context["duration_text"])}</b></p>
-            <p>تاریخ انقضا: <b>{escape(context["expire_str"])}</b></p>
-            <p>DNS اختصاصی شما:</p>
+            <h1>Γ£à ┘╛╪▒╪»╪º╪«╪¬ ╪┤┘à╪º ╪¿╪º ┘à┘ê┘ü┘é█î╪¬ ╪º┘å╪¼╪º┘à ╪┤╪»!</h1>
+            <p>┌⌐╪» ╪▒┘ç┌»█î╪▒█î ╪│┘ü╪º╪▒╪┤: <b>{escape(order.tracking_code)}</b></p>
+            <p>┌⌐╪» ┘╛█î┌»█î╪▒█î ╪¬╪▒╪º┌⌐┘å╪┤: <b>{escape(payment.ref_id or "-")}</b></p>
+            <p>┘å╪º┘à ┌⌐╪º╪▒╪¿╪▒█î ╪»╪│╪¬┌»╪º┘ç: <b>{escape(context["username"])}</b></p>
+            <p>╪¿╪▒┘å╪º┘à┘ç/╪¿╪º╪▓█î: <b>{escape(context["service_display"])}</b></p>
+            <p>╪│╪▒┘ê╪▒ (┌⌐╪┤┘ê╪▒): <b>{escape(context["country_display"])}</b></p>
+            <p>┘à╪»╪¬ ╪º╪╣╪¬╪¿╪º╪▒: <b>{escape(context["duration_text"])}</b></p>
+            <p>╪¬╪º╪▒█î╪« ╪º┘å┘é╪╢╪º: <b>{escape(context["expire_str"])}</b></p>
+            <p>DNS ╪º╪«╪¬╪╡╪º╪╡█î ╪┤┘à╪º:</p>
             <p>Primary: <code>{escape(context["ipv4_primary"])}</code></p>
             <p>Secondary: <code>{escape(context["ipv4_secondary"])}</code></p>
-            <p>جزئیات اتصال به تلگرام شما ارسال شد.</p>
+            <p>╪¼╪▓╪ª█î╪º╪¬ ╪º╪¬╪╡╪º┘ä ╪¿┘ç ╪¬┘ä┌»╪▒╪º┘à ╪┤┘à╪º ╪º╪▒╪│╪º┘ä ╪┤╪».</p>
         </div>
     </body>
     </html>
@@ -245,11 +245,11 @@ async def _send_paystar_success_message(order: Order, payment: Payment, context:
             chat_id=order.user.telegram_id,
             session=session,
             service=vpn_service,
-            title_prefix="✅ <b>پرداخت آنلاین تایید و اشتراک فعال شد!</b>",
+            title_prefix="Γ£à <b>┘╛╪▒╪»╪º╪«╪¬ ╪ó┘å┘ä╪º█î┘å ╪¬╪º█î█î╪» ┘ê ╪º╪┤╪¬╪▒╪º┌⌐ ┘ü╪╣╪º┘ä ╪┤╪»!</b>",
             ipv4_primary=context.get("ipv4_primary", "76.76.2.162"),
             ipv4_secondary=context.get("ipv4_secondary", "76.76.10.162"),
-            service_display=context.get("service_display", "کل ترافیک اینترنت (Default)"),
-            country_display=context.get("country_display", "پیش‌فرض"),
+            service_display=context.get("service_display", "┌⌐┘ä ╪¬╪▒╪º┘ü█î┌⌐ ╪º█î┘å╪¬╪▒┘å╪¬ (Default)"),
+            country_display=context.get("country_display", "┘╛█î╪┤ΓÇî┘ü╪▒╪╢"),
             delay_seconds=7200,
         )
 # ============================================================================
@@ -281,7 +281,7 @@ def _render_capture_ip_html(
 ) -> HTMLResponse:
     """Renders a responsive dark-themed Persian template utilizing Bootstrap 5 [cite: 1]."""
     icon_class = "success-icon" if is_success else "error-icon"
-    icon = "✅" if is_success else "❌"
+    icon = "Γ£à" if is_success else "Γ¥î"
     
     ip_box = ""
     if client_ip:
@@ -371,7 +371,7 @@ def _render_capture_ip_html(
             <h1 class="h4 mb-3 fw-bold">{escape(heading)}</h1>
             <p class="mb-4 text-secondary" style="font-size: 15px; line-height: 1.8;">{escape(message)}</p>
             {ip_box}
-            <a href="https://t.me/{escape(bot_username)}" class="btn btn-home py-2 px-4 rounded-3 text-decoration-none d-inline-block">بازگشت به ربات تلگرام</a>
+            <a href="https://t.me/{escape(bot_username)}" class="btn btn-home py-2 px-4 rounded-3 text-decoration-none d-inline-block">╪¿╪º╪▓┌»╪┤╪¬ ╪¿┘ç ╪▒╪¿╪º╪¬ ╪¬┘ä┌»╪▒╪º┘à</a>
         </div>
     </body>
     </html>
@@ -386,13 +386,13 @@ def _render_vpn_detected_html(
     bot_username: str = "bot"
 ) -> HTMLResponse:
     """Renders the warning modal when a foreign IP or VPN is detected."""
-    custom_msg = error_message or "آی‌پی شناسایی‌شده شما متعلق به سرور خارجی یا فیلترشکن است."
+    custom_msg = error_message or "╪ó█îΓÇî┘╛█î ╪┤┘å╪º╪│╪º█î█îΓÇî╪┤╪»┘ç ╪┤┘à╪º ┘à╪¬╪╣┘ä┘é ╪¿┘ç ╪│╪▒┘ê╪▒ ╪«╪º╪▒╪¼█î █î╪º ┘ü█î┘ä╪¬╪▒╪┤┌⌐┘å ╪º╪│╪¬."
     html_content = f"""<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>فیلترشکن شما روشن است</title>
+    <title>┘ü█î┘ä╪¬╪▒╪┤┌⌐┘å ╪┤┘à╪º ╪▒┘ê╪┤┘å ╪º╪│╪¬</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
@@ -406,16 +406,16 @@ def _render_vpn_detected_html(
 </head>
 <body>
     <div class="card-box">
-        <div class="icon-box">⚠️</div>
-        <h1 class="h4 mb-3 fw-bold text-warning">فیلترشکن شما روشن است!</h1>
-        <p class="text-light mb-3" style="font-size: 15px; line-height: 1.8;">{escape(custom_msg)}<br>برای فعال‌سازی DNS، ثبت آی‌پی <b>فقط با اینترنت مستقیم ایران</b> امکان‌پذیر است.</p>
+        <div class="icon-box">ΓÜá∩╕Å</div>
+        <h1 class="h4 mb-3 fw-bold text-warning">┘ü█î┘ä╪¬╪▒╪┤┌⌐┘å ╪┤┘à╪º ╪▒┘ê╪┤┘å ╪º╪│╪¬!</h1>
+        <p class="text-light mb-3" style="font-size: 15px; line-height: 1.8;">{escape(custom_msg)}<br>╪¿╪▒╪º█î ┘ü╪╣╪º┘äΓÇî╪│╪º╪▓█î DNS╪î ╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î <b>┘ü┘é╪╖ ╪¿╪º ╪º█î┘å╪¬╪▒┘å╪¬ ┘à╪│╪¬┘é█î┘à ╪º█î╪▒╪º┘å</b> ╪º┘à┌⌐╪º┘åΓÇî┘╛╪░█î╪▒ ╪º╪│╪¬.</p>
         <div class="alert alert-dark text-start small mb-4 py-2 border-secondary" style="font-size: 13px;">
-            1️⃣ فیلترشکن و پروکسی تلگرام خود را کاملاً خاموش کنید.<br>
-            2️⃣ مطمئن شوید به اینترنت اصلی/وای‌فای خود متصل هستید.<br>
-            3️⃣ دکمه زیر را لمس کنید:
+            1∩╕ÅΓâú ┘ü█î┘ä╪¬╪▒╪┤┌⌐┘å ┘ê ┘╛╪▒┘ê┌⌐╪│█î ╪¬┘ä┌»╪▒╪º┘à ╪«┘ê╪» ╪▒╪º ┌⌐╪º┘à┘ä╪º┘ï ╪«╪º┘à┘ê╪┤ ┌⌐┘å█î╪».<br>
+            2∩╕ÅΓâú ┘à╪╖┘à╪ª┘å ╪┤┘ê█î╪» ╪¿┘ç ╪º█î┘å╪¬╪▒┘å╪¬ ╪º╪╡┘ä█î/┘ê╪º█îΓÇî┘ü╪º█î ╪«┘ê╪» ┘à╪¬╪╡┘ä ┘ç╪│╪¬█î╪».<br>
+            3∩╕ÅΓâú ╪»┌⌐┘à┘ç ╪▓█î╪▒ ╪▒╪º ┘ä┘à╪│ ┌⌐┘å█î╪»:
         </div>
-        <button onclick="location.reload()" class="btn btn-reload py-2 px-4 rounded-3 w-100 mb-2">🔄 فیلترشکن را خاموش کردم، بررسی مجدد</button>
-        <a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">بازگشت به ربات تلگرام</a>
+        <button onclick="location.reload()" class="btn btn-reload py-2 px-4 rounded-3 w-100 mb-2">≡ƒöä ┘ü█î┘ä╪¬╪▒╪┤┌⌐┘å ╪▒╪º ╪«╪º┘à┘ê╪┤ ┌⌐╪▒╪»┘à╪î ╪¿╪▒╪▒╪│█î ┘à╪¼╪»╪»</button>
+        <a href="https://t.me/{escape(bot_username)}" class="btn btn-outline-secondary py-2 px-4 rounded-3 w-100 text-decoration-none">╪¿╪º╪▓┌»╪┤╪¬ ╪¿┘ç ╪▒╪¿╪º╪¬ ╪¬┘ä┌»╪▒╪º┘à</a>
     </div>
 </body>
 </html>"""
@@ -427,11 +427,11 @@ async def capture_ip(request: Request, token: str):
     bot_user = await get_bot_username()
     token = token.strip()
     if not re.match(r"^[a-fA-F0-9-]{32,36}$", token):
-        return _render_capture_ip_html("خطا در ثبت آی‌پی", "لینک نامعتبر است", "ساختار توکن امنیتی نامعتبر است.", False, bot_username=bot_user)
+        return _render_capture_ip_html("╪«╪╖╪º ╪»╪▒ ╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î", "┘ä█î┘å┌⌐ ┘å╪º┘à╪╣╪¬╪¿╪▒ ╪º╪│╪¬", "╪│╪º╪«╪¬╪º╪▒ ╪¬┘ê┌⌐┘å ╪º┘à┘å█î╪¬█î ┘å╪º┘à╪╣╪¬╪¿╪▒ ╪º╪│╪¬.", False, bot_username=bot_user)
 
     client_ip, cdn_country = get_client_real_ip(request)
 
-    # 🛡️ ANTI-VPN CHECK
+    # ≡ƒ¢í∩╕Å ANTI-VPN CHECK
     ip_check = await verify_user_ip(client_ip)
     if not ip_check.is_iran:
         return _render_vpn_detected_html(
@@ -448,23 +448,23 @@ async def capture_ip(request: Request, token: str):
         token_record = res.scalars().first()
 
         if not token_record:
-            return _render_capture_ip_html("خطا در ثبت آی‌پی", "لینک نامعتبر", "این لینک وجود ندارد.", False, bot_username=bot_user)
+            return _render_capture_ip_html("╪«╪╖╪º ╪»╪▒ ╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î", "┘ä█î┘å┌⌐ ┘å╪º┘à╪╣╪¬╪¿╪▒", "╪º█î┘å ┘ä█î┘å┌⌐ ┘ê╪¼┘ê╪» ┘å╪»╪º╪▒╪».", False, bot_username=bot_user)
 
         now = datetime.now(timezone.utc)
         expires_at = token_record.expires_at.replace(tzinfo=timezone.utc) if token_record.expires_at.tzinfo is None else token_record.expires_at
         if now > expires_at:
-            return _render_capture_ip_html("خطا در ثبت آی‌پی", "انقضای لینک", "مهلت استفاده از این لینک گذشته است. لطفاً از ربات لینک جدید دریافت کنید.", False, bot_username=bot_user)
+            return _render_capture_ip_html("╪«╪╖╪º ╪»╪▒ ╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î", "╪º┘å┘é╪╢╪º█î ┘ä█î┘å┌⌐", "┘à┘ç┘ä╪¬ ╪º╪│╪¬┘ü╪º╪»┘ç ╪º╪▓ ╪º█î┘å ┘ä█î┘å┌⌐ ┌»╪░╪┤╪¬┘ç ╪º╪│╪¬. ┘ä╪╖┘ü╪º┘ï ╪º╪▓ ╪▒╪¿╪º╪¬ ┘ä█î┘å┌⌐ ╪¼╪»█î╪» ╪»╪▒█î╪º┘ü╪¬ ┌⌐┘å█î╪».", False, bot_username=bot_user)
 
         service = token_record.service
         if not service:
-            return _render_capture_ip_html("خطا در ثبت آی‌پی", "سرویس یافت نشد", "سرویس مورد نظر یافت نشد.", False, bot_username=bot_user)
+            return _render_capture_ip_html("╪«╪╖╪º ╪»╪▒ ╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î", "╪│╪▒┘ê█î╪│ █î╪º┘ü╪¬ ┘å╪┤╪»", "╪│╪▒┘ê█î╪│ ┘à┘ê╪▒╪» ┘å╪╕╪▒ █î╪º┘ü╪¬ ┘å╪┤╪».", False, bot_username=bot_user)
 
-        # ✨ FIX: If the IP is already registered, return success immediately!
+        # Γ£¿ FIX: If the IP is already registered, return success immediately!
         if service.authorized_ip == client_ip:
             return _render_capture_ip_html(
-                title="ثبت آی‌پی موفقیت‌آمیز", 
-                heading="✅ آی‌پی شما فعال است!", 
-                message=f"آی‌پی فعلی شما ({client_ip}) از قبل روی این اشتراک ثبت و فعال می‌باشد.", 
+                title="╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î ┘à┘ê┘ü┘é█î╪¬ΓÇî╪ó┘à█î╪▓", 
+                heading="Γ£à ╪ó█îΓÇî┘╛█î ╪┤┘à╪º ┘ü╪╣╪º┘ä ╪º╪│╪¬!", 
+                message=f"╪ó█îΓÇî┘╛█î ┘ü╪╣┘ä█î ╪┤┘à╪º ({client_ip}) ╪º╪▓ ┘é╪¿┘ä ╪▒┘ê█î ╪º█î┘å ╪º╪┤╪¬╪▒╪º┌⌐ ╪½╪¿╪¬ ┘ê ┘ü╪╣╪º┘ä ┘à█îΓÇî╪¿╪º╪┤╪».", 
                 is_success=True, 
                 client_ip=client_ip, 
                 bot_username=bot_user
@@ -473,9 +473,9 @@ async def capture_ip(request: Request, token: str):
         # Run the update safely for a NEW IP.
         success = await update_device_ip_safe(session, service, client_ip)
         if success:
-            return _render_capture_ip_html("ثبت آی‌پی موفقیت‌آمیز", "✅ ثبت آی‌پی با موفقیت انجام شد!", f"آی‌پی ایران ({client_ip}) با موفقیت ثبت شد.", True, client_ip, bot_user)
+            return _render_capture_ip_html("╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î ┘à┘ê┘ü┘é█î╪¬ΓÇî╪ó┘à█î╪▓", "Γ£à ╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î ╪¿╪º ┘à┘ê┘ü┘é█î╪¬ ╪º┘å╪¼╪º┘à ╪┤╪»!", f"╪ó█îΓÇî┘╛█î ╪º█î╪▒╪º┘å ({client_ip}) ╪¿╪º ┘à┘ê┘ü┘é█î╪¬ ╪½╪¿╪¬ ╪┤╪».", True, client_ip, bot_user)
         
-        return _render_capture_ip_html("خطا در ثبت آی‌پی", "خطای سرور", "خطا در ثبت در سرور دی‌ان‌اس. لطفاً دوباره تلاش کنید.", False, bot_username=bot_user)
+        return _render_capture_ip_html("╪«╪╖╪º ╪»╪▒ ╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î", "╪«╪╖╪º█î ╪│╪▒┘ê╪▒", "╪«╪╖╪º ╪»╪▒ ╪½╪¿╪¬ ╪»╪▒ ╪│╪▒┘ê╪▒ ╪»█îΓÇî╪º┘åΓÇî╪º╪│. ┘ä╪╖┘ü╪º┘ï ╪»┘ê╪¿╪º╪▒┘ç ╪¬┘ä╪º╪┤ ┌⌐┘å█î╪».", False, bot_username=bot_user)
     
     
 @app.get("/update-ip/{device_id}", response_class=HTMLResponse, status_code=status.HTTP_410_GONE)
@@ -483,9 +483,9 @@ async def retired_update_device_ip(device_id: str):
     """Reject unsafe pre-token links; never select a service by shared slot."""
     bot_user = await get_bot_username()
     return _render_capture_ip_html(
-        "این لینک منقضی شده است",
-        "⚠️ لینک قدیمی است",
-        "لطفاً به ربات بازگردید و از لینک امن ثبت IP استفاده کنید.",
+        "╪º█î┘å ┘ä█î┘å┌⌐ ┘à┘å┘é╪╢█î ╪┤╪»┘ç ╪º╪│╪¬",
+        "ΓÜá∩╕Å ┘ä█î┘å┌⌐ ┘é╪»█î┘à█î ╪º╪│╪¬",
+        "┘ä╪╖┘ü╪º┘ï ╪¿┘ç ╪▒╪¿╪º╪¬ ╪¿╪º╪▓┌»╪▒╪»█î╪» ┘ê ╪º╪▓ ┘ä█î┘å┌⌐ ╪º┘à┘å ╪½╪¿╪¬ IP ╪º╪│╪¬┘ü╪º╪»┘ç ┌⌐┘å█î╪».",
         False,
         bot_username=bot_user,
     )
@@ -499,7 +499,7 @@ async def admin_dashboard(request: Request, uid: int = Query(...), token: str = 
     if not verify_admin_web_token(uid, token):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
-            detail="دسترسی غیرمجاز است. لطفا از طریق دکمه مدیریت ربات تلگرام وارد شوید."
+            detail="╪»╪│╪¬╪▒╪│█î ╪║█î╪▒┘à╪¼╪º╪▓ ╪º╪│╪¬. ┘ä╪╖┘ü╪º ╪º╪▓ ╪╖╪▒█î┘é ╪»┌⌐┘à┘ç ┘à╪»█î╪▒█î╪¬ ╪▒╪¿╪º╪¬ ╪¬┘ä┌»╪▒╪º┘à ┘ê╪º╪▒╪» ╪┤┘ê█î╪»."
         )
 
     async with async_session_maker() as session:
@@ -521,7 +521,7 @@ async def admin_dashboard(request: Request, uid: int = Query(...), token: str = 
                 except Exception:
                     shamsi_expire = tehran_expire.strftime("%Y-%m-%d %H:%M")
 
-            slot_name = "ثبت نشده / Unmapped"
+            slot_name = "╪½╪¿╪¬ ┘å╪┤╪»┘ç / Unmapped"
             for _num, config in SLOT_CONFIGS.items():
                 if config["device_id"] == row.controld_device_id:
                     slot_name = config["name"]
@@ -533,9 +533,9 @@ async def admin_dashboard(request: Request, uid: int = Query(...), token: str = 
                 "first_name": row.first_name or "-",
                 "service_id": row.service_id,
                 "controld_device_id": row.controld_device_id,
-                "authorized_ip": row.authorized_ip or "ثبت نشده (No IP)",
+                "authorized_ip": row.authorized_ip or "╪½╪¿╪¬ ┘å╪┤╪»┘ç (No IP)",
                 "expire_at_shamsi": shamsi_expire,
-                "status": "فعال" if row.status == "active" else "منقضی شده",
+                "status": "┘ü╪╣╪º┘ä" if row.status == "active" else "┘à┘å┘é╪╢█î ╪┤╪»┘ç",
                 "slot_name": slot_name
             })
 
@@ -559,9 +559,9 @@ async def admin_delete_ip(
     ip: str = Form(...),
 ):
     if not verify_admin_web_token(uid, token):
-         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="دسترسی غیرمجاز.")
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="╪»╪│╪¬╪▒╪│█î ╪║█î╪▒┘à╪¼╪º╪▓.")
 
-    if not ip or ip == "ثبت نشده (No IP)":
+    if not ip or ip == "╪½╪¿╪¬ ┘å╪┤╪»┘ç (No IP)":
         return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=status.HTTP_303_SEE_OTHER)
 
     # 1. Remove from Control D
@@ -595,11 +595,11 @@ async def admin_add_ip(
     new_ip: str = Form(...),
 ):
     if not verify_admin_web_token(uid, token):
-         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="دسترسی غیرمجاز.")
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="╪»╪│╪¬╪▒╪│█î ╪║█î╪▒┘à╪¼╪º╪▓.")
 
     new_ip = new_ip.strip()
     if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", new_ip):
-        raise HTTPException(status_code=400, detail="فرمت آی‌پی عددی وارد شده معتبر نیست.")
+        raise HTTPException(status_code=400, detail="┘ü╪▒┘à╪¬ ╪ó█îΓÇî┘╛█î ╪╣╪»╪»█î ┘ê╪º╪▒╪» ╪┤╪»┘ç ┘à╪╣╪¬╪¿╪▒ ┘å█î╪│╪¬.")
 
     async with async_session_maker() as session:
         stmt = select(VPNService).where(VPNService.id == service_id).limit(1)
@@ -607,11 +607,11 @@ async def admin_add_ip(
         service = res.scalars().first()
         
         if not service:
-            raise HTTPException(status_code=404, detail="سرویس مورد نظر یافت نشد.")
+            raise HTTPException(status_code=404, detail="╪│╪▒┘ê█î╪│ ┘à┘ê╪▒╪» ┘å╪╕╪▒ █î╪º┘ü╪¬ ┘å╪┤╪».")
 
         success = await update_device_ip_safe(session, service, new_ip)
         if not success:
-            raise HTTPException(status_code=500, detail="خطا در ثبت آی‌پی در پنل")
+            raise HTTPException(status_code=500, detail="╪«╪╖╪º ╪»╪▒ ╪½╪¿╪¬ ╪ó█îΓÇî┘╛█î ╪»╪▒ ┘╛┘å┘ä")
 
     logger.info("admin_manually_overrode_user_ip", service_id=service_id, new_ip=new_ip)
     return RedirectResponse(url=f"/admin?uid={uid}&token={token}", status_code=status.HTTP_303_SEE_OTHER)
@@ -628,11 +628,11 @@ async def paystar_redirect(token: str):
         async with async_session_maker() as session:
             payment = await PaymentsRepository(session).get_by_token_with_details(clean_token)
             if payment is None or payment.order is None or payment.user is None:
-                return _failed_html("توکن پرداخت معتبر نیست یا منقضی شده است.", bot_username=bot_user)
+                return _failed_html("╪¬┘ê┌⌐┘å ┘╛╪▒╪»╪º╪«╪¬ ┘à╪╣╪¬╪¿╪▒ ┘å█î╪│╪¬ █î╪º ┘à┘å┘é╪╢█î ╪┤╪»┘ç ╪º╪│╪¬.", bot_username=bot_user)
             if payment.method != "paystar":
-                return _failed_html("این لینک برای پرداخت آنلاین پی‌استار ثبت نشده است.", bot_username=bot_user)
+                return _failed_html("╪º█î┘å ┘ä█î┘å┌⌐ ╪¿╪▒╪º█î ┘╛╪▒╪»╪º╪«╪¬ ╪ó┘å┘ä╪º█î┘å ┘╛█îΓÇî╪º╪│╪¬╪º╪▒ ╪½╪¿╪¬ ┘å╪┤╪»┘ç ╪º╪│╪¬.", bot_username=bot_user)
             if payment.status == PaymentStatus.APPROVED.value or payment.order.status == OrderStatus.COMPLETED.value:
-                return _success_html("این سفارش قبلاً با موفقیت پرداخت و نهایی شده است.", bot_username=bot_user)
+                return _success_html("╪º█î┘å ╪│┘ü╪º╪▒╪┤ ┘é╪¿┘ä╪º┘ï ╪¿╪º ┘à┘ê┘ü┘é█î╪¬ ┘╛╪▒╪»╪º╪«╪¬ ┘ê ┘å┘ç╪º█î█î ╪┤╪»┘ç ╪º╪│╪¬.", bot_username=bot_user)
 
         # Build the HTML form to auto-submit a POST request to Paystar
         html_content = f"""
@@ -643,7 +643,7 @@ async def paystar_redirect(token: str):
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <!-- Forces the browser to send your exact domain to Paystar's security check -->
             <meta name="referrer" content="origin" />
-            <title>در حال انتقال...</title>
+            <title>╪»╪▒ ╪¡╪º┘ä ╪º┘å╪¬┘é╪º┘ä...</title>
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
                 body {{
@@ -672,17 +672,17 @@ async def paystar_redirect(token: str):
         </head>
         <body>
             <div style="text-align: center;">
-                <h3 style="margin-bottom: 10px;">در حال انتقال به درگاه بانکی...</h3>
-                <p style="color: #94a3b8; font-size: 14px;">لطفاً چند لحظه صبر کنید.</p>
+                <h3 style="margin-bottom: 10px;">╪»╪▒ ╪¡╪º┘ä ╪º┘å╪¬┘é╪º┘ä ╪¿┘ç ╪»╪▒┌»╪º┘ç ╪¿╪º┘å┌⌐█î...</h3>
+                <p style="color: #94a3b8; font-size: 14px;">┘ä╪╖┘ü╪º┘ï ┌å┘å╪» ┘ä╪¡╪╕┘ç ╪╡╪¿╪▒ ┌⌐┘å█î╪».</p>
                 
                 <!-- REVERTED TO OFFICIAL .ir DOMAIN -->
                 <form id="paymentForm" action="https://core.paystar.ir/api/pardakht/payment" method="POST">
                     <input type="hidden" name="token" value="{clean_token}">
                     <noscript>
-                        <p style="color: #ef4444; margin-top: 20px;">جاوااسکریپت در مرورگر شما غیرفعال است.</p>
+                        <p style="color: #ef4444; margin-top: 20px;">╪¼╪º┘ê╪º╪º╪│┌⌐╪▒█î┘╛╪¬ ╪»╪▒ ┘à╪▒┘ê╪▒┌»╪▒ ╪┤┘à╪º ╪║█î╪▒┘ü╪╣╪º┘ä ╪º╪│╪¬.</p>
                     </noscript>
                     <button type="submit" id="fallbackBtn" class="btn-fallback" style="display: none;">
-                        انتقال دستی به درگاه پرداخت
+                        ╪º┘å╪¬┘é╪º┘ä ╪»╪│╪¬█î ╪¿┘ç ╪»╪▒┌»╪º┘ç ┘╛╪▒╪»╪º╪«╪¬
                     </button>
                 </form>
             </div>
@@ -706,23 +706,23 @@ async def paystar_redirect(token: str):
 
     except Exception as exc:
         logger.exception("failed_to_process_paystar_redirect_route", token=token)
-        return _failed_html(f"خطای داخلی در اتصال به درگاه بانکی: {str(exc)}", bot_username=bot_user)
+        return _failed_html(f"╪«╪╖╪º█î ╪»╪º╪«┘ä█î ╪»╪▒ ╪º╪¬╪╡╪º┘ä ╪¿┘ç ╪»╪▒┌»╪º┘ç ╪¿╪º┘å┌⌐█î: {str(exc)}", bot_username=bot_user)
     
 # ============================================================================
 # PAYSTAR GATEWAY CALLBACK & RESULT PAGES
 # ============================================================================
 
 PAYSTAR_STATUS_MESSAGES = {
-    -1: "درخواست نامعتبر است (خطای داخلی یا ساختار ناقص داده‌ها).",
-    -2: "درگاه پرداخت فعال نیست یا اطلاعات احراز هویت (Gateway ID / Sign Key) نامعتبر است.",
-    -3: "آدرس آی‌پی سرور برای این درگاه پرداخت در پنل پی‌استار تعریف/مجاز نشده است.",
-    -4: "مبلغ ارسالی به درگاه نامعتبر است.",
-    -5: "تراکنش تکراری است یا قبلاً پردازش شده است.",
-    -6: "تراکنش در سیستم پی‌استار پیدا نشد.",
-    -7: "مهلت پرداخت به پایان رسیده و فاکتور منقضی شده است.",
-    -8: "شماره کارت واریزکننده مجاز نیست.",
-    -9: "مبلغ واریز شده با فاکتور سفارش مطابقت ندارد.",
-    -98: "پرداخت توسط کاربر لغو شد (انصراف در درگاه بانکی).",
+    -1: "╪»╪▒╪«┘ê╪º╪│╪¬ ┘å╪º┘à╪╣╪¬╪¿╪▒ ╪º╪│╪¬ (╪«╪╖╪º█î ╪»╪º╪«┘ä█î █î╪º ╪│╪º╪«╪¬╪º╪▒ ┘å╪º┘é╪╡ ╪»╪º╪»┘çΓÇî┘ç╪º).",
+    -2: "╪»╪▒┌»╪º┘ç ┘╛╪▒╪»╪º╪«╪¬ ┘ü╪╣╪º┘ä ┘å█î╪│╪¬ █î╪º ╪º╪╖┘ä╪º╪╣╪º╪¬ ╪º╪¡╪▒╪º╪▓ ┘ç┘ê█î╪¬ (Gateway ID / Sign Key) ┘å╪º┘à╪╣╪¬╪¿╪▒ ╪º╪│╪¬.",
+    -3: "╪ó╪»╪▒╪│ ╪ó█îΓÇî┘╛█î ╪│╪▒┘ê╪▒ ╪¿╪▒╪º█î ╪º█î┘å ╪»╪▒┌»╪º┘ç ┘╛╪▒╪»╪º╪«╪¬ ╪»╪▒ ┘╛┘å┘ä ┘╛█îΓÇî╪º╪│╪¬╪º╪▒ ╪¬╪╣╪▒█î┘ü/┘à╪¼╪º╪▓ ┘å╪┤╪»┘ç ╪º╪│╪¬.",
+    -4: "┘à╪¿┘ä╪║ ╪º╪▒╪│╪º┘ä█î ╪¿┘ç ╪»╪▒┌»╪º┘ç ┘å╪º┘à╪╣╪¬╪¿╪▒ ╪º╪│╪¬.",
+    -5: "╪¬╪▒╪º┌⌐┘å╪┤ ╪¬┌⌐╪▒╪º╪▒█î ╪º╪│╪¬ █î╪º ┘é╪¿┘ä╪º┘ï ┘╛╪▒╪»╪º╪▓╪┤ ╪┤╪»┘ç ╪º╪│╪¬.",
+    -6: "╪¬╪▒╪º┌⌐┘å╪┤ ╪»╪▒ ╪│█î╪│╪¬┘à ┘╛█îΓÇî╪º╪│╪¬╪º╪▒ ┘╛█î╪»╪º ┘å╪┤╪».",
+    -7: "┘à┘ç┘ä╪¬ ┘╛╪▒╪»╪º╪«╪¬ ╪¿┘ç ┘╛╪º█î╪º┘å ╪▒╪│█î╪»┘ç ┘ê ┘ü╪º┌⌐╪¬┘ê╪▒ ┘à┘å┘é╪╢█î ╪┤╪»┘ç ╪º╪│╪¬.",
+    -8: "╪┤┘à╪º╪▒┘ç ┌⌐╪º╪▒╪¬ ┘ê╪º╪▒█î╪▓┌⌐┘å┘å╪»┘ç ┘à╪¼╪º╪▓ ┘å█î╪│╪¬.",
+    -9: "┘à╪¿┘ä╪║ ┘ê╪º╪▒█î╪▓ ╪┤╪»┘ç ╪¿╪º ┘ü╪º┌⌐╪¬┘ê╪▒ ╪│┘ü╪º╪▒╪┤ ┘à╪╖╪º╪¿┘é╪¬ ┘å╪»╪º╪▒╪».",
+    -98: "┘╛╪▒╪»╪º╪«╪¬ ╪¬┘ê╪│╪╖ ┌⌐╪º╪▒╪¿╪▒ ┘ä╪║┘ê ╪┤╪» (╪º┘å╪╡╪▒╪º┘ü ╪»╪▒ ╪»╪▒┌»╪º┘ç ╪¿╪º┘å┌⌐█î).",
 }
 
 
@@ -736,9 +736,9 @@ async def paystar_callback(request: Request):
         else:
             payload = request.query_params
 
-        # 🔍 Terminal Debug Log: inspect the exact response from Paystar
+        # ≡ƒöì Terminal Debug Log: inspect the exact response from Paystar
         print("\n" + "=" * 50)
-        print(f"📥 PAYSTAR CALLBACK RECEIVED [{request.method}]")
+        print(f"≡ƒôÑ PAYSTAR CALLBACK RECEIVED [{request.method}]")
         for key, value in payload.items():
             print(f"  {key}: {value}")
         print("=" * 50 + "\n")
@@ -754,14 +754,14 @@ async def paystar_callback(request: Request):
         tracking_code = str(payload.get("tracking_code", "")).strip()
 
         if not order_id or not ref_num:
-            return _failed_html("اطلاعات برگشتی درگاه ناقص است (کد رهگیری یا شماره مرجع دریافت نشد).", bot_username=bot_user)
+            return _failed_html("╪º╪╖┘ä╪º╪╣╪º╪¬ ╪¿╪▒┌»╪┤╪¬█î ╪»╪▒┌»╪º┘ç ┘å╪º┘é╪╡ ╪º╪│╪¬ (┌⌐╪» ╪▒┘ç┌»█î╪▒█î █î╪º ╪┤┘à╪º╪▒┘ç ┘à╪▒╪¼╪╣ ╪»╪▒█î╪º┘ü╪¬ ┘å╪┤╪»).", bot_username=bot_user)
 
         async with async_session_maker() as session:
             order = await OrdersRepository(session).get_by_tracking_code_with_details(order_id)
             payment = order.payment if order else None
 
             if order is None or payment is None or order.user is None or order.plan is None:
-                return _failed_html(f"سفارش با کد پیگیری {order_id} در سیستم یافت نشد.", bot_username=bot_user)
+                return _failed_html(f"╪│┘ü╪º╪▒╪┤ ╪¿╪º ┌⌐╪» ┘╛█î┌»█î╪▒█î {order_id} ╪»╪▒ ╪│█î╪│╪¬┘à █î╪º┘ü╪¬ ┘å╪┤╪».", bot_username=bot_user)
 
             # Idempotency check: if order was already marked completed
             if payment.status == PaymentStatus.APPROVED.value and order.status == OrderStatus.COMPLETED.value:
@@ -774,13 +774,13 @@ async def paystar_callback(request: Request):
                 service_res = await session.execute(service_stmt)
                 service = service_res.scalars().first()
                 if service is None:
-                    return _success_html("پرداخت این سفارش قبلاً با موفقیت تایید و ثبت شده است.", bot_username=bot_user)
+                    return _success_html("┘╛╪▒╪»╪º╪«╪¬ ╪º█î┘å ╪│┘ü╪º╪▒╪┤ ┘é╪¿┘ä╪º┘ï ╪¿╪º ┘à┘ê┘ü┘é█î╪¬ ╪¬╪º█î█î╪» ┘ê ╪½╪¿╪¬ ╪┤╪»┘ç ╪º╪│╪¬.", bot_username=bot_user)
                 context = await _build_paystar_context(order, service, settings)
                 return _render_paystar_success_html(order, payment, context)
 
             # Check if gateway returned a failure code
             if status_code != 1:
-                reason = PAYSTAR_STATUS_MESSAGES.get(status_code, f"تراکنش ناموفق بود (کد وضعیت پی‌استار: {status_code}).")
+                reason = PAYSTAR_STATUS_MESSAGES.get(status_code, f"╪¬╪▒╪º┌⌐┘å╪┤ ┘å╪º┘à┘ê┘ü┘é ╪¿┘ê╪» (┌⌐╪» ┘ê╪╢╪╣█î╪¬ ┘╛█îΓÇî╪º╪│╪¬╪º╪▒: {status_code}).")
                 logger.warning("paystar_gateway_failed", status=status_code, order_id=order_id, reason=reason)
                 return _failed_html(reason, bot_username=bot_user)
 
@@ -795,10 +795,10 @@ async def paystar_callback(request: Request):
                 )
             except Exception as exc:
                 logger.exception("paystar_verify_failed", order_id=order_id, error=str(exc))
-                return _failed_html("خطا در برقراری ارتباط با سرور شاپرک/پی‌استار جهت تایید نهایی.", bot_username=bot_user)
+                return _failed_html("╪«╪╖╪º ╪»╪▒ ╪¿╪▒┘é╪▒╪º╪▒█î ╪º╪▒╪¬╪¿╪º╪╖ ╪¿╪º ╪│╪▒┘ê╪▒ ╪┤╪º┘╛╪▒┌⌐/┘╛█îΓÇî╪º╪│╪¬╪º╪▒ ╪¼┘ç╪¬ ╪¬╪º█î█î╪» ┘å┘ç╪º█î█î.", bot_username=bot_user)
 
             if not is_verified:
-                return _failed_html("خطا در اعتبارسنجی تراکنش در شبکه بانکی (تراکنش تایید نشد).", bot_username=bot_user)
+                return _failed_html("╪«╪╖╪º ╪»╪▒ ╪º╪╣╪¬╪¿╪º╪▒╪│┘å╪¼█î ╪¬╪▒╪º┌⌐┘å╪┤ ╪»╪▒ ╪┤╪¿┌⌐┘ç ╪¿╪º┘å┌⌐█î (╪¬╪▒╪º┌⌐┘å╪┤ ╪¬╪º█î█î╪» ┘å╪┤╪»).", bot_username=bot_user)
 
             # Payment verified -> finalize order
             payment.method = "paystar"
@@ -818,14 +818,14 @@ async def paystar_callback(request: Request):
                 service_res = await session.execute(service_stmt)
                 service = service_res.scalars().first()
                 if service is None:
-                    return _success_html("پرداخت قبلاً تایید و ثبت شده است.", bot_username=bot_user)
+                    return _success_html("┘╛╪▒╪»╪º╪«╪¬ ┘é╪¿┘ä╪º┘ï ╪¬╪º█î█î╪» ┘ê ╪½╪¿╪¬ ╪┤╪»┘ç ╪º╪│╪¬.", bot_username=bot_user)
                 context = await _build_paystar_context(order, service, settings)
                 return _render_paystar_success_html(order, payment, context)
             except PaymentExpiredError:
-                return _failed_html("مهلت پرداخت این سفارش در ربات به پایان رسیده و منقضی شده است.", bot_username=bot_user)
+                return _failed_html("┘à┘ç┘ä╪¬ ┘╛╪▒╪»╪º╪«╪¬ ╪º█î┘å ╪│┘ü╪º╪▒╪┤ ╪»╪▒ ╪▒╪¿╪º╪¬ ╪¿┘ç ┘╛╪º█î╪º┘å ╪▒╪│█î╪»┘ç ┘ê ┘à┘å┘é╪╢█î ╪┤╪»┘ç ╪º╪│╪¬.", bot_username=bot_user)
             except PaymentApprovalError as exc:
                 logger.exception("paystar_approval_failed", order_id=order_id, error=str(exc))
-                return _failed_html("پرداخت بانکی تایید شد، اما در فعال‌سازی سرویس خطایی رخ داد.", bot_username=bot_user)
+                return _failed_html("┘╛╪▒╪»╪º╪«╪¬ ╪¿╪º┘å┌⌐█î ╪¬╪º█î█î╪» ╪┤╪»╪î ╪º┘à╪º ╪»╪▒ ┘ü╪╣╪º┘äΓÇî╪│╪º╪▓█î ╪│╪▒┘ê█î╪│ ╪«╪╖╪º█î█î ╪▒╪« ╪»╪º╪».", bot_username=bot_user)
 
             # Load activated service
             service_stmt = (
@@ -837,7 +837,7 @@ async def paystar_callback(request: Request):
             service_res = await session.execute(service_stmt)
             service = service_res.scalars().first()
             if service is None:
-                return _failed_html("سرویس دی‌ان‌اس پس از پرداخت در سیستم یافت نشد.", bot_username=bot_user)
+                return _failed_html("╪│╪▒┘ê█î╪│ ╪»█îΓÇî╪º┘åΓÇî╪º╪│ ┘╛╪│ ╪º╪▓ ┘╛╪▒╪»╪º╪«╪¬ ╪»╪▒ ╪│█î╪│╪¬┘à █î╪º┘ü╪¬ ┘å╪┤╪».", bot_username=bot_user)
 
             try:
                 await _apply_purchase_route(order, service, settings)
@@ -854,7 +854,7 @@ async def paystar_callback(request: Request):
 
     except Exception as global_exc:
         logger.exception("global_unhandled_callback_exception")
-        return _failed_html(f"خطای غیرمنتظره سرور در ثبت نتیجه پرداخت: {str(global_exc)}", bot_username=bot_user)
+        return _failed_html(f"╪«╪╖╪º█î ╪║█î╪▒┘à┘å╪¬╪╕╪▒┘ç ╪│╪▒┘ê╪▒ ╪»╪▒ ╪½╪¿╪¬ ┘å╪¬█î╪¼┘ç ┘╛╪▒╪»╪º╪«╪¬: {str(global_exc)}", bot_username=bot_user)
 
 
 def _failed_html(reason: str, bot_username: str = "bot") -> HTMLResponse:
@@ -864,7 +864,7 @@ def _failed_html(reason: str, bot_username: str = "bot") -> HTMLResponse:
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>تراکنش ناموفق</title>
+    <title>╪¬╪▒╪º┌⌐┘å╪┤ ┘å╪º┘à┘ê┘ü┘é</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
@@ -925,16 +925,16 @@ def _failed_html(reason: str, bot_username: str = "bot") -> HTMLResponse:
 </head>
 <body>
     <div class="card-box">
-        <div class="icon-box">❌</div>
-        <h1 class="h4 mb-3 fw-bold text-danger">تراکنش ناموفق بود</h1>
+        <div class="icon-box">Γ¥î</div>
+        <h1 class="h4 mb-3 fw-bold text-danger">╪¬╪▒╪º┌⌐┘å╪┤ ┘å╪º┘à┘ê┘ü┘é ╪¿┘ê╪»</h1>
         <div class="reason-box mb-4">
             {escape(reason)}
         </div>
         <p class="text-secondary small mb-4">
-            در صورتی که مبلغی از حساب شما کسر شده باشد، معمولاً ظرف مدت چند ساعت و نهایتاً ۷۲ ساعت از طرف بانک مبدا به حساب شما بازگردانده می‌شود.
+            ╪»╪▒ ╪╡┘ê╪▒╪¬█î ┌⌐┘ç ┘à╪¿┘ä╪║█î ╪º╪▓ ╪¡╪│╪º╪¿ ╪┤┘à╪º ┌⌐╪│╪▒ ╪┤╪»┘ç ╪¿╪º╪┤╪»╪î ┘à╪╣┘à┘ê┘ä╪º┘ï ╪╕╪▒┘ü ┘à╪»╪¬ ┌å┘å╪» ╪│╪º╪╣╪¬ ┘ê ┘å┘ç╪º█î╪¬╪º┘ï █╖█▓ ╪│╪º╪╣╪¬ ╪º╪▓ ╪╖╪▒┘ü ╪¿╪º┘å┌⌐ ┘à╪¿╪»╪º ╪¿┘ç ╪¡╪│╪º╪¿ ╪┤┘à╪º ╪¿╪º╪▓┌»╪▒╪»╪º┘å╪»┘ç ┘à█îΓÇî╪┤┘ê╪».
         </p>
         <a href="https://t.me/{escape(bot_username)}" class="btn btn-telegram py-2 px-4 rounded-3 text-decoration-none w-100">
-            بازگشت به ربات تلگرام
+            ╪¿╪º╪▓┌»╪┤╪¬ ╪¿┘ç ╪▒╪¿╪º╪¬ ╪¬┘ä┌»╪▒╪º┘à
         </a>
     </div>
 </body>
@@ -949,7 +949,7 @@ def _success_html(message: str, bot_username: str = "bot") -> HTMLResponse:
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>تراکنش موفق</title>
+    <title>╪¬╪▒╪º┌⌐┘å╪┤ ┘à┘ê┘ü┘é</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700&display=swap');
@@ -1001,11 +1001,11 @@ def _success_html(message: str, bot_username: str = "bot") -> HTMLResponse:
 </head>
 <body>
     <div class="card-box">
-        <div class="icon-box">✅</div>
-        <h1 class="h4 mb-3 fw-bold text-success">پرداخت با موفقیت انجام شد</h1>
+        <div class="icon-box">Γ£à</div>
+        <h1 class="h4 mb-3 fw-bold text-success">┘╛╪▒╪»╪º╪«╪¬ ╪¿╪º ┘à┘ê┘ü┘é█î╪¬ ╪º┘å╪¼╪º┘à ╪┤╪»</h1>
         <p class="text-light mb-4">{escape(message)}</p>
         <a href="https://t.me/{escape(bot_username)}" class="btn btn-telegram py-2 px-4 rounded-3 text-decoration-none w-100">
-            بازگشت به ربات تلگرام
+            ╪¿╪º╪▓┌»╪┤╪¬ ╪¿┘ç ╪▒╪¿╪º╪¬ ╪¬┘ä┌»╪▒╪º┘à
         </a>
     </div>
 </body>
@@ -1019,7 +1019,7 @@ def get_client_real_ip(request: Request) -> tuple[str, str | None]:
     """
     headers = request.headers
 
-    # 1. ArvanCloud (ابر آروان)
+    # 1. ArvanCloud (╪º╪¿╪▒ ╪ó╪▒┘ê╪º┘å)
     ar_ip = headers.get("ar-real-ip")
     ar_country = headers.get("ar-real-country") or headers.get("x-country-code")
     if ar_ip:
@@ -1053,7 +1053,7 @@ async def user_dashboard_view(request: Request, token: str):
     token = token.strip()
 
     if not re.match(r"^[a-fA-F0-9-]{32,36}$", token):
-        return _render_capture_ip_html("خطا", "لینک نامعتبر است", "ساختار توکن معتبر نیست.", False, bot_user)
+        return _render_capture_ip_html("╪«╪╖╪º", "┘ä█î┘å┌⌐ ┘å╪º┘à╪╣╪¬╪¿╪▒ ╪º╪│╪¬", "╪│╪º╪«╪¬╪º╪▒ ╪¬┘ê┌⌐┘å ┘à╪╣╪¬╪¿╪▒ ┘å█î╪│╪¬.", False, bot_user)
 
     client_ip, _ = get_client_real_ip(request)
 
@@ -1071,14 +1071,14 @@ async def user_dashboard_view(request: Request, token: str):
         token_record = res.scalars().first()
 
         if not token_record or not token_record.service:
-            return _render_capture_ip_html("خطا", "لینک منقضی یا نامعتبر", "این اشتراک یا توکن یافت نشد.", False, bot_user)
+            return _render_capture_ip_html("╪«╪╖╪º", "┘ä█î┘å┌⌐ ┘à┘å┘é╪╢█î █î╪º ┘å╪º┘à╪╣╪¬╪¿╪▒", "╪º█î┘å ╪º╪┤╪¬╪▒╪º┌⌐ █î╪º ╪¬┘ê┌⌐┘å █î╪º┘ü╪¬ ┘å╪┤╪».", False, bot_user)
 
         service = token_record.service
         now = datetime.now(timezone.utc)
         expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
         
         if now > expires_at:
-            return _render_capture_ip_html("خطا", "انقضای توکن", "مهلت استفاده از این لینک به پایان رسیده است. از ربات لینک جدید بگیرید.", False, bot_user)
+            return _render_capture_ip_html("╪«╪╖╪º", "╪º┘å┘é╪╢╪º█î ╪¬┘ê┌⌐┘å", "┘à┘ç┘ä╪¬ ╪º╪│╪¬┘ü╪º╪»┘ç ╪º╪▓ ╪º█î┘å ┘ä█î┘å┌⌐ ╪¿┘ç ┘╛╪º█î╪º┘å ╪▒╪│█î╪»┘ç ╪º╪│╪¬. ╪º╪▓ ╪▒╪¿╪º╪¬ ┘ä█î┘å┌⌐ ╪¼╪»█î╪» ╪¿┌»█î╪▒█î╪».", False, bot_user)
 
         # Retrieve DNS IPs
         device_id = service.controld_device_id
@@ -1121,7 +1121,7 @@ async def api_update_ip(request: Request, token: str):
     if not ip_check.is_iran:
         return {
             "success": False,
-            "message": ip_check.error_message or "فیلترشکن شما روشن است! فقط اتصالات مستقیم ایران مجاز هستند."
+            "message": ip_check.error_message or "┘ü█î┘ä╪¬╪▒╪┤┌⌐┘å ╪┤┘à╪º ╪▒┘ê╪┤┘å ╪º╪│╪¬! ┘ü┘é╪╖ ╪º╪¬╪╡╪º┘ä╪º╪¬ ┘à╪│╪¬┘é█î┘à ╪º█î╪▒╪º┘å ┘à╪¼╪º╪▓ ┘ç╪│╪¬┘å╪»."
         }
 
     async with async_session_maker() as session:
@@ -1135,25 +1135,25 @@ async def api_update_ip(request: Request, token: str):
         token_record = res.scalars().first()
 
         if not token_record or not token_record.service:
-            return {"success": False, "message": "اشتراک یا توکن معتبر یافت نشد."}
+            return {"success": False, "message": "╪º╪┤╪¬╪▒╪º┌⌐ █î╪º ╪¬┘ê┌⌐┘å ┘à╪╣╪¬╪¿╪▒ █î╪º┘ü╪¬ ┘å╪┤╪»."}
 
         now = datetime.now(timezone.utc)
         expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
         if now > expires_at:
-            return {"success": False, "message": "این لینک منقضی شده است. لطفاً از طریق ربات لینک جدیدی دریافت کنید."}
+            return {"success": False, "message": "╪º█î┘å ┘ä█î┘å┌⌐ ┘à┘å┘é╪╢█î ╪┤╪»┘ç ╪º╪│╪¬. ┘ä╪╖┘ü╪º┘ï ╪º╪▓ ╪╖╪▒█î┘é ╪▒╪¿╪º╪¬ ┘ä█î┘å┌⌐ ╪¼╪»█î╪»█î ╪»╪▒█î╪º┘ü╪¬ ┌⌐┘å█î╪»."}
 
         service = token_record.service
 
         # 2. Prevent duplicate hits
         if service.authorized_ip == client_ip:
-            return {"success": True, "message": f"آی‌پی {client_ip} هم‌اکنون روی اشتراک شما فعال است."}
+            return {"success": True, "message": f"╪ó█îΓÇî┘╛█î {client_ip} ┘ç┘àΓÇî╪º┌⌐┘å┘ê┘å ╪▒┘ê█î ╪º╪┤╪¬╪▒╪º┌⌐ ╪┤┘à╪º ┘ü╪╣╪º┘ä ╪º╪│╪¬."}
 
         # 3. Safe multi-tenant deauthorization and authorization
         success = await update_device_ip_safe(session, service, client_ip)
         if success:
-            return {"success": True, "message": f"آی‌پی {client_ip} با موفقیت تایید و روی دی‌ان‌اس اختصاصی شما فعال شد."}
+            return {"success": True, "message": f"╪ó█îΓÇî┘╛█î {client_ip} ╪¿╪º ┘à┘ê┘ü┘é█î╪¬ ╪¬╪º█î█î╪» ┘ê ╪▒┘ê█î ╪»█îΓÇî╪º┘åΓÇî╪º╪│ ╪º╪«╪¬╪╡╪º╪╡█î ╪┤┘à╪º ┘ü╪╣╪º┘ä ╪┤╪»."}
         else:
-            return {"success": False, "message": "خطا در تنظیم دی‌ان‌اس روی سرورها. لطفاً لحظاتی دیگر تلاش کنید."}
+            return {"success": False, "message": "╪«╪╖╪º ╪»╪▒ ╪¬┘å╪╕█î┘à ╪»█îΓÇî╪º┘åΓÇî╪º╪│ ╪▒┘ê█î ╪│╪▒┘ê╪▒┘ç╪º. ┘ä╪╖┘ü╪º┘ï ┘ä╪¡╪╕╪º╪¬█î ╪»█î┌»╪▒ ╪¬┘ä╪º╪┤ ┌⌐┘å█î╪»."}
 
     if __name__ == "__main__":
         import uvicorn
