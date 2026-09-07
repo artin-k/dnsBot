@@ -12,7 +12,7 @@ from app.database import async_session_maker
 
 from bot.middlewares.db import DbSessionMiddleware
 from bot.middlewares.mandatory_channels import DynamicMandatoryJoinMiddleware
-from bot.routers import admin, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet, test_account 
+from bot.routers import admin, admin_plans, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet, test_account
 
 
 def setup_logging() -> None:
@@ -50,7 +50,8 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     dp.include_router(errors.router)
     
     # Admin routers
-    dp.include_router(admin.router)
+    dp.include_router(admin_plans.router) # <-- ADD THIS FIRST
+
     dp.include_router(mandatory_channels.router)
     
     # User routers
@@ -60,6 +61,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     dp.include_router(start.router)
     dp.include_router(test_account.router)
     dp.include_router(buy.router)
+    
     # dp.include_router(controld_buy.router)
     dp.include_router(services.router)
     dp.include_router(tariffs.router)

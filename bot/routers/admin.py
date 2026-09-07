@@ -97,7 +97,7 @@ from bot.keyboards.main_menu import main_menu_keyboard
 from bot.states.admin import AdminSettingsStates, AdminSearchStates, AdminAddPlanStates
 
 # Sub-routers
-from bot.routers import admin_orders, admin_plans
+from bot.routers import admin_orders
 from bot.keyboards.admin import (
     AdminPlanCallback,
     plan_delete_confirm_keyboard,
@@ -110,7 +110,6 @@ from app.models import ConfigInventory, AffiliateCommission, Payment, Order
 
 router = Router(name="admin")
 router.include_router(admin_orders.router)
-router.include_router(admin_plans.router)
 
 logger = structlog.get_logger(__name__)
 WEB_SERVER_BASE_URL = get_settings().public_web_base_url

@@ -20,6 +20,7 @@ from bot.keyboards.admin import (
 )
 from bot.states.admin import AdminAddPlanStates, AdminEditPlanStates
 
+
 router = Router(name="admin_plans")
 
 EDIT_FIELD_MAP = {
@@ -188,24 +189,35 @@ async def fsm_edit_plan_value(message: Message, state: FSMContext, session: Asyn
     field = data["field"]
     validator = data["validator"]
     
-    new_value = message.text.strip()
-    if validator == "positive_int" and not new_value.isdigit():
-        await message.answer("لطفاً یک عدد معتبر ارسال کنید:")
-        return
-        
+    new_value = (message.text or "").strip()
+    
+    # 1. Safely validate integers using try-except instead of .isdigit()
+    if validator in ["positive_int", "int"]:
+        try:
+            parsed_int = int(new_value)
+            if validator == "positive_int" and parsed_int < 0:
+                raise ValueError
+            new_value = parsed_int
+        except ValueError:
+            await message.answer("❌ ورودی نامعتبر است. لطفاً فقط یک عدد معتبر ارسال کنید:")
+            return
+            
+    # 2. Handle description clearing
     if field == "description" and new_value == "-":
         new_value = None
-    elif validator in ["positive_int", "int"]:
-        new_value = int(new_value)
 
+    # 3. Save to database
     repo = PlansRepository(session)
     await repo.update(plan_id, **{field: new_value})
     await session.commit()
     await state.clear()
     
+    # 4. Refresh and show updated panel
     refreshed = await repo.get(plan_id)
     await message.answer("✅ بروزرسانی با موفقیت انجام شد.")
-    await message.answer(_format_plan_detail(refreshed), reply_markup=plan_detail_keyboard(refreshed), parse_mode="HTML")
-
-
+    await message.answer(
+        _format_plan_detail(refreshed), 
+        reply_markup=plan_detail_keyboard(refreshed), 
+        parse_mode="HTML"
+    )
 

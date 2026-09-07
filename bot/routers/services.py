@@ -609,7 +609,7 @@ async def create_secure_ip_update_keyboard(
         panel_url = f"{WEB_SERVER_BASE_URL}/update-ip/{service_id_or_device_id}"
 
     builder.button(text="🌐 پنل مدیریت و ثبت آی‌پی 🌐", url=panel_url)
-    builder.button(text="🤖 ثبت آی‌پی دستی (در ربات) 🤖", callback_data=f"manual_ip_reg:{service_id_or_device_id}")
+    builder.button(text="🤖 ثبت آی‌پی دستی (در ربات) 🤖", callback_data=f"manual_ip:{service_id_or_device_id}")
     
     app_settings = AppSettingsService(session)
     
