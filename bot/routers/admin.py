@@ -177,7 +177,7 @@ async def _is_admin(telegram_id: int | None, session: AsyncSession, settings: Se
     return bool(user and user.is_admin)
 
 
-@router.message(Command("admin"))
+@router.message(Command("admin"), StateFilter("*"))
 async def cmd_admin_panel(message: Message, session: AsyncSession, settings: Settings) -> None:
     if not await _is_admin(message.from_user.id if message.from_user else None, session, settings):
         await message.answer("⛔ شما دسترسی مدیریت ندارید.")
@@ -185,7 +185,7 @@ async def cmd_admin_panel(message: Message, session: AsyncSession, settings: Set
     await message.answer(texts.ADMIN_PANEL_TEXT, reply_markup=admin_main_keyboard())
 
 
-@router.callback_query(AdminActionCallback.filter())
+@router.callback_query(AdminActionCallback.filter(), StateFilter("*"))
 async def admin_action_navigation(
     callback: CallbackQuery,
     callback_data: AdminActionCallback,
