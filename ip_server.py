@@ -254,8 +254,13 @@ async def capture_ip(request: Request, token: str):
         now = datetime.now(timezone.utc)
         expires_at = token_record.expires_at.replace(tzinfo=timezone.utc) if token_record.expires_at.tzinfo is None else token_record.expires_at
         if now > expires_at:
-            return _render_capture_ip_html("خطا", "انقضای لینک", "مهلت استفاده از این لینک گذشته است.", False, bot_user)
-
+            return _render_capture_ip_html(
+                "خطا", 
+                "انقضای لینک", 
+                "مهلت استفاده از این لینک گذشته است. در ربات، وارد بخش «اشتراک‌های من» شوید، سپس روی «لینک‌های اتصال» بزنید. در پیام جدید ربات، گزینه «پنل مدیریت و ثبت آی‌پی» را انتخاب کنید.", 
+                False, 
+                bot_user
+            )
         service = token_record.service
 
         if service.authorized_ip == client_ip:
@@ -293,8 +298,14 @@ async def user_dashboard_view(request: Request, token: str):
         token_expires = token_record.expires_at.replace(tzinfo=timezone.utc) if token_record.expires_at.tzinfo is None else token_record.expires_at
         
         if now > token_expires:
-            return _render_capture_ip_html("خطا", "انقضای توکن", "مهلت استفاده از این لینک گذشته است.", False, bot_user)
-
+            return _render_capture_ip_html(
+                "خطا", 
+                "انقضای توکن", 
+                "مهلت استفاده از این لینک گذشته است. در ربات، وارد بخش «اشتراک‌های من» شوید، سپس روی «لینک‌های اتصال» بزنید. در پیام جدید ربات، گزینه «پنل مدیریت و ثبت آی‌پی» را انتخاب کنید.", 
+                False, 
+                bot_user
+            )
+    
         dns_ips = await get_controld_device_ips(service.controld_device_id, settings) if service.controld_device_id else {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
         duration_text = calculate_remaining_time_fa(service.expire_at)
         
@@ -360,8 +371,13 @@ async def api_update_ip(request: Request, token: str):
         now = datetime.now(timezone.utc)
         expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
         if now > expires_at:
-            return JSONResponse(status_code=410, content={"success": False, "message": "لینک منقضی شده است."})
-
+            return JSONResponse(
+                status_code=410, 
+                content={
+                    "success": False, 
+                    "message": "لینک شما منقضی شده است. لطفاً از طریق ربات تلگرام (بخش اشتراک‌های من) یک لینک جدید دریافت کنید."
+                }
+            )
         service = token_record.service
 
         # 🔥 Firing your ip_manager directly
