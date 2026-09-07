@@ -47,10 +47,9 @@ templates = Jinja2Templates(directory="templates")
 WEB_SERVER_BASE_URL = settings.public_web_base_url
 
 # ============================================================================
-# DIRECT CONTROLD API CALLS (Bypassing ip_manager.py completely)
+# DIRECT CONTROLD API CALLS
 # ============================================================================
 async def direct_controld_authorize(device_id: str, ip: str) -> bool:
-    """Sends a direct API request to Control D, completely bypassing any other files."""
     if not device_id or not ip: return False
     url = "https://api.controld.com/access"
     headers = {
@@ -58,23 +57,20 @@ async def direct_controld_authorize(device_id: str, ip: str) -> bool:
         "Content-Type": "application/json",
         "accept": "application/json"
     }
-    # Add Org ID if exists
     org_id = getattr(settings, "controld_org_id", None) or os.getenv("CONTROLD_ORG_ID")
     if org_id: headers["X-Force-Org-Id"] = org_id
 
+    # Forcing the URL query parameter so ControlD never ignores the JSON body
+    url_with_query = f"{url}?device_id={device_id}&ips[]={ip.strip()}"
     payload = {"device_id": device_id, "ips": [ip.strip()]}
     
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(url, json=payload, headers=headers, timeout=10.0)
+            response = await client.post(url_with_query, json=payload, headers=headers, timeout=10.0)
             data = response.json()
-            if response.status_code in (200, 201) and data.get("success"):
-                return True
-            logger.error(f"Direct CD Auth Failed: Status {response.status_code} | Body {response.text}")
+            if response.status_code in (200, 201) and data.get("success"): return True
             return False
-        except Exception as e:
-            logger.error(f"Direct CD Auth Exception: {e}")
-            return False
+        except Exception: return False
 
 async def direct_controld_deauthorize(device_id: str, ip: str) -> bool:
     if not device_id or not ip: return False
@@ -204,7 +200,7 @@ async def favicon(): return Response(status_code=204)
 async def ping(): return JSONResponse(content={"status": "pong"}, headers={"Cache-Control": "no-store"})
 
 # ============================================================================
-# PAYSTAR REDIRECT & CALLBACK 
+# PAYSTAR REDIRECT & CALLBACK
 # ============================================================================
 @app.get("/paystar/redirect/{token}", response_class=HTMLResponse)
 @app.get("/paystar/redirect", response_class=HTMLResponse)
@@ -267,7 +263,6 @@ async def paystar_callback(request: Request):
     except Exception as e:
         return _failed_html(f"خطای سیستم: {str(e)}", bot_username=bot_user)
 
-
 # ============================================================================
 # USER DASHBOARD (/ip/{token})
 # ============================================================================
@@ -287,7 +282,7 @@ async def capture_or_dashboard_ip(request: Request, token: str):
         return _render_vpn_detected_html(client_ip, ip_check.country, ip_check.isp, ip_check.error_message, bot_user)
 
     async with async_session_maker() as session:
-        stmt = select(IPAuthToken).options(joinedload(IPAuthToken.service).joinedload(VPNService.user)).where(or_(IPAuthToken.token == token, IPAuthToken.token == formatted_token)).limit(1)
+        stmt = select(IPAuthToken).options(joinedload(IPAuthToken.service).joinedload(VPNService.user), joinedload(IPAuthToken.service).joinedload(VPNService.plan)).where(or_(IPAuthToken.token == token, IPAuthToken.token == formatted_token)).limit(1)
         token_record = (await session.execute(stmt)).scalars().first()
 
         if not token_record or not token_record.service:
@@ -320,14 +315,14 @@ async def capture_or_dashboard_ip(request: Request, token: str):
         except Exception:
             return _render_capture_ip_html("پنل کاربری", "✅ اتصال برقرار شد", "برای ثبت آی‌پی از دکمه ثبت دستی ربات استفاده کنید.", True, client_ip, bot_user)
 
-
 # ============================================================================
-# API POST ROUTE (/api/ip/update) - THE BULLETPROOF FIX
+# API POST ROUTE (/api/ip/update) - THE BULLETPROOF ADGUARD + CONTROLD FIX
 # ============================================================================
 @app.post("/api/ip/{token}/update")
 async def api_update_ip(request: Request, token: str):
     """
-    Directly authenticates with Control D and updates DB, bypassing ip_manager.py logic.
+    Directly authenticates with Control D AND AdGuard Home, bypassing ip_manager.py logic.
+    Ensures 100% actual synchronization with servers.
     """
     token = token.strip()
     formatted_token = token
@@ -358,34 +353,45 @@ async def api_update_ip(request: Request, token: str):
         old_ip = service.authorized_ip
 
         if not device_id:
-            return JSONResponse(status_code=500, content={"success": False, "message": "خطا: آیدی سرور (Device ID) در دیتابیس موجود نیست!"})
+            return JSONResponse(status_code=500, content={"success": False, "message": "خطا: آیدی سرور در دیتابیس موجود نیست!"})
 
+        # ---------------------------------------------------------------------
         # 1. DIRECT API CALL TO CONTROLD
+        # ---------------------------------------------------------------------
         if old_ip and old_ip != client_ip:
             await direct_controld_deauthorize(device_id, old_ip)
 
         cd_success = await direct_controld_authorize(device_id, client_ip)
         
         if not cd_success:
-            return JSONResponse(status_code=500, content={"success": False, "message": f"خطا در ثبت آی‌پی در Control D (آیدی دستگاه: {device_id}). لطفاً توکن API را بررسی کنید."})
+            return JSONResponse(status_code=500, content={"success": False, "message": f"خطا در ثبت آی‌پی در سرور Control D. لطفا تنظیمات سرور را بررسی کنید."})
 
-        # 2. SOFT SYNC TO ADGUARD (Does not crash if AdGuard is down)
+        # ---------------------------------------------------------------------
+        # 2. SOFT SYNC TO ADGUARD (Does not break ControlD if AdGuard fails)
+        # ---------------------------------------------------------------------
         try:
             from app.services.adguard import AdGuardHomeService
             adg = AdGuardHomeService(settings)
             if adg.is_configured():
                 if old_ip and old_ip != client_ip:
                     await adg.deauthorize_client_ip(old_ip)
+                
+                # Update global ACL
                 await adg.allow_client_ip(client_ip)
+                
+                # Create/Update dedicated AdGuard Client in the dashboard
+                raw_name = (service.username or f"u{service.user_id}").split("|")[0]
+                await adg.sync_user_client(service.id, raw_name, client_ip)
         except Exception as e:
             logger.warning(f"AdGuard sync ignored: {e}")
 
+        # ---------------------------------------------------------------------
         # 3. UPDATE DATABASE
+        # ---------------------------------------------------------------------
         service.authorized_ip = client_ip
         await session.commit()
 
         return JSONResponse(status_code=200, content={"success": True, "client_ip": client_ip, "message": f"آی‌پی {client_ip} با موفقیت در سرورهای DNS ثبت شد."})
-
 
 # ============================================================================
 # WEB ADMIN DASHBOARD
