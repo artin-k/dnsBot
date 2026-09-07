@@ -135,17 +135,8 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
 
             adguard_client_synced = await adguard.sync_user_client(service.id, username, clean_new_ip)
             if not adguard_client_synced:
-                logger.error("adguard_persistent_client_sync_failed_aborting", service_id=service.id, new_ip=clean_new_ip)
-                if old_ip != clean_new_ip and not await _has_active_ip_sharer(session, clean_new_ip, service.id):
-                    try:
-                        await controld.deauthorize_ip(device_id, clean_new_ip)
-                    except Exception as exc:
-                        logger.warning("controld_new_ip_cleanup_failed", service_id=service.id, error=str(exc))
-                    try:
-                        await adguard.deauthorize_client_ip(clean_new_ip)
-                    except Exception as exc:
-                        logger.warning("adguard_new_ip_cleanup_failed", service_id=service.id, error=str(exc))
-                return False
+                # Do not rollback Control D. The global whitelist succeeded, so the user has DNS access.
+                logger.error("adguard_persistent_client_sync_failed_but_proceeding", service_id=service.id, new_ip=clean_new_ip)
 
         except Exception as exc:
             logger.error("adguard_sync_failed_aborting", service_id=service.id, error=str(exc))

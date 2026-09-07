@@ -173,10 +173,6 @@ class AdGuardHomeService:
             return False
 
     async def sync_user_client(self, service_id: int, username: str | None, ip_address: str | None = None) -> bool:
-        """
-        Creates or strictly updates a dedicated client in AdGuard Home.
-        Enforces exactly ONE active IP per user by overwriting the 'ids' array.
-        """
         if not self.is_configured():
             return True
 
@@ -189,13 +185,20 @@ class AdGuardHomeService:
         if ip_address:
             try:
                 strict_ids = [validate_network_target(ip_address)]
+                strict_target = strict_ids[0]
+                
+                # --- NEW COLLISION CLEANUP LOGIC ---
+                # Search all existing clients and remove this IP if another client holds it
+                clients_data = await self._request("GET", "/control/clients")
+                if clients_data and isinstance(clients_data, dict):
+                    for client in clients_data.get("clients", []):
+                        if client.get("name") != client_name and strict_target in client.get("ids", []):
+                            client["ids"].remove(strict_target)
+                            await self._client_request("/control/clients/update", {"name": client["name"], "data": client})
+                # -----------------------------------
+                
             except ValueError as exc:
-                logger.error(
-                    "invalid_ip_for_adguard_client_sync",
-                    service_id=service_id,
-                    ip=ip_address,
-                    error=str(exc),
-                )
+                logger.error("invalid_ip_for_adguard_client_sync", service_id=service_id, ip=ip_address, error=str(exc))
                 return False
         else:
             strict_ids = []
@@ -211,6 +214,7 @@ class AdGuardHomeService:
             "use_global_blocked_services": True,
             "upstreams": [],
         }
+
 
         add_status, add_text = await self._client_request("/control/clients/add", payload)
         if add_status in (200, 201):
