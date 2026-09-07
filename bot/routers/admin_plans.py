@@ -49,7 +49,7 @@ def _format_plan_detail(plan) -> str:
 🔢 ترتیب: {plan.sort_order}"""
 
 
-@router.callback_query(AdminPlanCallback.filter())
+@router.callback_query(AdminPlanCallback.filter(), StateFilter("*"))
 async def admin_plan_action(
     callback: CallbackQuery,
     callback_data: AdminPlanCallback,
