@@ -303,7 +303,7 @@ async def user_dashboard_view(request: Request, token: str):
             "is_active": service.status == "active" and (service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at.tzinfo is None else service.expire_at) > now,
             "is_ip_synced": (service.authorized_ip == client_ip)
         }
-        return templates.TemplateResponse("user_panel.html", context)
+        return templates.TemplateResponse(request=request, name="user_panel.html", context=context)
 
 
 @app.post("/api/ip/{token}/update")
@@ -354,7 +354,7 @@ async def admin_dashboard(request: Request, uid: int = Query(...), token: str = 
     async with async_session_maker() as session:
         raw_rows = await ServicesRepository(session).get_admin_dashboard_data()
         users = [{"telegram_id": r.telegram_id, "first_name": r.first_name, "service_id": r.service_id, "controld_device_id": r.controld_device_id, "authorized_ip": r.authorized_ip, "status": "فعال" if r.status == "active" else "منقضی شده"} for r in raw_rows]
-    return templates.TemplateResponse("admin.html", {"request": request, "users": users, "uid": uid, "token": token})
+    return templates.TemplateResponse(request=request, name="admin.html", context={"request": request, "users": users, "uid": uid, "token": token})
 
 @app.post("/admin/delete-ip")
 async def admin_delete_ip(uid: int = Query(...), token: str = Query(...), service_id: int = Form(...), device_id: str = Form(...), ip: str = Form(...)):
