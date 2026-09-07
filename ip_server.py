@@ -288,6 +288,9 @@ async def user_dashboard_view(request: Request, token: str):
         except:
             shamsi_expire = "-"
 
+        # Define is_active status first for cleaner logic
+        is_active_status = service.status == "active" and (service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at.tzinfo is None else service.expire_at) > now
+        
         context = {
             "request": request,
             "token": token,
@@ -302,10 +305,15 @@ async def user_dashboard_view(request: Request, token: str):
             "adguard_secondary": "94.183.180.236",
             "duration_text": duration_text,
             "shamsi_expire": shamsi_expire,
-            "is_active": service.status == "active" and (service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at.tzinfo is None else service.expire_at) > now,
-            "is_ip_synced": (service.authorized_ip == client_ip)
+            "is_active": is_active_status,
+            "is_ip_synced": (service.authorized_ip == client_ip),
+            
+            # --- NEW ADDITIONS FOR UI ---
+            "device_username": service.username.split('|')[0] if service.username else "کاربر",
+            "subscription_status": "فعال" if is_active_status else "منقضی/غیرفعال"
         }
         return templates.TemplateResponse(request=request, name="user_panel.html", context=context)
+    
 
 
 

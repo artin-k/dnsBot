@@ -232,7 +232,7 @@
 <div class="dashboard-wrapper">
     <!-- Brand Info -->
     <div class="brand-header">
-        <div class="brand-arrow">▲</div>
+        <img src="./logo.jpg" alt="PingSep Logo" style="width: 85px; height: 85px; border-radius: 50%; object-fit: cover; box-shadow: 0 0 25px rgba(56, 189, 248, 0.4); margin-bottom: 12px;">
         <div class="brand-title">PINGSEP</div>
     </div>
 
@@ -277,29 +277,28 @@
     <div class="glass-card">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <span class="small fw-bold text-light"><i class="fa fa-server text-success me-1"></i> دی‌ان‌اس اختصاصی شما:</span>
-            <span class="small text-secondary" id="pingDisplay"><i class="fa fa-spinner fa-spin"></i> پینگ</span>
         </div>
         
-        <!-- Control D -->
-        <div class="text-secondary small mb-2 mt-2">🛡️ سرورهای اصلی:</div>
-        <div class="dns-row">
-            <span>{{ dns_primary }}</span>
-            <button class="btn-copy" onclick="copyDns('{{ dns_primary }}')">کپی</button>
-        </div>
-        <div class="dns-row mb-3">
-            <span>{{ dns_secondary }}</span>
-            <button class="btn-copy" onclick="copyDns('{{ dns_secondary }}')">کپی</button>
-        </div>
-
-        <!-- AdGuard -->
-        <div class="text-secondary small mb-2 border-top border-secondary pt-3">⚡ سرورهای جایگزین (AdGuard):</div>
+        <!-- AdGuard (Moved to Top) -->
+        <div class="text-secondary small mb-2 mt-2">⚡ سرورهای اصلی:</div>
         <div class="dns-row">
             <span>{{ adguard_primary }}</span>
             <button class="btn-copy" onclick="copyDns('{{ adguard_primary }}')">کپی</button>
         </div>
-        <div class="dns-row mb-0">
+        <div class="dns-row mb-3">
             <span>{{ adguard_secondary }}</span>
             <button class="btn-copy" onclick="copyDns('{{ adguard_secondary }}')">کپی</button>
+        </div>
+
+        <!-- Control D (Moved to Bottom) -->
+        <div class="text-secondary small mb-2 border-top border-secondary pt-3">🛡️ سرورهای جایگزین:</div>
+        <div class="dns-row">
+            <span>{{ dns_primary }}</span>
+            <button class="btn-copy" onclick="copyDns('{{ dns_primary }}')">کپی</button>
+        </div>
+        <div class="dns-row mb-0">
+            <span>{{ dns_secondary }}</span>
+            <button class="btn-copy" onclick="copyDns('{{ dns_secondary }}')">کپی</button>
         </div>
     </div>
 
@@ -434,9 +433,6 @@
 
     // Initialize
     detectDevice();
-    checkPing();
-    setInterval(checkPing, 10000); // Re-check ping every 10 seconds
-
     // Automatically submit IP on page load if it is out of sync
     window.addEventListener('DOMContentLoaded', () => {
         // Add a small 800ms delay so the user sees the page load before the alert blocks it

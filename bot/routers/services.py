@@ -610,8 +610,19 @@ async def create_secure_ip_update_keyboard(
 
     builder.button(text="🌐 پنل مدیریت و ثبت آی‌پی 🌐", url=panel_url)
     builder.button(text="🤖 ثبت آی‌پی دستی (در ربات) 🤖", callback_data=f"manual_ip_reg:{service_id_or_device_id}")
-
+    
     app_settings = AppSettingsService(session)
+    
+    # 1. Safely fetch and validate the video tutorial link
+    video_link = await app_settings.get_teaching_video_link()
+    if video_link:
+        clean_vid = video_link.strip()
+        if clean_vid:
+            if not clean_vid.startswith(("http://", "https://")):
+                clean_vid = f"https://{clean_vid}"
+            builder.row(InlineKeyboardButton(text="🎥 آموزش ویدیویی تنظیمات", url=clean_vid))
+
+    # 2. Safely fetch and format the support username
     support_username = await app_settings.get_support_username()
     if support_username:
         builder.button(text="☎️ پشتیبانی آنلاین", url=f"https://t.me/{support_username.removeprefix('@')}")
