@@ -38,6 +38,8 @@ from bot.loader import create_bot
 from bot.utils.auto_clean import schedule_message_deletion
 from app.services.vpn_detector import verify_user_ip
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
+from fastapi import FastAPI, Request, Form, HTTPException, status, Query, Response
+from fastapi.staticfiles import StaticFiles # ADD THIS LINE
 
 app = FastAPI(title="Control D Auto-IP & Payment Gateway")
 settings = get_settings()
@@ -47,6 +49,10 @@ logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 WEB_SERVER_BASE_URL = settings.public_web_base_url
 
+app = FastAPI(title="Control D Auto-IP & Payment Gateway")
+
+# ADD THIS LINE TO SERVE IMAGES
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ============================================================================
 # HELPER FUNCTIONS
