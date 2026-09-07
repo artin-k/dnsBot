@@ -215,6 +215,10 @@ class AdGuardHomeService:
             return False
 
     async def sync_user_client(self, service_id: int, username: str | None, ip_address: str | None = None) -> bool:
+        """
+        Creates or strictly updates a dedicated persistent client in AdGuard Home.
+        Ensures the IP is removed from any other client before saving to prevent collisions.
+        """
         if not self.is_configured():
             return True
 
@@ -224,70 +228,58 @@ class AdGuardHomeService:
 
         client_name = f"User_{service_id}_{clean_username}"
 
-        if ip_address:
-            try:
-                strict_ids = [validate_network_target(ip_address)]
-                strict_target = strict_ids[0]
-                
-                # --- NEW COLLISION CLEANUP LOGIC ---
-                clients_data = await self._request("GET", "/control/clients")
-                if clients_data and isinstance(clients_data, dict):
-                    for client in clients_data.get("clients", []):
-                        if client.get("name") != client_name and strict_target in client.get("ids", []):
-                            client["ids"].remove(strict_target)
-                            await self._client_request("/control/clients/update", {"name": client["name"], "data": client})
-                            await asyncio.sleep(0.3) # Added to prevent database locks
-                # -----------------------------------
-                
-            except ValueError as exc:
-                logger.error("invalid_ip_for_adguard_client_sync", service_id=service_id, ip=ip_address, error=str(exc))
-                return False
-        else:
-            strict_ids = []
-
-        payload = {
-            "name": client_name,
-            "ids": strict_ids,
-            "use_global_settings": True,
-            "filtering_enabled": True,
-            "parental_enabled": False,
-            "safesearch_enabled": False,
-            "safebrowsing_enabled": False,
-            "use_global_blocked_services": True,
-            "upstreams": [],
-            "tags": [], # Must be included for the API to accept it
-        }
-
-
-        add_status, add_text = await self._client_request("/control/clients/add", payload)
-        if add_status in (200, 201):
-            logger.info("adguard_client_created", name=client_name, ids=strict_ids)
-            return True
-
-        if add_status != 400:
-            logger.error(
-                "adguard_client_add_failed_not_retryable",
-                name=client_name,
-                status=add_status,
-                text=add_text,
-            )
+        try:
+            strict_target = validate_network_target(ip_address) if ip_address else None
+        except ValueError as exc:
+            logger.error("invalid_ip_for_adguard_client_sync", service_id=service_id, error=str(exc))
             return False
 
-        update_payload = {
-            "name": client_name,
-            "data": payload,
-        }
-        update_status, update_text = await self._client_request("/control/clients/update", update_payload)
-        if update_status in (200, 201):
-            logger.info("adguard_client_strictly_updated", name=client_name, ids=strict_ids)
-            return True
+        async with self._access_lock:
+            # 1. Fetch all existing clients
+            clients_data = await self._request("GET", "/control/clients")
+            if not clients_data or not isinstance(clients_data, dict):
+                logger.error("failed_to_fetch_adguard_clients_list")
+                return False
+                
+            clients_list = clients_data.get("clients") or []
+            client_exists = False
 
-        logger.error(
-            "adguard_client_sync_completely_failed",
-            name=client_name,
-            add_status=add_status,
-            add_text=add_text,
-            update_status=update_status,
-            update_text=update_text,
-        )
-        return False
+            # 2. Collision Cleanup: Strip IP from OTHER clients, and check if OUR client exists
+            for c in clients_list:
+                if c.get("name") == client_name:
+                    client_exists = True
+                
+                if strict_target and c.get("name") != client_name and strict_target in c.get("ids", []):
+                    c["ids"].remove(strict_target)
+                    await self._request("POST", "/control/clients/update", {"name": c["name"], "data": c})
+                    import asyncio
+                    await asyncio.sleep(0.1)
+
+            # 3. Prepare standard payload
+            payload = {
+                "name": client_name,
+                "ids": [strict_target] if strict_target else [],
+                "use_global_settings": True,
+                "filtering_enabled": True,
+                "parental_enabled": False,
+                "safesearch_enabled": False,
+                "safebrowsing_enabled": False,
+                "use_global_blocked_services": True,
+                "upstreams": [],
+                "tags": []
+            }
+
+            # 4. Save to AdGuard Home
+            if client_exists:
+                res = await self._request("POST", "/control/clients/update", {"name": client_name, "data": payload})
+                if res is not None:
+                    logger.info("adguard_persistent_client_updated", name=client_name, ip=strict_target)
+                    return True
+            else:
+                res = await self._request("POST", "/control/clients/add", payload)
+                if res is not None:
+                    logger.info("adguard_persistent_client_added", name=client_name, ip=strict_target)
+                    return True
+                    
+            logger.error("adguard_persistent_client_save_failed", name=client_name)
+            return False
