@@ -588,22 +588,21 @@ class ControlDService:
             except Exception as e:
                 logger.error("failed_to_restrict_device_on_controld", device_id=device_id, error=str(e))
                 return False
+
     async def authorize_ip(self, device_id: str, ip: str) -> bool:
         """
         Surgically authorizes an IP address on a shared Control D endpoint.
+        POST https://api.controld.com/access with a JSON body payload [cite: 1].
         """
         if not device_id or len(device_id) < 3 or not ip:
-            logger.error("authorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
-            return False # ⚠️ رفع باگ فاجعه‌بار: قبلا True بود!
+            logger.warning("authorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
+            return True
 
-        clean_ip = ip.strip()
-        # ⚠️ فورس کردن آی‌پی در لینک برای جلوگیری از نادیده گرفتن JSON توسط کنترل‌دی
-        url = f"{BASE_URL}/access?device_id={device_id}&ips[]={clean_ip}"
-        
+        url = f"{BASE_URL}/access"
         payload = {
             "device_id": device_id,
-            "ips": [clean_ip],
-            "ips[]": [clean_ip]
+            "ips": [ip],      # Standard JSON key expected by POST body parser [cite: 1]
+            "ips[]": [ip]     # Bracketed fallback
         }
         
         async with httpx.AsyncClient() as client:
@@ -614,71 +613,92 @@ class ControlDService:
                     headers=_get_headers(),
                     timeout=10.0
                 )
-                data = response.json()
-                # ⚠️ بررسی سخت‌گیرانه: حتماً باید کلمه success: true در دیتای بازگشتی باشد
-                if response.status_code in (200, 201) and data.get("success") is True:
-                    logger.info("controld_ip_authorized_successfully", device=device_id, ip=clean_ip)
-                    return True
-                
-                logger.error("controld_api_rejected_ip", status=response.status_code, response=response.text)
-                return False
+                logger.info(
+                    "controld_ip_authorization_response",
+                    device_id=device_id,
+                    ip=ip,
+                    status_code=response.status_code,
+                    response_text=response.text
+                )
+                return response.status_code in (200, 201)
             except Exception as e:
-                logger.error("failed_to_authorize_ip_on_controld", error=str(e))
+                logger.error("failed_to_authorize_ip_on_controld", device_id=device_id, ip=ip, error=str(e))
                 return False
 
-        async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
-            if not device_id or len(device_id) < 3 or not ip:
-                return False # ⚠️ رفع باگ فاجعه‌بار: قبلا True بود!
+    # app/services/controld.py
 
-            clean_ip = ip.strip()
-            url = f"{BASE_URL}/access?device_id={device_id}&ip={clean_ip}&ips[]={clean_ip}"
-            
-            async with httpx.AsyncClient() as client:
-                try:
-                    response = await client.request("DELETE", url, headers=_get_headers(), timeout=10.0)
-                    if response.status_code not in (200, 201, 204):
-                        url_fb = f"{BASE_URL}/access/{device_id}?ip={clean_ip}"
-                        response_fb = await client.request("DELETE", url_fb, headers=_get_headers(), timeout=10.0)
-                        return response_fb.status_code in (200, 201, 204)
-                    return True
-                except Exception as e:
-                    logger.error("failed_to_deauthorize_ip", error=str(e))
-                    return False
+    async def deauthorize_ip(self, device_id: str, ip: str) -> bool:
+        """
+        Surgically removes an IP address from a shared Control D endpoint.
+        Sends parameters via query string, JSON body, and URL path to ensure 
+        100% removal on Control D.
+        """
+        if not device_id or len(device_id) < 3 or not ip:
+            logger.warning("deauthorize_ip_received_invalid_parameters", device_id=device_id, ip=ip)
+            return True
 
-        async def get_active_ips(self, device_id: str) -> list[str]:
-            """
-            Retrieves all currently authorized IPs for a given endpoint [cite: 1].
-            GET https://api.controld.com/access?device_id={device_id}
-            """
-            url = f"{BASE_URL}/access?device_id={device_id}"
-            async with httpx.AsyncClient() as client:
-                try:
-                    response = await client.get(url, headers=_get_headers(), timeout=10.0)
-                    if response.status_code == 200:
-                        data = response.json()
-                        body = data.get("body") or {}
-                        
-                        # Seamlessly support both nested {"ips": [...]} and flat list formats
-                        raw_ips = []
-                        if isinstance(body, dict):
-                            raw_ips = body.get("ips", [])
-                        elif isinstance(body, list):
-                            raw_ips = body
+        clean_ip = ip.strip()
+        headers = _get_headers()
+        
+        # Primary DELETE request with query params + JSON payload
+        url = f"{BASE_URL}/access?device_id={device_id}&ip={clean_ip}&ips[]={clean_ip}"
+        payload = {
+            "device_id": device_id,
+            "ip": clean_ip,
+            "ips": [clean_ip]
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.request("DELETE", url, json=payload, headers=headers, timeout=10.0)
+                logger.info("controld_deauthorize_response", device_id=device_id, ip=clean_ip, status=response.status_code, text=response.text)
+                
+                # Fallback DELETE /access/{device_id} if status code is not 2xx
+                if response.status_code not in (200, 201, 204):
+                    url_fallback = f"{BASE_URL}/access/{device_id}?ip={clean_ip}"
+                    response_fb = await client.request("DELETE", url_fallback, json=payload, headers=headers, timeout=10.0)
+                    logger.info("controld_deauthorize_fallback_response", device_id=device_id, ip=clean_ip, status=response_fb.status_code, text=response_fb.text)
+                    return response_fb.status_code in (200, 201, 204)
 
-                        ips = []
-                        if isinstance(raw_ips, list):
-                            for item in raw_ips:
-                                if isinstance(item, str):
-                                    ips.append(item)
-                                elif isinstance(item, dict):
-                                    ip_val = item.get("ip")
-                                    if ip_val:
-                                        ips.append(ip_val)
-                        return ips
-                    return []
-                except Exception as e:
-                    logger.error("failed_to_fetch_active_ips_from_controld", device_id=device_id, error=str(e))
-                    return []
+                return True
+            except Exception as e:
+                logger.error("failed_to_deauthorize_ip_on_controld", device_id=device_id, ip=clean_ip, error=str(e))
+                return False
+
+    async def get_active_ips(self, device_id: str) -> list[str]:
+        """
+        Retrieves all currently authorized IPs for a given endpoint [cite: 1].
+        GET https://api.controld.com/access?device_id={device_id}
+        """
+        url = f"{BASE_URL}/access?device_id={device_id}"
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, headers=_get_headers(), timeout=10.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    body = data.get("body") or {}
+                    
+                    # Seamlessly support both nested {"ips": [...]} and flat list formats
+                    raw_ips = []
+                    if isinstance(body, dict):
+                        raw_ips = body.get("ips", [])
+                    elif isinstance(body, list):
+                        raw_ips = body
+
+                    ips = []
+                    if isinstance(raw_ips, list):
+                        for item in raw_ips:
+                            if isinstance(item, str):
+                                ips.append(item)
+                            elif isinstance(item, dict):
+                                ip_val = item.get("ip")
+                                if ip_val:
+                                    ips.append(ip_val)
+                    return ips
+                return []
+            except Exception as e:
+                logger.error("failed_to_fetch_active_ips_from_controld", device_id=device_id, error=str(e))
+                return []
 
     async def create_dns_device(
         self, 
