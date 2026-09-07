@@ -436,6 +436,14 @@
     detectDevice();
     checkPing();
     setInterval(checkPing, 10000); // Re-check ping every 10 seconds
+
+    // Automatically submit IP on page load if it is out of sync
+    window.addEventListener('DOMContentLoaded', () => {
+        // Add a small 800ms delay so the user sees the page load before the alert blocks it
+        setTimeout(() => {
+            submitIpUpdate();
+        }, 800);
+    });
 </script>
 </body>
 </html>
