@@ -37,6 +37,7 @@ from app.services.ip_manager import update_device_ip_safe
 from bot.loader import create_bot
 from bot.utils.auto_clean import schedule_message_deletion
 from app.services.vpn_detector import verify_user_ip
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
 app = FastAPI(title="Control D Auto-IP & Payment Gateway")
 settings = get_settings()
@@ -132,8 +133,13 @@ def _success_html(message: str, bot_username: str = "bot") -> HTMLResponse:
 async def root_redirect():
     return RedirectResponse(url=f"https://t.me/{await get_bot_username()}")
 
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon(): return Response(status_code=204)
+@app.get("/logo.jpg", include_in_schema=False)
+async def serve_logo():
+    import os
+    from fastapi import HTTPException
+    if os.path.exists("logo.jpg"):
+        return FileResponse("logo.jpg")
+    raise HTTPException(status_code=404, detail="Logo not found")
 
 @app.get("/ping")
 async def ping(): return JSONResponse(content={"status": "pong"}, headers={"Cache-Control": "no-store"})
