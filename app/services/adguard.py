@@ -137,6 +137,48 @@ class AdGuardHomeService:
                 return True
             return False
 
+    async def swap_client_ip(self, new_ip: str, old_ip: str | None = None, remove_old: bool = False) -> bool:
+        """Atomically adds the new IP and removes the old IP to prevent API race conditions."""
+        if not self.is_configured():
+            return True
+
+        try:
+            valid_new = validate_network_target(new_ip)
+        except ValueError as e:
+            logger.error("invalid_new_ip_for_adguard", ip=new_ip, error=str(e))
+            return False
+
+        valid_old = None
+        if old_ip and remove_old:
+            try:
+                valid_old = validate_network_target(old_ip)
+            except ValueError:
+                pass
+
+        async with self._access_lock:
+            # 1. READ current ACL
+            data = await self._request("GET", "/control/access/list")
+            if data is None or not isinstance(data, dict):
+                return False
+
+            allowed = set(data.get("allowed_clients") or [])
+            
+            # 2. ATOMIC MODIFY
+            allowed.add(valid_new)
+            if valid_old and valid_old != valid_new:
+                allowed.discard(valid_old)
+
+            data["allowed_clients"] = sorted(allowed)
+            data["disallowed_clients"] = data.get("disallowed_clients") or []
+            data["blocked_hosts"] = data.get("blocked_hosts") or []
+
+            # 3. WRITE
+            res = await self._request("POST", "/control/access/set", payload=data)
+            if res is not None:
+                logger.info("adguard_ip_swapped_successfully", new_ip=valid_new, old_removed=bool(valid_old))
+                return True
+            return False
+
     async def deauthorize_client_ip(self, ip_address: str) -> bool:
         """Deauthorizes (removes) a client IP from AdGuard Home's allowed_clients list."""
         if not self.is_configured():
@@ -188,13 +230,13 @@ class AdGuardHomeService:
                 strict_target = strict_ids[0]
                 
                 # --- NEW COLLISION CLEANUP LOGIC ---
-                # Search all existing clients and remove this IP if another client holds it
                 clients_data = await self._request("GET", "/control/clients")
                 if clients_data and isinstance(clients_data, dict):
                     for client in clients_data.get("clients", []):
                         if client.get("name") != client_name and strict_target in client.get("ids", []):
                             client["ids"].remove(strict_target)
                             await self._client_request("/control/clients/update", {"name": client["name"], "data": client})
+                            await asyncio.sleep(0.3) # Added to prevent database locks
                 # -----------------------------------
                 
             except ValueError as exc:
@@ -213,6 +255,7 @@ class AdGuardHomeService:
             "safebrowsing_enabled": False,
             "use_global_blocked_services": True,
             "upstreams": [],
+            "tags": [], # Must be included for the API to accept it
         }
 
 

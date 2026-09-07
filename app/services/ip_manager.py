@@ -124,9 +124,15 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
     if adguard.is_configured():
         try:
             username = await _resolve_adguard_username(session, service)
-            logger.info("authorizing_new_ip_adguard", service_id=service.id, new_ip=clean_new_ip)
+            
+            # ATOMIC SWAP: Fixes the race condition that accidentally deletes the new IP
+            should_remove_old = False
+            if old_ip and old_ip != clean_new_ip:
+                should_remove_old = not await _has_active_ip_sharer(session, old_ip, service.id)
 
-            adguard_allowed = await adguard.allow_client_ip(clean_new_ip)
+            logger.info("authorizing_new_ip_adguard", service_id=service.id, new_ip=clean_new_ip)
+            adguard_allowed = await adguard.swap_client_ip(new_ip=clean_new_ip, old_ip=old_ip, remove_old=should_remove_old)
+            
             if not adguard_allowed:
                 logger.error("adguard_new_ip_allow_failed_aborting_sync", service_id=service.id, new_ip=clean_new_ip)
                 if old_ip != clean_new_ip and not await _has_active_ip_sharer(session, clean_new_ip, service.id):
@@ -135,7 +141,6 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
 
             adguard_client_synced = await adguard.sync_user_client(service.id, username, clean_new_ip)
             if not adguard_client_synced:
-                # Do not rollback Control D. The global whitelist succeeded, so the user has DNS access.
                 logger.error("adguard_persistent_client_sync_failed_but_proceeding", service_id=service.id, new_ip=clean_new_ip)
 
         except Exception as exc:
@@ -148,31 +153,17 @@ async def update_device_ip_safe(session: AsyncSession, service: VPNService, new_
             return False
 
     # -------------------------------------------------------------------------
-    # 4. CLEANUP: Deauthorize Old IP if Changed (Guarded by Shared-Slot Check)
+    # 4. CLEANUP: Deauthorize Old IP from ControlD Only (AdGuard is already handled atomically)
     # -------------------------------------------------------------------------
     if old_ip and old_ip != clean_new_ip:
         if not await _has_active_ip_sharer(session, old_ip, service.id):
-            # Drop from Control D
             try:
                 logger.info("deauthorizing_old_ip_controld", service_id=service.id, device_id=device_id, old_ip=old_ip)
                 await controld.deauthorize_ip(device_id, old_ip)
             except Exception as exc:
                 logger.warning("controld_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
-
-            # Drop from AdGuard global whitelist
-            if adguard.is_configured():
-                try:
-                    logger.info("deauthorizing_old_ip_adguard", service_id=service.id, old_ip=old_ip)
-                    await adguard.deauthorize_client_ip(old_ip)
-                except Exception as exc:
-                    logger.warning("adguard_old_ip_deauth_failed_proceeding", service_id=service.id, error=str(exc))
         else:
-            logger.info(
-                "skipping_old_ip_deauthorization_shared_by_active_service",
-                service_id=service.id,
-                old_ip=old_ip,
-            )
-
+            logger.info("skipping_old_ip_deauthorization_shared_by_active_service", service_id=service.id, old_ip=old_ip)
     # -------------------------------------------------------------------------
     # 5. Database Commit
     # -------------------------------------------------------------------------

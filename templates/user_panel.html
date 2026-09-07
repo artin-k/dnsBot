@@ -279,13 +279,27 @@
             <span class="small fw-bold text-light"><i class="fa fa-server text-success me-1"></i> دی‌ان‌اس اختصاصی شما:</span>
             <span class="small text-secondary" id="pingDisplay"><i class="fa fa-spinner fa-spin"></i> پینگ</span>
         </div>
+        
+        <!-- Control D -->
+        <div class="text-secondary small mb-2 mt-2">🛡️ سرورهای اصلی:</div>
         <div class="dns-row">
             <span>{{ dns_primary }}</span>
             <button class="btn-copy" onclick="copyDns('{{ dns_primary }}')">کپی</button>
         </div>
-        <div class="dns-row mb-0">
+        <div class="dns-row mb-3">
             <span>{{ dns_secondary }}</span>
             <button class="btn-copy" onclick="copyDns('{{ dns_secondary }}')">کپی</button>
+        </div>
+
+        <!-- AdGuard -->
+        <div class="text-secondary small mb-2 border-top border-secondary pt-3">⚡ سرورهای جایگزین (AdGuard):</div>
+        <div class="dns-row">
+            <span>{{ adguard_primary }}</span>
+            <button class="btn-copy" onclick="copyDns('{{ adguard_primary }}')">کپی</button>
+        </div>
+        <div class="dns-row mb-0">
+            <span>{{ adguard_secondary }}</span>
+            <button class="btn-copy" onclick="copyDns('{{ adguard_secondary }}')">کپی</button>
         </div>
     </div>
 

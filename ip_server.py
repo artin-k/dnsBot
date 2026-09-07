@@ -298,12 +298,15 @@ async def user_dashboard_view(request: Request, token: str):
             "plan": service.plan,
             "dns_primary": dns_ips["ipv4_primary"],
             "dns_secondary": dns_ips["ipv4_secondary"],
+            "adguard_primary": "94.183.180.215",
+            "adguard_secondary": "94.183.180.236",
             "duration_text": duration_text,
             "shamsi_expire": shamsi_expire,
             "is_active": service.status == "active" and (service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at.tzinfo is None else service.expire_at) > now,
             "is_ip_synced": (service.authorized_ip == client_ip)
         }
         return templates.TemplateResponse(request=request, name="user_panel.html", context=context)
+
 
 
 @app.post("/api/ip/{token}/update")
