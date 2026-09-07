@@ -1,4 +1,12 @@
 # ip_server.py
+import os
+from dotenv import load_dotenv
+load_dotenv() # ⚠️ این خط فایل .env را به زور لود می‌کند تا ادگارد Skip نشود!
+
+import asyncio
+import secrets
+import logging
+
 import asyncio
 import secrets
 import logging
@@ -316,47 +324,36 @@ async def capture_or_dashboard_ip(request: Request, token: str):
 # ============================================================================
 @app.post("/api/ip/{token}/update")
 async def api_update_ip(request: Request, token: str):
-    """AJAX endpoint for dashboard IP update with full exception handling."""
+    token = token.strip()
+    formatted_token = token
     try:
-        token = token.strip()
-        formatted_token = token
-        try:
-            if len(token) == 32: formatted_token = str(uuid.UUID(token))
-        except ValueError: pass
+        if len(token) == 32: formatted_token = str(uuid.UUID(token))
+    except ValueError: pass
 
-        client_ip, _ = get_client_real_ip(request)
-        ip_check = await verify_user_ip(client_ip)
+    client_ip, _ = get_client_real_ip(request)
+    ip_check = await verify_user_ip(client_ip)
+    
+    if not ip_check.is_iran:
+        return JSONResponse(status_code=400, content={"success": False, "is_vpn": True, "message": ip_check.error_message or "فیلترشکن شما روشن است!"})
+
+    async with async_session_maker() as session:
+        stmt = select(IPAuthToken).options(joinedload(IPAuthToken.service)).where(or_(IPAuthToken.token == token, IPAuthToken.token == formatted_token)).limit(1)
+        res = await session.execute(stmt)
+        token_record = res.scalars().first()
+
+        if not token_record or not token_record.service:
+            return JSONResponse(status_code=404, content={"success": False, "message": "اشتراک یافت نشد."})
+
+        service = token_record.service
         
-        if not ip_check.is_iran:
-            return JSONResponse(status_code=400, content={"success": False, "is_vpn": True, "message": ip_check.error_message or "فیلترشکن روشن است!"})
-
-        async with async_session_maker() as session:
-            stmt = select(IPAuthToken).options(joinedload(IPAuthToken.service)).where(or_(IPAuthToken.token == token, IPAuthToken.token == formatted_token)).limit(1)
-            res = await session.execute(stmt)
-            token_record = res.scalars().first()
-
-            if not token_record or not token_record.service:
-                return JSONResponse(status_code=404, content={"success": False, "message": "اشتراک یا توکن معتبر یافت نشد."})
-
-            now = datetime.now(timezone.utc)
-            expires_at = token_record.expires_at if token_record.expires_at.tzinfo else token_record.expires_at.replace(tzinfo=timezone.utc)
-            if now > expires_at:
-                return JSONResponse(status_code=410, content={"success": False, "message": "این لینک منقضی شده است."})
-
-            service = token_record.service
-
-            # Force sync to ControlD every single time the button is pressed (per user request)
-            success = await update_device_ip_safe(session, service, client_ip)
-            
-            if success:
-                return JSONResponse(status_code=200, content={"success": True, "client_ip": client_ip, "message": f"آی‌پی {client_ip} با موفقیت در سیستم ثبت شد."})
-            else:
-                return JSONResponse(status_code=500, content={"success": False, "message": "خطا در تنظیم دی‌ان‌اس روی سرورها."})
-                
-    except Exception as e:
-        logger.exception(f"Exception triggered in API update route: {str(e)}")
-        return JSONResponse(status_code=500, content={"success": False, "message": f"خطای سرور: {str(e)}"})
-
+        # ⚠️ هیچ موفقیتی کاذب نیست! مستقیماً و تحت هر شرایطی آپدیت را اجرا می‌کنیم
+        success = await update_device_ip_safe(session, service, client_ip)
+        
+        if success:
+            return JSONResponse(status_code=200, content={"success": True, "client_ip": client_ip, "message": f"آی‌پی {client_ip} با موفقیت در سرورهای DNS ثبت شد."})
+        else:
+            return JSONResponse(status_code=500, content={"success": False, "message": "خطا در تنظیم دی‌ان‌اس! لطفاً تنظیمات ControlD را بررسی کنید."})
+         
 # ============================================================================
 # RETIRED ROUTE
 # ============================================================================
