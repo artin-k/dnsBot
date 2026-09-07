@@ -249,7 +249,13 @@ async def capture_ip(request: Request, token: str):
         token_record = res.scalars().first()
 
         if not token_record or not token_record.service:
-            return _render_capture_ip_html("خطا", "لینک نامعتبر", "این لینک وجود ندارد.", False, bot_user)
+            return _render_capture_ip_html(
+                "خطا", 
+                "لینک نامعتبر", 
+                "این لینک نامعتبر است (احتمالاً لینک جدیدی از ربات دریافت کرده‌اید). در ربات، وارد بخش «اشتراک‌های من» شوید، سپس روی «لینک‌های اتصال» بزنید. در پیام جدید ربات، گزینه «پنل مدیریت و ثبت آی‌پی» را انتخاب کنید.", 
+                False, 
+                bot_user
+            )
 
         now = datetime.now(timezone.utc)
         expires_at = token_record.expires_at.replace(tzinfo=timezone.utc) if token_record.expires_at.tzinfo is None else token_record.expires_at
