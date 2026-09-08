@@ -325,7 +325,7 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
             country_name = config["name"]
             break
 
-    text = render_dns_delivery_text(
+    text = await render_dns_delivery_text(
         session=session,
         expire_at=service.expire_at,
         ipv4_primary=ipv4_primary,
@@ -499,7 +499,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     service.controld_device_id = new_device_id
     await session.commit()
 
-    success_text = render_dns_delivery_text(
+    success_text = await render_dns_delivery_text(
         session=session,
         expire_at=service.expire_at,
         ipv4_primary=ipv4_primary,
