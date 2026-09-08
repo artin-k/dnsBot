@@ -50,7 +50,7 @@ def create_dispatcher(settings: Settings) -> Dispatcher:
     dp.include_router(errors.router)
     
     # Admin routers
-    dp.include_router(admin_plans.router) # <-- ADD THIS FIRST
+    # dp.include_router(admin_plans.router) # <-- ADD THIS FIRST
     dp.include_router(admin.router)
     dp.include_router(mandatory_channels.router)
     

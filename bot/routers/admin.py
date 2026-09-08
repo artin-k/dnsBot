@@ -920,17 +920,30 @@ async def _show_plan_detail(callback: CallbackQuery, plan, session: AsyncSession
     )
     await callback.message.edit_text(text, reply_markup=plan_detail_keyboard(plan), parse_mode="HTML")
 
+# ---------------------------------------------------------
+# 2. MAIN HANDLER & FSM FOR PLANS (MERGED)
+# ---------------------------------------------------------
+from bot.states.admin import AdminEditPlanStates, AdminAddPlanStates
+from bot.keyboards.admin import add_plan_confirm_keyboard
+from sqlalchemy import update
+from app.models import Plan
 
-# ---------------------------------------------------------
-# 2. MAIN HANDLER
-# ---------------------------------------------------------
-@router.callback_query(AdminPlanCallback.filter())
+EDIT_FIELD_MAP = {
+"edit_title": ("title", "عنوان جدید تعرفه را ارسال کنید:", "title"),
+"edit_desc": ("description", "توضیحات جدید را ارسال کنید (برای خالی کردن، - بفرستید):", "description"),
+"edit_duration": ("duration_hours", "مدت جدید را به ساعت ارسال کنید (مثال: 720 برای ۳۰ روز):", "positive_int"),
+"edit_price": ("price", "قیمت جدید را به تومان ارسال کنید:", "positive_int"),
+"edit_sort": ("sort_order", "ترتیب نمایش جدید را ارسال کنید:", "int"),
+}
+
+@router.callback_query(AdminPlanCallback.filter(), StateFilter("*"))
 async def admin_plan_action(
     callback: CallbackQuery,
     callback_data: AdminPlanCallback,
+    state: FSMContext,
     session: AsyncSession,
     settings: Settings,
-) -> None:
+    ) -> None:
     if not await _is_admin(callback.from_user.id if callback.from_user else None, session, settings):
         await callback.answer("⛔ شما دسترسی مدیریت ندارید.", show_alert=True)
         return
@@ -940,22 +953,32 @@ async def admin_plan_action(
     action = callback_data.action
     plan_id = callback_data.plan_id
 
-    # 1. Handle Cancel / Back to Plans List
     if action in {"cancel", "list"}:
+        await state.clear()
         await _show_plans(callback, session)
         return
 
     plan = await plans_repo.get(plan_id)
     if plan is None:
+        await state.clear()
         await _show_plans(callback, session, prefix="❌ این تعرفه یافت نشد یا قبلاً حذف شده است.\n\n")
         return
 
-    # 2. View Plan Details
     if action == "detail":
+        await state.clear()
         await _show_plan_detail(callback, plan, session)
         return
 
-    # 3. Toggle Active / Disabled
+    # ---> THE MISSING EDIT HANDLER <---
+    if action in EDIT_FIELD_MAP:
+        field, prompt, validator = EDIT_FIELD_MAP[action]
+        await state.set_state(AdminEditPlanStates.value)
+        await state.update_data(plan_id=plan.id, field=field, validator=validator)
+        await callback.message.answer(prompt)
+        return
+        
+    await state.clear()
+
     if action == "toggle":
         await plans_repo.set_active(plan.id, not plan.is_active)
         await session.commit()
@@ -963,7 +986,6 @@ async def admin_plan_action(
         await _show_plan_detail(callback, refreshed, session)
         return
 
-    # 4. Show Delete Confirmation Prompt
     if action == "delete":
         await callback.message.edit_text(
             f"⚠️ <b>آیا از حذف تعرفه {escape(plan.title)} مطمئن هستید؟</b>\n\n"
@@ -973,30 +995,18 @@ async def admin_plan_action(
         )
         return
 
-    # 5. Execute Safe Cascade Deletion
     if action == "delete_confirm":
         try:
             order_ids_subquery = select(Order.id).where(Order.plan_id == plan.id)
-
-            # Break circular foreign key dependencies safely
             try:
-                await session.execute(
-                    update(ConfigInventory)
-                    .where(ConfigInventory.reserved_by_order_id.in_(order_ids_subquery))
-                    .values(reserved_by_order_id=None)
-                )
-                await session.execute(
-                    update(Order)
-                    .where(Order.plan_id == plan.id)
-                    .values(config_inventory_id=None)
-                )
+                await session.execute(update(ConfigInventory).where(ConfigInventory.reserved_by_order_id.in_(order_ids_subquery)).values(reserved_by_order_id=None))
+                await session.execute(update(Order).where(Order.plan_id == plan.id).values(config_inventory_id=None))
                 await session.execute(delete(Payment).where(Payment.order_id.in_(order_ids_subquery)))
                 await session.execute(delete(AffiliateCommission).where(AffiliateCommission.order_id.in_(order_ids_subquery)))
                 await session.execute(delete(ConfigInventory).where(ConfigInventory.plan_id == plan.id))
             except Exception:
                 pass
 
-            # Delete orders, services, and the plan record
             await session.execute(delete(Order).where(Order.plan_id == plan.id))
             await session.execute(delete(VPNService).where(VPNService.plan_id == plan.id))
             await plans_repo.delete(plan.id)
@@ -1007,3 +1017,124 @@ async def admin_plan_action(
             await session.rollback()
             await callback.message.answer(f"❌ خطا در حذف تعرفه: {str(e)}")
         return
+
+
+# ---------------------------------------------------------
+# 3. FSM TEXT INPUT CATCHERS
+# ---------------------------------------------------------
+@router.message(AdminEditPlanStates.value)
+async def fsm_edit_plan_value(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    data = await state.get_data()
+    plan_id = data.get("plan_id")
+    field = data.get("field")
+    validator = data.get("validator")
+
+    if not plan_id:
+        return await state.clear()
+
+    new_value = (message.text or "").strip()
+
+    if validator in ["positive_int", "int"]:
+        try:
+            parsed_int = int(new_value)
+            if validator == "positive_int" and parsed_int < 0:
+                raise ValueError
+            new_value = parsed_int
+        except ValueError:
+            return await message.answer("❌ ورودی نامعتبر است. لطفاً فقط یک عدد معتبر ارسال کنید:")
+            
+    if field == "description" and new_value == "-":
+        new_value = None
+
+    # Direct SQL update to ensure absolute safety and saving
+    await session.execute(update(Plan).where(Plan.id == plan_id).values(**{field: new_value}))
+    await session.commit()
+    await state.clear()
+
+    # Format the response
+    refreshed = await PlansRepository(session).get(plan_id)
+    await message.answer("✅ بروزرسانی تعرفه با موفقیت انجام شد.")
+
+    status = "🟢 فعال" if refreshed.is_active else "🔴 غیرفعال"
+    desc = refreshed.description or "ندارد"
+    price_val = getattr(refreshed, "price", 0)
+    duration = f"{refreshed.duration_hours} ساعت" if hasattr(refreshed, "duration_hours") else "-"
+    text = (
+        f"📦 <b>جزئیات تعرفه</b>\n\n"
+        f"🆔 <b>شناسه:</b> <code>#{refreshed.id}</code>\n"
+        f"📌 <b>عنوان:</b> {escape(refreshed.title)}\n"
+        f"💵 <b>قیمت:</b> {price_val:,} تومان\n"
+        f"⏳ <b>مدت اعتبار:</b> {duration}\n"
+        f"📝 <b>توضیحات:</b> {escape(desc)}\n"
+        f"📊 <b>وضعیت:</b> {status}"
+    )
+    await message.answer(text, reply_markup=plan_detail_keyboard(refreshed), parse_mode="HTML")
+
+    @router.message(AdminAddPlanStates.title)
+    async def fsm_add_plan_title(message: Message, state: FSMContext) -> None:
+        title = (message.text or "").strip()
+        if not title:
+            return await message.answer("عنوان معتبر نیست.")
+        await state.update_data(title=title)
+        await state.set_state(AdminAddPlanStates.description)
+        await message.answer("توضیحات تعرفه را وارد کنید (یا - را بفرستید):")
+
+    @router.message(AdminAddPlanStates.description)
+    async def fsm_add_plan_desc(message: Message, state: FSMContext) -> None:
+        desc = message.text.strip()
+        await state.update_data(description=None if desc == "-" else desc)
+        await state.set_state(AdminAddPlanStates.duration_days)
+        await message.answer("مدت زمان اعتبار را به ساعت ارسال کنید (مثال: 720 برای ۳۰ روز):")
+
+    @router.message(AdminAddPlanStates.duration_days)
+    async def fsm_add_plan_hours(message: Message, state: FSMContext) -> None:
+        if not message.text or not message.text.isdigit():
+            return await message.answer("لطفاً یک عدد صحیح ارسال کنید.")
+        await state.update_data(duration_hours=int(message.text))
+        await state.set_state(AdminAddPlanStates.price)
+        await message.answer("قیمت تعرفه را به تومان ارسال کنید (مثال: 50000):")
+
+    @router.message(AdminAddPlanStates.price)
+    async def fsm_add_plan_price(message: Message, state: FSMContext) -> None:
+        digits = (message.text or "").replace(",", "").strip()
+        if not digits.isdigit():
+            return await message.answer("لطفاً قیمت معتبر به تومان وارد کنید.")
+        await state.update_data(price=int(digits), sort_order=0)
+        data = await state.get_data()
+        await state.set_state(AdminAddPlanStates.confirm)
+
+        text = (
+            f"⚡ <b>تایید تعرفه جدید:</b>\n\n"
+            f"عنوان: {escape(data['title'])}\n"
+            f"مدت: {data['duration_hours']} ساعت\n"
+            f"قیمت: {format_money(data['price'])} تومان"
+        )
+        await message.answer(text, reply_markup=add_plan_confirm_keyboard(), parse_mode="HTML")
+
+    @router.callback_query(AdminActionCallback.filter(F.action == "save_add_plan"), StateFilter("*"))
+    async def confirm_add_plan(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+        data = await state.get_data()
+        if not data:
+            return await callback.answer("خطا: اطلاعات یافت نشد.", show_alert=True)
+            
+        repo = PlansRepository(session)
+        await repo.create(
+            title=data["title"],
+            description=data.get("description"),
+            duration_hours=data["duration_hours"],
+            volume_gb=0,
+            price=data["price"],
+            is_active=True,
+            sort_order=data.get("sort_order", 0)
+        )
+        await session.commit()
+        await state.clear()
+
+        await callback.message.edit_text("✅ تعرفه جدید با موفقیت ذخیره شد.")
+        await _show_plans(callback, session)
+
+    @router.callback_query(AdminActionCallback.filter(F.action == "cancel_add_plan"), StateFilter("*"))
+    async def cancel_add_plan(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+        await state.clear()
+        await callback.message.edit_text("❌ عملیات افزودن تعرفه لغو شد.")
+        await _show_plans(callback, session)
