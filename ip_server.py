@@ -338,8 +338,15 @@ async def user_dashboard_view(request: Request, token: str):
         
         # Fetch exact database settings using the explicit lowercase keys
         app_settings = AppSettingsService(session)
-        ag_primary = await app_settings.get_setting("adguard_primary_ip") or "109.94.164.210"
-        ag_secondary = await app_settings.get_setting("adguard_secondary_ip") or "76.76.2.175"
+        # Direct repository fetch to bypass any service caching
+        from app.repositories.settings import SettingsRepository
+        settings_repo = SettingsRepository(session)
+        
+        row_primary = await settings_repo.get("adguard_primary_ip")
+        row_secondary = await settings_repo.get("adguard_secondary_ip")
+        
+        ag_primary = row_primary.value if row_primary else "109.94.164.210"
+        ag_secondary = row_secondary.value if row_secondary else "76.76.2.175"
                 
         context = {
             "request": request,
