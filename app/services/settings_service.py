@@ -140,22 +140,20 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         value_type="str",
         description="لینک ویدیو آموزشی راهنمای اتصال دی‌ان‌اس",
     ),
-    # --- ADD THESE NEW DEFINITIONS ---
     SettingDefinition(
         key=ADGUARD_PRIMARY_IP,
         label="DNS اصلی AdGuard",
-        default="94.183.180.215",
+        default="109.94.164.210",  # <--- Change to your true primary IP
         value_type="str",
         description="آدرس IP سرور اصلی (Primary) برای AdGuard",
     ),
     SettingDefinition(
         key=ADGUARD_SECONDARY_IP,
         label="DNS جایگزین AdGuard",
-        default="94.183.180.236",
+        default="76.76.2.175",      # <--- Change to your true secondary IP
         value_type="str",
         description="آدرس IP سرور جایگزین (Secondary) برای AdGuard",
     ),
-    # ---------------------------------
 
 )
 

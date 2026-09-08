@@ -94,8 +94,13 @@ async def get_controld_device_ips(device_id: str, settings_obj) -> dict:
     from app.config import SLOT_CONFIGS
     for config in SLOT_CONFIGS.values():
         if config["device_id"] == device_id:
-            return {"ipv4_primary": config["dns_primary"], "ipv4_secondary": config["dns_secondary"]}
-    return {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
+            return {
+                "ipv4_primary": config["dns_primary"], 
+                "ipv4_secondary": config["dns_secondary"]
+            }
+    # Set your true default Control D slot IPs here instead of .162
+    return {"ipv4_primary": "76.76.2.175", "ipv4_secondary": "76.76.10.175"}
+
 
 def verify_admin_web_token(uid: int, token: str) -> bool:
     admin_ids = set(settings.admin_ids)
@@ -326,14 +331,14 @@ async def user_dashboard_view(request: Request, token: str):
         # Define is_active status first for cleaner logic
         is_active_status = service.status == "active" and (service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at.tzinfo is None else service.expire_at) > now
 
-        # Fetch AdGuard IPs dynamically from the database
+        # Fetch AdGuard IPs dynamically from the database with your correct true fallbacks
         app_settings = AppSettingsService(session)
         db_adguard_primary = await app_settings.get_setting("adguard_primary_ip")
         db_adguard_secondary = await app_settings.get_setting("adguard_secondary_ip")
         
-        # Fallback to defaults if the admin hasn't edited them yet
-        ag_primary = db_adguard_primary or "94.183.180.215"
-        ag_secondary = db_adguard_secondary or "94.183.180.236"
+        # Replace these fallback strings with your actual true AdGuard IPs if they aren't set in DB yet
+        ag_primary = db_adguard_primary or "109.94.164.210"   # Your true AdGuard primary
+        ag_secondary = db_adguard_secondary | "76.76.2.175"  # Or whatever your true secondary is
         
         context = {
             "request": request,
