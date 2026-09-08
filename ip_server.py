@@ -343,16 +343,16 @@ async def user_dashboard_view(request: Request, token: str):
             "service": service,
             "user": service.user,
             "plan": service.plan,
+            # Swap these so Control D device IPs map correctly to primary/secondary server slots
             "dns_primary": dns_ips["ipv4_primary"],
             "dns_secondary": dns_ips["ipv4_secondary"],
             "duration_text": duration_text,
             "shamsi_expire": shamsi_expire,
             "is_active": is_active_status,
             "is_ip_synced": (service.authorized_ip == client_ip),
-            # Fetch AdGuard IPs dynamically from the database
+            # AdGuard database settings
             "adguard_primary": ag_primary,
             "adguard_secondary": ag_secondary,
-            # --- NEW ADDITIONS FOR UI ---
             "device_username": service.username.split('|')[0] if service.username else "کاربر",
             "subscription_status": "فعال" if is_active_status else "منقضی/غیرفعال"
         }
