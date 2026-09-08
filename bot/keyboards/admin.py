@@ -202,6 +202,8 @@ def admin_settings_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="⚙️ تنظیمات", callback_data=AdminActionCallback(action="settings"))
     builder.button(text="⚙️ تنظیمات زیرمجموعه‌گیری", callback_data=AdminAffiliateCallback(action="settings"))
     builder.button(text="🎲 تنظیمات گردونه شانس", callback_data=AdminActionCallback(action="dice"))
+    # Add this line to your settings keyboard builder
+    builder.button(text="🛡 سرورهای AdGuard (آی‌پی)", callback_data=AdminActionCallback(action="adguard_admin"))
     builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="panel"))
     builder.adjust(1)
     return builder.as_markup()

@@ -103,18 +103,29 @@ async def admin_order_callback(
                     ips = await get_controld_device_ips(device_id, settings)
 
                 keyboard = await create_secure_ip_update_keyboard(session, service_record.id) if service_record else None
+                
+                payment_record = await session.get(Payment, callback_data.payment_id)
+
+                keyboard = await create_secure_ip_update_keyboard(session, service_record.id) if service_record else None
+            
+            # 1. Await the text generation and pass the session
+                approved_text = await _approved_message(
+                    session=session,
+                    result=result,
+                    expire_at=service_record.expire_at if service_record else None,
+                    ipv4_primary=ips["ipv4_primary"],
+                    ipv4_secondary=ips["ipv4_secondary"],
+                    custom_username=payment_record.order.custom_username if payment_record and payment_record.order else None,
+                )
+
+                # 2. Send the message
                 sent_msg = await callback.bot.send_message(
                     chat_id=result.user_telegram_id,
-                    text=_approved_message(
-                        result,
-                        expire_at=service_record.expire_at if service_record else None,
-                        ipv4_primary=ips["ipv4_primary"],
-                        ipv4_secondary=ips["ipv4_secondary"],
-                        custom_username=order.custom_username if order else None,
-                    ),
+                    text=approved_text,
                     reply_markup=keyboard,
                     parse_mode="HTML",
                 )
+
                 if sent_msg:
                     await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
 
@@ -178,18 +189,23 @@ async def admin_payment_action(
                     ips = await get_controld_device_ips(device_id, settings)
 
             keyboard = await create_secure_ip_update_keyboard(session, service_record.id) if service_record else None
+            
+            approved_text = await _approved_message(
+                session=session,
+                result=result,
+                expire_at=service_record.expire_at if service_record else None,
+                ipv4_primary=ips["ipv4_primary"],
+                ipv4_secondary=ips["ipv4_secondary"],
+                custom_username=payment_record.order.custom_username if payment_record and payment_record.order else None,
+            )
+
             sent_msg = await callback.bot.send_message(
                 chat_id=result.user_telegram_id,
-                text=_approved_message(
-                    result,
-                    expire_at=service_record.expire_at if service_record else None,
-                    ipv4_primary=ips["ipv4_primary"],
-                    ipv4_secondary=ips["ipv4_secondary"],
-                    custom_username=payment_record.order.custom_username if payment_record and payment_record.order else None,
-                ),
+                text=approved_text,
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
+            
             if sent_msg:
                 await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
 

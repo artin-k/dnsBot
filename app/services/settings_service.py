@@ -42,6 +42,9 @@ WALLET_MIN_TOPUP_AMOUNT = "WALLET_MIN_TOPUP_AMOUNT"
 WALLET_MAX_TOPUP_AMOUNT = "WALLET_MAX_TOPUP_AMOUNT"
 WALLET_MIN_WITHDRAW_AMOUNT = "WALLET_MIN_WITHDRAW_AMOUNT"
 WALLET_MAX_WITHDRAW_AMOUNT = "WALLET_MAX_WITHDRAW_AMOUNT"
+# ADD THESE TWO LINES:
+ADGUARD_PRIMARY_IP = "adguard_primary_ip"
+ADGUARD_SECONDARY_IP = "adguard_secondary_ip"
 
 _env_settings = get_settings()
 
@@ -137,6 +140,23 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
         value_type="str",
         description="لینک ویدیو آموزشی راهنمای اتصال دی‌ان‌اس",
     ),
+    # --- ADD THESE NEW DEFINITIONS ---
+    SettingDefinition(
+        key=ADGUARD_PRIMARY_IP,
+        label="DNS اصلی AdGuard",
+        default="94.183.180.215",
+        value_type="str",
+        description="آدرس IP سرور اصلی (Primary) برای AdGuard",
+    ),
+    SettingDefinition(
+        key=ADGUARD_SECONDARY_IP,
+        label="DNS جایگزین AdGuard",
+        default="94.183.180.236",
+        value_type="str",
+        description="آدرس IP سرور جایگزین (Secondary) برای AdGuard",
+    ),
+    # ---------------------------------
+
 )
 
 SETTING_DEFINITION_BY_KEY = {definition.key: definition for definition in SETTING_DEFINITIONS}

@@ -115,7 +115,10 @@ logger = structlog.get_logger(__name__)
 WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 
 
-def _approved_message(
+from app.services.settings_service import AppSettingsService
+
+async def _approved_message(
+    session: AsyncSession, # <-- Added session argument
     result: ApprovedPaymentResult,
     expire_at: datetime | None = None,
     ipv4_primary: str = "76.76.2.162",
@@ -135,20 +138,26 @@ def _approved_message(
         expire_str = target_expire.strftime("%Y-%m-%d %H:%M:%S") if target_expire else "-"
 
     duration_text = calculate_remaining_time_fa(target_expire)
+    
+    # --- DYNAMIC ADGUARD DB FETCH ---
+    app_settings = AppSettingsService(session)
+    agh_primary = await app_settings.get_setting("adguard_primary_ip") or "94.183.180.215"
+    agh_secondary = await app_settings.get_setting("adguard_secondary_ip") or "94.183.180.236"
+    
     settings = get_settings()
+    agh_doh = settings.adguard_doh_url
 
     agh_section = f"""
-🔹 Primary: <code>{escape(settings.adguard_primary_dns or 'تنظیم نشده')}</code>
-🔹 Secondary: <code>{escape(settings.adguard_secondary_dns or 'تنظیم نشده')}</code>"""
-    if settings.adguard_doh_url:
-        agh_section += f"\n🌐 DoH: <code>{escape(settings.adguard_doh_url)}</code>"
+🔹 Primary: <code>{escape(agh_primary)}</code>
+🔹 Secondary: <code>{escape(agh_secondary)}</code>"""
+    if agh_doh:
+        agh_section += f"\n🌐 DoH: <code>{escape(agh_doh)}</code>"
 
     return f"""✅ <b>پرداخت شما تایید و اشتراک فعال شد!</b>
 
 🔹 <b>تاریخ انقضاء:</b> <code>{escape(expire_str)}</code>
 🔷 <b>زمان باقی‌مانده:</b> {escape(duration_text)}
 ━━━━━━━━━━━━━━━━━━━━━
-
 {agh_section}
 
 🔹 Primary: <code>{escape(ipv4_primary)}</code>
@@ -164,7 +173,6 @@ async def get_controld_device_ips(device_id: str, settings: Settings) -> dict:
         if config["device_id"] == device_id:
             return {"ipv4_primary": config["dns_primary"], "ipv4_secondary": config["dns_secondary"]}
     return {"ipv4_primary": "76.76.2.162", "ipv4_secondary": "76.76.10.162"}
-
 
 async def _is_admin(telegram_id: int | None, session: AsyncSession, settings: Settings) -> bool:
     if telegram_id is None:
@@ -277,6 +285,31 @@ async def admin_action_navigation(
             f"🎥 <b>لینک ویدیو آموزشی:</b>\n<code>{escape(link or 'ثبت نشده')}</code>",
             reply_markup=builder.as_markup(),
             parse_mode="HTML",
+        )
+        return
+
+    if action == "adguard_admin":
+        app_settings = AppSettingsService(session)
+        ag_primary = await app_settings.get_setting("adguard_primary_ip") or "94.183.180.215"
+        ag_secondary = await app_settings.get_setting("adguard_secondary_ip") or "94.183.180.236"
+
+        builder = InlineKeyboardBuilder()
+        
+        # USE CUSTOM CALLBACKS HERE:
+        builder.button(text="✏️ ویرایش DNS اصلی", callback_data="edit_ag:adguard_primary_ip")
+        builder.button(text="✏️ ویرایش DNS جایگزین", callback_data="edit_ag:adguard_secondary_ip")
+        
+        builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="cat_settings"))
+        builder.adjust(1)
+
+
+        await callback.message.edit_text(
+            f"🛡 <b>مدیریت سرورهای AdGuard</b>\n\n"
+            f"🔹 <b>DNS اصلی:</b> <code>{escape(ag_primary)}</code>\n"
+            f"🔹 <b>DNS جایگزین:</b> <code>{escape(ag_secondary)}</code>\n\n"
+            f"برای تغییر آدرس‌ها، روی دکمه‌های زیر کلیک کنید:",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML"
         )
         return
 
@@ -1138,3 +1171,49 @@ async def fsm_edit_plan_value(message: Message, state: FSMContext, session: Asyn
         await state.clear()
         await callback.message.edit_text("❌ عملیات افزودن تعرفه لغو شد.")
         await _show_plans(callback, session)
+
+# ---------------------------------------------------------
+# 4. ADGUARD DNS EDITOR
+# ---------------------------------------------------------
+class AdminAdGuardState(StatesGroup):
+    waiting_for_ip = State()
+
+# NO INDENTATION BEFORE @router
+@router.callback_query(F.data.startswith("edit_ag:"), StateFilter("*"))
+async def prompt_adguard_ip(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    key = callback.data.split(":")[1]
+    key_name = "اصلی (Primary)" if key == "adguard_primary_ip" else "جایگزین (Secondary)"
+    
+    await state.update_data(setting_key=key)
+    await state.set_state(AdminAdGuardState.waiting_for_ip)
+    
+    await callback.message.edit_text(
+        f"🛡 <b>ویرایش DNS {key_name} AdGuard</b>\n\n"
+        f"لطفاً آی‌پی جدید را ارسال کنید:\n"
+        f"❌ لغو: <code>/cancel</code>",
+        parse_mode="HTML"
+    )
+
+# NO INDENTATION BEFORE @router
+@router.message(AdminAdGuardState.waiting_for_ip, F.text)
+async def save_adguard_ip(message: Message, state: FSMContext, session: AsyncSession):
+    new_ip = message.text.strip()
+    if new_ip.lower() == '/cancel':
+        await state.clear()
+        return await message.answer("❌ عملیات لغو شد.")
+        
+    data = await state.get_data()
+    key = data.get("setting_key")
+    
+    # Save directly to the Key-Value database
+    app_settings = AppSettingsService(session)
+    await app_settings.set_setting(key, new_ip)
+    await session.commit()
+    await state.clear()
+    
+    await message.answer(
+        f"✅ آی‌پی جدید با موفقیت در دیتابیس ذخیره شد:\n<code>{escape(new_ip)}</code>\n\n"
+        f"پنل وب کاربران به صورت آنی به این آی‌پی آپدیت شد.", 
+        parse_mode="HTML"
+    )

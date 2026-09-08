@@ -326,6 +326,7 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
             break
 
     text = render_dns_delivery_text(
+        session=session,
         expire_at=service.expire_at,
         ipv4_primary=ipv4_primary,
         ipv4_secondary=ipv4_secondary,
@@ -499,6 +500,7 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     await session.commit()
 
     success_text = render_dns_delivery_text(
+        session=session,
         expire_at=service.expire_at,
         ipv4_primary=ipv4_primary,
         ipv4_secondary=ipv4_secondary,

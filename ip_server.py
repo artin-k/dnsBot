@@ -40,6 +40,7 @@ from app.services.vpn_detector import verify_user_ip
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi import FastAPI, Request, Form, HTTPException, status, Query, Response
 from fastapi.staticfiles import StaticFiles # ADD THIS LINE
+from app.services.settings_service import AppSettingsService
 
 app = FastAPI(title="Control D Auto-IP & Payment Gateway")
 settings = get_settings()
@@ -324,6 +325,15 @@ async def user_dashboard_view(request: Request, token: str):
 
         # Define is_active status first for cleaner logic
         is_active_status = service.status == "active" and (service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at.tzinfo is None else service.expire_at) > now
+
+        # Fetch AdGuard IPs dynamically from the database
+        app_settings = AppSettingsService(session)
+        db_adguard_primary = await app_settings.get_setting("adguard_primary_ip")
+        db_adguard_secondary = await app_settings.get_setting("adguard_secondary_ip")
+        
+        # Fallback to defaults if the admin hasn't edited them yet
+        ag_primary = db_adguard_primary or "94.183.180.215"
+        ag_secondary = db_adguard_secondary or "94.183.180.236"
         
         context = {
             "request": request,
@@ -335,13 +345,13 @@ async def user_dashboard_view(request: Request, token: str):
             "plan": service.plan,
             "dns_primary": dns_ips["ipv4_primary"],
             "dns_secondary": dns_ips["ipv4_secondary"],
-            "adguard_primary": "94.183.180.215",
-            "adguard_secondary": "94.183.180.236",
             "duration_text": duration_text,
             "shamsi_expire": shamsi_expire,
             "is_active": is_active_status,
             "is_ip_synced": (service.authorized_ip == client_ip),
-            
+            # Fetch AdGuard IPs dynamically from the database
+            "adguard_primary": ag_primary,
+            "adguard_secondary": ag_secondary,
             # --- NEW ADDITIONS FOR UI ---
             "device_username": service.username.split('|')[0] if service.username else "کاربر",
             "subscription_status": "فعال" if is_active_status else "منقضی/غیرفعال"

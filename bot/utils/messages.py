@@ -1,4 +1,3 @@
-# bot/utils/messages.py
 from datetime import datetime, timezone
 from html import escape
 from zoneinfo import ZoneInfo
@@ -11,10 +10,11 @@ from app.config import get_settings
 from app.models import VPNService
 from app.utils.formatting import calculate_remaining_time_fa
 from bot.utils.auto_clean import schedule_message_deletion
+from app.services.settings_service import AppSettingsService
 
-
-def render_dns_delivery_text(
+async def render_dns_delivery_text(
     *,
+    session: AsyncSession,
     expire_at: datetime | None,
     ipv4_primary: str,
     ipv4_secondary: str,
@@ -40,9 +40,10 @@ def render_dns_delivery_text(
 
     duration_text = calculate_remaining_time_fa(expire_at)
 
-    # Build AdGuard Home Section
-    agh_primary = settings.adguard_primary_dns or "94.183.180.215"
-    agh_secondary = settings.adguard_secondary_dns or "94.183.180.236"
+    # Fetch AdGuard Home Section dynamically from database
+    app_settings = AppSettingsService(session)
+    agh_primary = await app_settings.get_setting("adguard_primary_ip") or "94.183.180.215"
+    agh_secondary = await app_settings.get_setting("adguard_secondary_ip") or "94.183.180.236"
     agh_doh = settings.adguard_doh_url
 
     adguard_block = f"""
@@ -58,7 +59,6 @@ def render_dns_delivery_text(
 🎮 <b>سرویس/بازی:</b> <b>{escape(service_display)}</b>
 🗺️ <b>سرور انتخابی:</b> <b>{escape(country_display)}</b>
 ━━━━━━━━━━━━━━━━━━━━━
-
 {adguard_block}
 
 🔹 Primary: <code>{escape(ipv4_primary)}</code>
@@ -87,7 +87,9 @@ async def send_dns_delivery_card(
     """One-line helper that renders text, attaches simple keyboard, and schedules auto-deletion."""
     from bot.routers.services import create_secure_ip_update_keyboard
 
-    text = render_dns_delivery_text(
+    # Generate text asynchronously from the database
+    text = await render_dns_delivery_text(
+        session=session,
         expire_at=service.expire_at,
         ipv4_primary=ipv4_primary,
         ipv4_secondary=ipv4_secondary,
