@@ -336,10 +336,11 @@ async def user_dashboard_view(request: Request, token: str):
         db_adguard_primary = await app_settings.get_setting("adguard_primary_ip")
         db_adguard_secondary = await app_settings.get_setting("adguard_secondary_ip")
         
-        # Replace these fallback strings with your actual true AdGuard IPs if they aren't set in DB yet
-        ag_primary = db_adguard_primary or "109.94.164.210"   # Your true AdGuard primary
-        ag_secondary = db_adguard_secondary | "76.76.2.175"  # Or whatever your true secondary is
-        
+        # Fetch exact database settings using the explicit lowercase keys
+        app_settings = AppSettingsService(session)
+        ag_primary = await app_settings.get_setting("adguard_primary_ip") or "109.94.164.210"
+        ag_secondary = await app_settings.get_setting("adguard_secondary_ip") or "76.76.2.175"
+                
         context = {
             "request": request,
             "token": token,
