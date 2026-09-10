@@ -21,16 +21,18 @@ UPSTREAM_PATTERN = re.compile(
 )
 
 
-def validate_network_target(target: str) -> str:
+def validate_network_target(target: str | None) -> str:
     """Validates IPv4/IPv6 address or CIDR notation."""
-    cleaned = target.strip()
+    if not target:
+        raise ValueError("Target IP cannot be empty or None")
+        
+    cleaned = str(target).strip()
     try:
         if "/" in cleaned:
             return str(ipaddress.ip_network(cleaned, strict=False))
         return str(ipaddress.ip_address(cleaned))
     except ValueError as exc:
         raise ValueError(f"Invalid IP/CIDR target: {cleaned}") from exc
-
 
 def validate_upstream_spec(upstream: str) -> str:
     cleaned = upstream.strip()
@@ -99,11 +101,11 @@ class AdGuardHomeService:
                 logger.error("adguard_client_network_error", endpoint=endpoint, error=str(exc))
                 return None, str(exc)
 
-    # --- Access Control List (Whitelist Authorization & Deauthorization) ---
-    async def allow_client_ip(self, ip_address: str) -> bool:
+    async def allow_client_ip(self, ip_address: str | None) -> bool:
         """Authorizes a client IP in AdGuard Home's allowed_clients list."""
-        if not self.is_configured():
-            return True
+        # Fix: Reject safely if no IP is provided
+        if not self.is_configured() or not ip_address:
+            return False
 
         try:
             valid_ip = validate_network_target(ip_address)
@@ -179,9 +181,10 @@ class AdGuardHomeService:
                 return True
             return False
 
-    async def deauthorize_client_ip(self, ip_address: str) -> bool:
+    async def deauthorize_client_ip(self, ip_address: str | None) -> bool:
         """Deauthorizes (removes) a client IP from AdGuard Home's allowed_clients list."""
-        if not self.is_configured():
+        # Fix: Immediately return True if the IP is empty/None (common for test accounts)
+        if not self.is_configured() or not ip_address:
             return True
 
         try:

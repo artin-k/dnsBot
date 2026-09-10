@@ -1,5 +1,5 @@
 import logging
-
+import asyncio
 import structlog
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -13,6 +13,7 @@ from app.database import async_session_maker
 from bot.middlewares.db import DbSessionMiddleware
 from bot.middlewares.mandatory_channels import DynamicMandatoryJoinMiddleware
 from bot.routers import admin, admin_plans, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet, test_account
+from bot.utils.auto_clean import auto_cleaner_task
 
 
 def setup_logging() -> None:
@@ -28,7 +29,6 @@ def setup_logging() -> None:
         cache_logger_on_first_use=True,
     )
 
-
 def create_bot(settings: Settings) -> Bot:
     # Simplified direct creation without custom AiohttpSession proxy parameters
     return Bot(
@@ -36,10 +36,18 @@ def create_bot(settings: Settings) -> Bot:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+async def on_startup(bot: Bot):
+    logger = structlog.get_logger(__name__)
+    logger.info("Starting background tasks...")
+    asyncio.create_task(auto_cleaner_task(bot))
 
 def create_dispatcher(settings: Settings) -> Dispatcher:
     storage = _create_storage(settings)
     dp = Dispatcher(storage=storage, settings=settings)
+
+    # 🔥 ADDED: Hook the startup event to the dispatcher
+    dp.startup.register(on_startup)
+
     db_middleware = DbSessionMiddleware(async_session_maker)
     dp.update.middleware(db_middleware)
 
