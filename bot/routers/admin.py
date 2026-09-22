@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import hashlib
+import ipaddress
 from datetime import datetime, timezone
 from html import escape
 from zoneinfo import ZoneInfo
@@ -35,11 +36,12 @@ from aiogram.types import Message, CallbackQuery
 import asyncio
 from aiogram import Router, F
 from sqlalchemy import or_
-from bot.keyboards.admin import AdminServiceCallback, service_detail_keyboard
 
 from sqlalchemy import func
 from aiogram.types import InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+# Sub-routers
+from bot.routers import admin_orders, admin_plans, admin_services
 
 from bot.routers.services import is_service_active
 
@@ -110,6 +112,8 @@ from app.models import ConfigInventory, AffiliateCommission, Payment, Order
 
 router = Router(name="admin")
 router.include_router(admin_orders.router)
+router.include_router(admin_plans.router)
+router.include_router(admin_services.router)
 
 logger = structlog.get_logger(__name__)
 WEB_SERVER_BASE_URL = get_settings().public_web_base_url
@@ -320,7 +324,7 @@ async def admin_action_navigation(
         return
 
     if action == "services":
-        await show_admin_services_list(callback, page=0, session=session)
+        await show_admin_services_list(callback, session, page=0)
         return
 
     if action == "test_accounts":
@@ -369,6 +373,10 @@ async def admin_action_navigation(
             reply_markup=admin_services_keyboard(), 
             parse_mode="HTML"
         )
+    if callback_data.action == "list":
+        await show_admin_services_list(callback, session, page=callback_data.page)
+        return
+    
     return
 
     
@@ -585,142 +593,6 @@ async def execute_user_search(message: Message, state: FSMContext, session: Asyn
     )
 
 
-class AdminServiceSearchState(StatesGroup):
-    waiting_for_query = State()
-
-@router.callback_query(AdminServiceCallback.filter())
-async def admin_service_callback_handler(callback: CallbackQuery, callback_data: AdminServiceCallback, state: FSMContext, session: AsyncSession):
-    action = callback_data.action
-    service_id = callback_data.service_id
-    await callback.answer()
-    
-    if action == "search":
-        await callback.message.edit_text(
-            "🔎 <b>جستجوی اشتراک</b>\n\nلطفاً آی‌پی (IP) یا نام کاربری دستگاه را ارسال کنید:\n❌ لغو: `/cancel`",
-            parse_mode="HTML"
-        )
-        await state.set_state(AdminServiceSearchState.waiting_for_query)
-        return
-        
-    if action == "detail":
-        stmt = select(VPNService).options(joinedload(VPNService.user)).where(VPNService.id == service_id)
-        res = await session.execute(stmt)
-        service = res.scalars().first()
-        
-        if not service:
-            return await callback.message.edit_text("❌ اشتراک یافت نشد.")
-            
-        status_fa = "🟢 فعال" if service.status == "active" else "🔴 غیرفعال"
-        ip = service.authorized_ip or "ثبت نشده"
-        owner = f"@{service.user.telegram_username}" if service.user and service.user.telegram_username else str(service.user.telegram_id if service.user else "نامشخص")
-        
-        text = (
-            f"🛍 <b>جزئیات اشتراک DNS</b>\n\n"
-            f"👤 <b>نام دستگاه:</b> <code>{escape(service.username or 'ندارد')}</code>\n"
-            f"👑 <b>مالک:</b> {escape(owner)}\n"
-            f"📌 <b>وضعیت:</b> {status_fa}\n"
-            f"🌐 <b>آی‌پی فعال:</b> <code>{escape(ip)}</code>\n"
-            f"🆔 <b>شناسه سرور:</b> <code>{escape(service.controld_device_id or 'ندارد')}</code>"
-        )
-        await callback.message.edit_text(text, reply_markup=service_detail_keyboard(service), parse_mode="HTML")
-        return
-
-@router.message(AdminServiceSearchState.waiting_for_query, F.text)
-async def execute_service_search(message: Message, state: FSMContext, session: AsyncSession):
-    query = message.text.strip()
-    if query.lower() == '/cancel':
-        await state.clear()
-        return await message.answer("لغو شد.")
-        
-    await state.clear()
-    wait_msg = await message.answer("⏳ در حال جستجو...")
-    
-    from sqlalchemy import or_
-    stmt = select(VPNService).where(
-        or_(
-            VPNService.authorized_ip.ilike(f"%{query}%"),
-            VPNService.username.ilike(f"%{query}%")
-        )
-    ).limit(30)
-    res = await session.execute(stmt)
-    services = list(res.scalars().all())
-    
-    await wait_msg.delete()
-    if not services:
-        return await message.answer("❌ اشتراکی یافت نشد.")
-        
-    await message.answer(f"🔎 نتایج برای «{escape(query)}»:", reply_markup=services_admin_keyboard(services))
-
-
-async def show_admin_services_list(callback: CallbackQuery, page: int, session: AsyncSession):
-    # 1. Total count
-    count_stmt = select(func.count(VPNService.id)).where(VPNService.is_test_account == False)
-    total_count = (await session.execute(count_stmt)).scalar() or 0
-    total_pages = max(1, (total_count + PAGE_SIZE - 1) // PAGE_SIZE)
-    page = max(0, min(page, total_pages - 1))
-
-    # 2. Fetch page items with user joined
-    stmt = (
-        select(VPNService)
-        .options(joinedload(VPNService.user))
-        .where(VPNService.is_test_account == False)
-        .order_by(VPNService.id.desc())
-        .offset(page * PAGE_SIZE)
-        .limit(PAGE_SIZE)
-    )
-    res = await session.execute(stmt)
-    services = list(res.scalars().all())
-
-    if not services:
-        return await callback.message.edit_text(
-            "🛍 هیچ اشتراک فعالی در دیتابیس یافت نشد.",
-            reply_markup=admin_services_keyboard()
-        )
-
-    # 3. Format detailed text list
-    lines = [f"🛍 <b>لیست اشتراک‌های DNS</b> (صفحه {page + 1} از {total_pages} | کل: {total_count})\n"]
-    now = datetime.now(timezone.utc)
-    
-    for s in services:
-        owner = f"@{s.user.telegram_username}" if s.user and s.user.telegram_username else str(s.user.telegram_id if s.user else "نامشخص")
-        ip = s.authorized_ip if s.authorized_ip else "❌ ثبت نشده"
-        
-        # Safe inline activity check
-        is_active = False
-        if s.status != "disabled" and s.expire_at:
-            exp = s.expire_at.replace(tzinfo=timezone.utc) if s.expire_at.tzinfo is None else s.expire_at
-            is_active = exp > now
-            
-        status_emoji = "🟢 فعال" if is_active else "🔴 منقضی/غیرفعال"
-        raw_name = (s.username or "نامشخص").split("|")[0].strip()
-        
-        lines.append(
-            f"🆔 <b>شناسه:</b> <code>#{s.id}</code>\n"
-            f"👤 <b>کاربر:</b> {escape(owner)}\n"
-            f"📱 <b>دستگاه:</b> <code>{escape(raw_name)}</code>\n"
-            f"🌐 <b>آی‌پی فعال:</b> <code>{escape(ip)}</code>\n"
-            f"📌 <b>وضعیت:</b> {status_emoji}\n"
-            f"────────────────────"
-        )
-
-    text_content = "\n".join(lines)
-
-    # 4. Navigation buttons
-    builder = InlineKeyboardBuilder()
-    nav_row = []
-    if page > 0:
-        nav_row.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"admin_svc_page:{page - 1}"))
-    if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"admin_svc_page:{page + 1}"))
-    
-    if nav_row:
-        builder.row(*nav_row)
-        
-    builder.row(InlineKeyboardButton(text="↩️ بازگشت به منوی سرویس‌ها", callback_data=AdminActionCallback(action="cat_services").pack()))
-
-    await callback.message.edit_text(text_content, reply_markup=builder.as_markup(), parse_mode="HTML")
-
-
 @router.callback_query(F.data.startswith("admin_svc_page:"), StateFilter("*"))
 async def handle_admin_svc_page(callback: CallbackQuery, session: AsyncSession):
     await callback.answer()
@@ -731,6 +603,98 @@ async def handle_admin_svc_page(callback: CallbackQuery, session: AsyncSession):
         await show_admin_services_list(callback, page=page, session=session)
     except Exception as e:
         await callback.message.answer(f"❌ خطا در تغییر صفحه: {str(e)}")
+
+
+# ============================================================================
+# SERVICE HELPERS (RESOLVES show_admin_services_list UNDEFINED ERROR)
+# ============================================================================
+
+def _format_service_card(service: VPNService) -> str:
+    user = service.user
+    user_str = (
+        f"{escape(user.first_name or 'کاربر')} | @{escape(user.telegram_username or 'ندارد')} (ID: <code>{user.telegram_id}</code>)"
+        if user
+        else "نامشخص"
+    )
+
+    raw_username = service.username or ""
+    clean_name = raw_username.split("|")[0].strip()
+
+    country_display = "پیش‌فرض"
+    for cfg in SLOT_CONFIGS.values():
+        if cfg["device_id"] == service.controld_device_id:
+            country_display = cfg["name"]
+            break
+
+    now = datetime.now(timezone.utc)
+    exp = (
+        service.expire_at.replace(tzinfo=timezone.utc)
+        if service.expire_at and service.expire_at.tzinfo is None
+        else service.expire_at
+    )
+
+    if service.status == "disabled":
+        status_fa = "🔴 غیرفعال (قطع توسط ادمین)"
+    elif exp and exp <= now:
+        status_fa = "🟡 منقضی شده"
+    else:
+        status_fa = "🟢 فعال"
+
+    tehran_tz = ZoneInfo("Asia/Tehran")
+    try:
+        shamsi_expire = jdatetime.datetime.fromgregorian(
+            datetime=exp.astimezone(tehran_tz).replace(tzinfo=None)
+        ).strftime("%Y/%m/%d - %H:%M")
+    except Exception:
+        shamsi_expire = exp.strftime("%Y-%m-%d %H:%M") if exp else "-"
+
+    duration_text = calculate_remaining_time_fa(exp)
+
+    return f"""🛍 <b>مدیریت اشتراک DNS (شناسه: {service.id})</b>
+
+👤 <b>کاربر:</b> {user_str}
+📱 <b>نام دستگاه:</b> <code>{escape(clean_name)}</code>
+📌 <b>وضعیت:</b> {status_fa}
+🗺 <b>سرور (لوکیشن):</b> {escape(country_display)}
+🌐 <b>آی‌پی فعال:</b> <code>{escape(service.authorized_ip or 'ثبت نشده ❌')}</code>
+⚡ <b>تعرفه:</b> {escape(service.plan.title if service.plan else ('اکانت تست' if service.is_test_account else 'نامشخص'))}
+⏳ <b>زمان باقی‌مانده:</b> {duration_text}
+🗓 <b>تاریخ انقضاء:</b> <code>{escape(shamsi_expire)}</code>"""
+
+
+async def show_admin_services_list(
+    event: Message | CallbackQuery,
+    session: AsyncSession,
+    page: int = 0,
+) -> None:
+    limit = 8
+    offset = page * limit
+
+    stmt = (
+        select(VPNService)
+        .options(joinedload(VPNService.user), joinedload(VPNService.plan))
+        .order_by(VPNService.created_at.desc())
+        .offset(offset)
+        .limit(limit + 1)
+    )
+    res = await session.execute(stmt)
+    services = list(res.scalars().unique().all())
+    has_next = len(services) > limit
+    if has_next:
+        services = services[:limit]
+
+    text = f"🛍 <b>لیست اشتراک‌های DNS (صفحه {page + 1}):</b>\n\nبرای مشاهده و مدیریت هر اشتراک، روی آن کلیک کنید:"
+
+    from bot.keyboards.admin import services_admin_keyboard
+    reply_markup = services_admin_keyboard(services, page=page, has_next=has_next)
+
+    if isinstance(event, CallbackQuery) and event.message:
+        try:
+            await event.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception:
+            await event.message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+    elif isinstance(event, Message):
+        await event.answer(text, reply_markup=reply_markup, parse_mode="HTML")
 
 
 @router.callback_query(AdminUserCallback.filter())
@@ -1217,3 +1181,114 @@ async def save_adguard_ip(message: Message, state: FSMContext, session: AsyncSes
         f"پنل وب کاربران به صورت آنی به این آی‌پی آپدیت شد.", 
         parse_mode="HTML"
     )
+
+    # ============================================================================
+# SUBSCRIPTION SEARCH (HANDLES @username, TELEGRAM ID, AND IP)
+# ============================================================================
+
+@router.message(AdminSearchStates.waiting_service_query, Command("cancel"))
+async def cancel_service_search(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("❌ جستجو لغو شد.")
+
+
+@router.message(AdminSearchStates.waiting_service_query, F.text)
+async def execute_service_search(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    raw_query = (message.text or "").strip()
+
+    if raw_query.lower() == "/cancel":
+        await state.clear()
+        await message.answer("\u274c جستجو لغو شد.")
+        return
+
+    try:
+        # Normalize Persian/Arabic digits and common Telegram URL forms.
+        persian_to_eng = str.maketrans(
+            "\u06f0\u06f1\u06f2\u06f3\u06f4\u06f5\u06f6\u06f7\u06f8\u06f9\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669",
+            "01234567890123456789",
+        )
+        clean_query = raw_query.translate(persian_to_eng)
+        for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+            if clean_query.lower().startswith(prefix):
+                clean_query = clean_query[len(prefix):]
+                break
+        clean_query = clean_query.strip().lstrip("@").strip()
+
+        if not clean_query:
+            await message.answer("\u274c لطفاً یک عبارت معتبر برای جستجو وارد کنید.")
+            return
+
+        # A syntactically valid IP is searched as an IP, not as a username.
+        # Everything else is treated as a username/device name. Numeric
+        # Telegram/service IDs remain supported for backwards compatibility.
+        try:
+            ipaddress.ip_address(clean_query)
+            is_ip = True
+        except ValueError:
+            is_ip = False
+
+        if is_ip:
+            conditions = [VPNService.authorized_ip == clean_query]
+        else:
+            conditions = [
+                User.telegram_username.ilike(f"%{clean_query}%"),
+                VPNService.username.ilike(f"%{clean_query}%"),
+            ]
+            if clean_query.isdigit():
+                num_val = int(clean_query)
+                conditions.extend([
+                    User.telegram_id == num_val,
+                    VPNService.id == num_val,
+                    VPNService.user_id == num_val,
+                ])
+
+        stmt = (
+            select(VPNService)
+            .join(User, VPNService.user_id == User.id)
+            .options(joinedload(VPNService.user), joinedload(VPNService.plan))
+            .where(or_(*conditions))
+            .order_by(VPNService.created_at.desc())
+            .limit(15)
+        )
+        res = await session.execute(stmt)
+        services = list(res.scalars().unique().all())
+
+        if not services:
+            user_conditions = [User.telegram_username.ilike(f"%{clean_query}%")]
+            if clean_query.isdigit():
+                user_conditions.append(User.telegram_id == int(clean_query))
+            matched_user = await session.scalar(select(User).where(or_(*user_conditions)))
+
+            if matched_user:
+                uname = (
+                    f"@{matched_user.telegram_username}"
+                    if matched_user.telegram_username
+                    else (matched_user.first_name or str(matched_user.telegram_id))
+                )
+                await message.answer(
+                    f"👤 کاربر <b>{escape(uname)}</b> (آیدی: <code>{matched_user.telegram_id}</code>) "
+                    "یافت شد، اما <b>هیچ اشتراک DNS ثبت‌شده‌ای ندارد</b>.",
+                    parse_mode="HTML",
+                )
+            else:
+                await message.answer(
+                    f"❌ اشتراکی با این مشخصات یافت نشد: «<code>{escape(raw_query)}</code>»",
+                    parse_mode="HTML",
+                )
+            return
+
+        await message.answer(
+            f"🔎 نتایج جستجو برای «<b>{escape(raw_query)}</b>» ({len(services)} اشتراک یافت شد):",
+            reply_markup=services_admin_keyboard(services),
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.exception("admin_service_search_failed", query=raw_query)
+        await message.answer(
+            "❌ هنگام جستجوی اشتراک خطایی رخ داد. لطفاً دوباره تلاش کنید.",
+            parse_mode="HTML",
+        )
+    finally:
+        # Always leave the FSM, including invalid input and database/API errors.
+        await state.clear()
+

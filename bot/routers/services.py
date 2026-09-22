@@ -380,15 +380,23 @@ async def _show_default_loc_page(
     current_device = service.controld_device_id
     is_germany_active = current_device == SLOT_CONFIGS[1]["device_id"]
     is_turkey_active = current_device == SLOT_CONFIGS[5]["device_id"]
+    is_uae_active = current_device == SLOT_CONFIGS[4]["device_id"]  # <--- ADD THIS
 
+    # Germany Button
     builder.button(
         text="🇩🇪 آلمان (فرانکفورت)" + (" (فعال)" if is_germany_active else ""),
         callback_data=f"apply_def_loc:{service.id}:1",
     )
+    # Turkey Button
     builder.button(
         text="🇹🇷 ترکیه (استانبول)" + (" (فعال)" if is_turkey_active else ""),
         callback_data=f"apply_def_loc:{service.id}:5",
     )
+    # Emirates Button
+    builder.button(
+        text="🇦🇪 امارات (دبی)" + (" (فعال)" if is_uae_active else ""),
+        callback_data=f"apply_def_loc:{service.id}:4",
+    )  # <--- ADD THIS
     builder.button(
         text="🔙 بازگشت به مدیریت",
         callback_data=f"manage_service:{service.id}",
@@ -400,6 +408,8 @@ async def _show_default_loc_page(
         if is_germany_active
         else "🇹🇷 ترکیه (استانبول)"
         if is_turkey_active
+        else "🇦🇪 امارات (دبی)"
+        if is_uae_active
         else "سایر سرورها"
     )
 

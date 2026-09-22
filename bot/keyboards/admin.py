@@ -1,11 +1,17 @@
+from datetime import datetime, timezone
+from re import escape
+from ssl import SSLContext
+
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import delete, select
+from aiohttp.web_routedef import route
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.config import Settings
 from app.models import VPNService, IPAuthToken
@@ -21,6 +27,7 @@ from app.models import (
     WalletWithdrawalRequest,
 )
 from app.services.settings_service import SETTING_DEFINITIONS
+from bot.states.admin import AdminSearchStates
 
 
 class AdminActionCallback(CallbackData, prefix="adm"):
@@ -61,6 +68,8 @@ class AdminUserCallback(CallbackData, prefix="adm_user"):
 class AdminServiceCallback(CallbackData, prefix="adm_svc"):
     action: str
     service_id: int = 0
+    page: int = 0
+    slot_num: int = 0
 
 
 class AdminAffiliateCallback(CallbackData, prefix="adm_aff"):
@@ -178,7 +187,7 @@ def admin_payments_keyboard() -> InlineKeyboardMarkup:
 
 def admin_services_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="🛍 لیست اشتراک‌های DNS", callback_data=AdminActionCallback(action="services"))
+    builder.button(text="🛍 لیست اشتراک‌های DNS", callback_data=AdminServiceCallback(action="list")) # <--- Changed to AdminServiceCallback
     builder.button(text="🔎 جستجوی اشتراک DNS", callback_data=AdminServiceCallback(action="search"))
     builder.button(text="🔑 اکانت تست", callback_data=AdminActionCallback(action="test_accounts"))
     builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="panel"))
@@ -521,24 +530,104 @@ def user_detail_keyboard(user: User, *, viewer_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def services_admin_keyboard(services: list[VPNService]) -> InlineKeyboardMarkup:
+def services_admin_keyboard(
+    services: list[VPNService],
+    page: int = 0,
+    has_next: bool = False,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔎 جستجوی اشتراک DNS", callback_data=AdminServiceCallback(action="search"))
+    builder.button(text="🔎 جستجوی مجدد اشتراک", callback_data=AdminServiceCallback(action="search"))
+
+    now = datetime.now(timezone.utc)
     for service in services:
-        builder.button(text=f"🛍 {service.username}", callback_data=AdminServiceCallback(action="detail", service_id=service.id))
-    builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="panel"))
+        exp = service.expire_at.replace(tzinfo=timezone.utc) if service.expire_at and service.expire_at.tzinfo is None else service.expire_at
+
+        if service.status == "disabled":
+            emoji = "🔴"
+        elif exp and exp <= now:
+            emoji = "🟡"
+        else:
+            emoji = "🟢"
+
+        # Show actual Telegram username or First Name on the button
+        user_label = ""
+        if service.user:
+            if service.user.telegram_username:
+                user_label = f"@{service.user.telegram_username}"
+            elif service.user.first_name:
+                user_label = service.user.first_name
+            else:
+                user_label = str(service.user.telegram_id)
+
+        clean_device = (service.username or "دستگاه").split("|")[0].strip()
+        btn_text = f"{emoji} {user_label} | {clean_device}" if user_label else f"{emoji} {clean_device} (ID: {service.id})"
+
+        builder.button(
+            text=btn_text,
+            callback_data=AdminServiceCallback(action="detail", service_id=service.id, page=page),
+        )
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=AdminServiceCallback(action="list", page=page - 1).pack()))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=AdminServiceCallback(action="list", page=page + 1).pack()))
+    if nav:
+        builder.row(*nav)
+
+    builder.row(InlineKeyboardButton(text="↩️ بازگشت به منوی سرویس‌ها", callback_data=AdminActionCallback(action="cat_services").pack()))
     builder.adjust(1)
     return builder.as_markup()
 
 
-def service_detail_keyboard(service: VPNService) -> InlineKeyboardMarkup:
+def service_detail_keyboard(service: VPNService, page: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="🟢 فعال کردن", callback_data=AdminServiceCallback(action="activate", service_id=service.id))
-    builder.button(text="🔴 غیرفعال کردن", callback_data=AdminServiceCallback(action="disable", service_id=service.id))
-    builder.button(text="🗓 تمدید دستی", callback_data=AdminServiceCallback(action="extend", service_id=service.id))
-    builder.button(text="🔗 ویرایش DoH", callback_data=AdminServiceCallback(action="edit_config", service_id=service.id))
-    builder.button(text="🔗 ویرایش DoT", callback_data=AdminServiceCallback(action="edit_sub", service_id=service.id))
-    builder.button(text="↩️ بازگشت", callback_data=AdminActionCallback(action="services"))
+
+    # Dynamic Activate / Deactivate Toggle
+    if service.status == "active":
+        builder.button(
+            text="🔴 غیرفعال کردن (قطع دسترسی)",
+            callback_data=AdminServiceCallback(action="disable", service_id=service.id, page=page),
+        )
+    else:
+        builder.button(
+            text="🟢 فعال کردن (وصل مجدد)",
+            callback_data=AdminServiceCallback(action="activate", service_id=service.id, page=page),
+        )
+
+    builder.button(
+        text="🗓 تمدید دستی (افزایش روز)",
+        callback_data=AdminServiceCallback(action="extend", service_id=service.id, page=page),
+    )
+
+    if service.authorized_ip:
+        builder.button(
+            text="🧹 حذف آی‌پی ثبت‌شده (ریست IP)",
+            callback_data=AdminServiceCallback(action="clear_ip", service_id=service.id, page=page),
+        )
+
+    builder.button(
+        text="🗺 تغییر سرور (لوکیشن)",
+        callback_data=AdminServiceCallback(action="change_loc_menu", service_id=service.id, page=page),
+    )
+    builder.button(
+        text="🗑 حذف کامل اشتراک",
+        callback_data=AdminServiceCallback(action="delete_confirm", service_id=service.id, page=page),
+    )
+    builder.button(
+        text="↩️ بازگشت به لیست",
+        callback_data=AdminServiceCallback(action="list", page=page),
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def service_change_loc_keyboard(service_id: int, page: int = 0) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🇩🇪 آلمان (فرانکفورت)", callback_data=AdminServiceCallback(action="apply_loc", service_id=service_id, slot_num=1, page=page))
+    builder.button(text="🇹🇷 ترکیه (استانبول)", callback_data=AdminServiceCallback(action="apply_loc", service_id=service_id, slot_num=5, page=page))
+    builder.button(text="🇦🇪 امارات (دبی)", callback_data=AdminServiceCallback(action="apply_loc", service_id=service_id, slot_num=4, page=page))  # <--- ADD THIS
+    builder.button(text="↩️ انصراف", callback_data=AdminServiceCallback(action="detail", service_id=service_id, page=page))
     builder.adjust(1)
     return builder.as_markup()
 

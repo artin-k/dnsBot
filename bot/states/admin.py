@@ -30,6 +30,9 @@ class AdminEditTestAccountStates(StatesGroup):
 
 
 class AdminSearchStates(StatesGroup):
+    query = State()                   # if you had this
+    waiting_user_query = State()      # if you had this
+    waiting_service_query = State()   # <--- ADD THIS LINE
     user_query = State()
     service_query = State()
     affiliate_user_query = State()

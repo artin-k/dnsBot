@@ -62,6 +62,7 @@ async def show_locations(event: Message | CallbackQuery, state: FSMContext, sess
     builder = InlineKeyboardBuilder()
     builder.button(text="🇩🇪 آلمان (فرانکفورت)", callback_data="buy_pick_loc:1")
     builder.button(text="🇹🇷 ترکیه (استانبول)", callback_data="buy_pick_loc:5")
+    builder.button(text="🇦🇪 امارات (دبی)", callback_data="buy_pick_loc:4")  # <--- ADD THIS
     builder.button(text="🎁 دریافت اکانت تست (۲ ساعته) 🆓", callback_data="get_test_account")
     builder.button(text="↩️ بازگشت به منوی اصلی", callback_data="buy_back_to_menu")
     builder.adjust(1)
@@ -70,8 +71,7 @@ async def show_locations(event: Message | CallbackQuery, state: FSMContext, sess
 
 لطفاً سرور مورد نظر خود را برای خرید اشتراک انتخاب کنید:
 
-💡 <i>نکته: شما می‌توانید بعد از خرید هر زمان که مایل بودید لوکیشن را بین آلمان و ترکیه در بخش «اشتراک‌های من» به صورت نامحدود و رایگان تغییر دهید.</i>"""
-
+💡 <i>نکته: شما می‌توانید بعد از خرید هر زمان که مایل بودید لوکیشن را بین آلمان، ترکیه و امارات در بخش «اشتراک‌های من» به صورت نامحدود و رایگان تغییر دهید.</i>"""
     await safe_edit_or_reply(event, text, reply_markup=builder.as_markup())
 
 

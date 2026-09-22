@@ -12,7 +12,7 @@ from app.database import async_session_maker
 
 from bot.middlewares.db import DbSessionMiddleware
 from bot.middlewares.mandatory_channels import DynamicMandatoryJoinMiddleware
-from bot.routers import admin, admin_plans, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet, test_account
+from bot.routers import admin, buy, common, errors, mandatory_channels, menu, referral, services, start, support, tariffs, tutorials, tracking, verification, wallet, test_account
 from bot.utils.auto_clean import auto_cleaner_task
 
 

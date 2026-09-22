@@ -99,16 +99,24 @@ async def handle_get_test_account(
     # Render Germany (1) and Turkey (5) for test accounts
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="🇩🇪 آلمان (فرانکفورت) ",
-        callback_data="test_loc:1"
+        text="🇩🇪 آلمان (فرانکفورت) — پینگ پایدار ⚡",
+        callback_data="test_loc:1",
+        style="primary"
     )
     builder.button(
-        text="🇹🇷 ترکیه (استانبول) ",
-        callback_data="test_loc:5"
+        text="🇹🇷 ترکیه (استانبول) — کمترین پینگ گیمینگ 🚀",
+        callback_data="test_loc:5",
+        style="primary"
     )
+    builder.button(
+        text="🇦🇪 امارات (دبی) — مناسب بازی‌های خلیج فارس 🌴",
+        callback_data="test_loc:4",
+        style="primary"
+    )  # <--- ADD THIS
     builder.button(
         text="🔙 بازگشت به منو",
-        callback_data="buy_back_to_menu"
+        callback_data="buy_back_to_menu",
+        style="danger"
     )
     builder.adjust(1)
 
