@@ -215,7 +215,7 @@ async def _show_my_services_page(
                     callback_data=f"manage_links:{service.id}",
                 ),
                 InlineKeyboardButton(
-                    text="🛠 مدیریت",
+                    text="⚙️ تغییر لوکیشن",  
                     callback_data=f"manage_service:{service.id}",
                 ),
             )
