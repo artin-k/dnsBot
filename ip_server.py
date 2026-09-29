@@ -185,50 +185,547 @@ async def paystar_redirect(request: Request):
         return HTMLResponse(content=html_content)
     except Exception as exc: return _failed_html(f"خطای سرور: {str(exc)}", bot_user)
 
+# ============================================================================
+# PAYSTAR STATUS MESSAGES & GUIDED RESULT RENDERER
+# ============================================================================
+
+PAYSTAR_STATUS_DETAILS = {
+    1: {
+        "title": "پرداخت با موفقیت انجام شد",
+        "type": "success",
+        "icon": "✅",
+        "color": "#10b981",
+        "bg_glow": "rgba(16, 185, 129, 0.15)",
+        "message": "تراکنش بانکی شما تایید و اشتراک DNS بلافاصله فعال شد.",
+        "steps": [
+            "مشخصات اتصال، آدرس‌های DNS و راهنمای راه‌اندازی به تلگرام شما ارسال شد.",
+            "جهت ثبت خودکار آی‌پی یا تغییر لوکیشن، به ربات تلگرام مراجعه نمایید.",
+        ],
+    },
+    -98: {
+        "title": "انصراف از پرداخت",
+        "type": "cancelled",
+        "icon": "↩️",
+        "color": "#f59e0b",
+        "bg_glow": "rgba(245, 158, 11, 0.15)",
+        "message": "فرآیند پرداخت در صفحه شاپرک توسط شما لغو شد.",
+        "steps": [
+            "هیچ وجهی از حساب بانکی شما کسر نشده است.",
+            "برای تلاش مجدد، به ربات تلگرام بازگشته و مجدداً روی دکمه پرداخت آنلاین کلیک کنید.",
+            "در صورت بروز مشکل، می‌توانید از روش پرداخت کارت‌به‌کارت نیز استفاده نمایید.",
+        ],
+    },
+    -7: {
+        "title": "مهلت پرداخت منقضی شد",
+        "type": "failed",
+        "icon": "⏳",
+        "color": "#ef4444",
+        "bg_glow": "rgba(239, 68, 68, 0.15)",
+        "message": "زمان مجاز برای تکمیل تراکنش در درگاه شاپرک به پایان رسید.",
+        "steps": [
+            "اگر وجهی از حسابتان کسر شده باشد، حداکثر تا ۷۲ ساعت آینده توسط شبکه شاپرک عودت داده می‌شود.",
+            "لطفاً به ربات تلگرام بازگشته و سفارش جدیدی ثبت نمایید.",
+        ],
+    },
+    -8: {
+        "title": "شماره کارت نامعتبر است",
+        "type": "failed",
+        "icon": "💳",
+        "color": "#ef4444",
+        "bg_glow": "rgba(239, 68, 68, 0.15)",
+        "message": "پرداخت با کارت بانکی وارد شده مجاز نمی‌باشد.",
+        "steps": [
+            "لطفاً مطمئن شوید کارت عضو شتاب بوده و رمز پویای آن فعال است.",
+            "به ربات برگردید و با کارت بانکی دیگری اقدام به خرید نمایید.",
+        ],
+    },
+}
+
+
+def _render_payment_result_html(
+    *,
+    status_type: str,  # "success" | "failed" | "cancelled" | "support"
+    title: str,
+    heading: str,
+    description: str,
+    guidance_steps: list[str],
+    order_code: str | None = None,
+    ref_num: str | None = None,
+    amount_toman: int | None = None,
+    bot_username: str = "bot",
+) -> HTMLResponse:
+    """Renders a responsive, modern dark-themed Persian payment receipt with specific next steps."""
+    theme_colors = {
+        "success": {"color": "#10b981", "bg": "rgba(16, 185, 129, 0.12)", "border": "#10b981", "icon": "✅"},
+        "failed": {"color": "#ef4444", "bg": "rgba(239, 68, 68, 0.12)", "border": "#ef4444", "icon": "❌"},
+        "cancelled": {"color": "#f59e0b", "bg": "rgba(245, 158, 11, 0.12)", "border": "#f59e0b", "icon": "⚠️"},
+        "support": {"color": "#38bdf8", "bg": "rgba(56, 189, 248, 0.12)", "border": "#38bdf8", "icon": "🛠"},
+    }
+    t = theme_colors.get(status_type, theme_colors["failed"])
+
+    # Details rows
+    details_html = ""
+    if order_code:
+        details_html += f"""
+        <div class="info-row">
+            <span class="info-title">کد پیگیری سفارش:</span>
+            <span class="info-val font-monospace">{escape(str(order_code))}</span>
+        </div>"""
+    if ref_num:
+        details_html += f"""
+        <div class="info-row">
+            <span class="info-title">شماره مرجع بانکی (RefID):</span>
+            <span class="info-val font-monospace">{escape(str(ref_num))}</span>
+        </div>"""
+    if amount_toman:
+        details_html += f"""
+        <div class="info-row">
+            <span class="info-title">مبلغ پرداختی:</span>
+            <span class="info-val text-warning fw-bold">{amount_toman:,} تومان</span>
+        </div>"""
+
+    # Guidance items
+    steps_html = "".join([f"<li>{escape(step)}</li>" for step in guidance_steps])
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{escape(title)}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600;700;900&display=swap');
+        :root {{
+            --bg-dark: #090d16;
+            --card-dark: #111827;
+            --border-dark: #1f293d;
+        }}
+        body {{
+            font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-dark);
+            color: #f9fafb;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 30px 14px;
+            margin: 0;
+        }}
+        .receipt-card {{
+            background-color: var(--card-dark);
+            border: 1px solid var(--border-dark);
+            border-top: 4px solid {t['border']};
+            border-radius: 18px;
+            padding: 32px 24px;
+            max-width: 540px;
+            width: 100%;
+            box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.6);
+            text-align: center;
+        }}
+        .icon-circle {{
+            width: 76px;
+            height: 76px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 36px;
+            background-color: {t['bg']};
+            border: 2px solid {t['border']};
+            box-shadow: 0 0 25px {t['bg']};
+        }}
+        .status-heading {{
+            color: {t['color']};
+            font-weight: 800;
+            font-size: 1.45rem;
+            margin-bottom: 12px;
+        }}
+        .status-desc {{
+            color: #cbd5e1;
+            font-size: 0.95rem;
+            line-height: 1.8;
+            margin-bottom: 24px;
+        }}
+        .details-box {{
+            background: #090e1a;
+            border: 1px solid var(--border-dark);
+            border-radius: 12px;
+            padding: 12px 18px;
+            margin-bottom: 22px;
+            text-align: right;
+        }}
+        .info-row {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.9rem;
+        }}
+        .info-row:last-child {{
+            border-bottom: none;
+        }}
+        .info-title {{
+            color: #94a3b8;
+        }}
+        .info-val {{
+            direction: ltr;
+            font-weight: 600;
+        }}
+        .guidance-box {{
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px dashed rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            padding: 16px 18px;
+            margin-bottom: 26px;
+            text-align: right;
+        }}
+        .guidance-box h6 {{
+            color: #94a3b8;
+            font-size: 0.85rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }}
+        .guidance-box ul {{
+            margin: 0;
+            padding-right: 18px;
+            color: #cbd5e1;
+            font-size: 0.88rem;
+            line-height: 1.85;
+        }}
+        .btn-action {{
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            color: #ffffff;
+            border: none;
+            border-radius: 12px;
+            padding: 14px 24px;
+            font-weight: 700;
+            font-size: 1.05rem;
+            width: 100%;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            transition: all 0.2s ease;
+        }}
+        .btn-action:hover {{
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            color: #ffffff;
+            transform: translateY(-2px);
+        }}
+        .footer-brand {{
+            margin-top: 24px;
+            font-size: 0.8rem;
+            letter-spacing: 5px;
+            color: rgba(255, 255, 255, 0.3);
+            text-transform: uppercase;
+        }}
+    </style>
+</head>
+<body>
+
+<div class="receipt-card">
+    <div class="icon-circle">
+        {t['icon']}
+    </div>
+
+    <h4 class="status-heading">{escape(heading)}</h4>
+    <p class="status-desc">{escape(description)}</p>
+
+    {f'<div class="details-box">{details_html}</div>' if details_html else ''}
+
+    <div class="guidance-box">
+        <h6><i class="fa fa-info-circle me-1"></i> اقدامات بعدی و راهنمایی:</h6>
+        <ul>{steps_html}</ul>
+    </div>
+
+    <a href="https://t.me/{escape(bot_username)}" class="btn-action">
+        <i class="fab fa-telegram-plane"></i>
+        <span>بازگشت به ربات تلگرام</span>
+    </a>
+
+    <div class="footer-brand">P i n g S e p . i r</div>
+</div>
+
+</body>
+</html>"""
+    return HTMLResponse(content=html_content, status_code=200)
+
+
+# ============================================================================
+# REFACTORED PAYSTAR GATEWAY CALLBACK ROUTE
+# ============================================================================
+
 @app.api_route("/paystar/callback", methods=["GET", "POST"], response_class=HTMLResponse)
 async def paystar_callback(request: Request):
+    """Processes Paystar gateway redirect callback with robust verification,
+
+    descriptive errors, and guided customer recovery paths.
+    """
     bot_user = await get_bot_username()
+
     try:
-        payload = await request.form() if request.method.upper() == "POST" else request.query_params
-        status_code = int(payload.get("status", 0))
+        # Extract payload whether Paystar used GET or POST redirect
+        if request.method.upper() == "POST":
+            payload = await request.form()
+        else:
+            payload = request.query_params
+
+        try:
+            status_code = int(payload.get("status", 0))
+        except (TypeError, ValueError):
+            status_code = 0
+
         order_id = str(payload.get("order_id", "")).strip()
         ref_num = str(payload.get("ref_num", "")).strip()
+        card_number = str(payload.get("card_number", "")).strip()
+        tracking_code = str(payload.get("tracking_code", "")).strip()
 
-        if not order_id or not ref_num: return _failed_html("اطلاعات درگاه ناقص است.", bot_username=bot_user)
+        # ---------------------------------------------------------------------
+        # Case 1: Callback parameters are incomplete
+        # ---------------------------------------------------------------------
+        if not order_id or not ref_num:
+            return _render_payment_result_html(
+                status_type="failed",
+                title="اطلاعات ناقص",
+                heading="اطلاعات بازگشتی از درگاه ناقص است",
+                description="ارتباط با بانک برقرار شد، اما شناسه فاکتور یا شماره مرجع از شاپرک بازگردانده نشد.",
+                guidance_steps=[
+                    "اگر وجهی از حساب شما کسر شده باشد، نهایتاً تا ۷۲ ساعت آینده توسط شبکه شاپرک به حسابتان بازمی‌گردد.",
+                    "می‌توانید به ربات تلگرام بازگشته و مجدداً جهت خرید اشتراک اقدام فرمایید.",
+                    "در صورت بروز مشکل مداوم، به پشتیبانی تلگرام پیام دهید.",
+                ],
+                bot_username=bot_user,
+            )
 
+        # ---------------------------------------------------------------------
+        # Case 2: Inspect Database Order and Payment
+        # ---------------------------------------------------------------------
         async with async_session_maker() as session:
             order = await OrdersRepository(session).get_by_tracking_code_with_details(order_id)
             payment = order.payment if order else None
-            if not order or not payment: return _failed_html("سفارش در سیستم یافت نشد.", bot_username=bot_user)
-            
-            if payment.status == PaymentStatus.APPROVED.value:
-                return _success_html("این سفارش قبلاً تایید شده است.", bot_username=bot_user)
 
+            if not order or not payment:
+                return _render_payment_result_html(
+                    status_type="failed",
+                    title="سفارش یافت نشد",
+                    heading="سفارش در سیستم یافت نشد",
+                    description=f"سفارشی با کد «{order_id}» در پایگاه داده ربات وجود ندارد یا منقضی شده است.",
+                    guidance_steps=[
+                        "اگر وجهی کسر شده باشد، توسط بانک ظرف چند ساعت برگشت داده می‌شود.",
+                        "لطفاً به ربات تلگرام مراجعه کرده و یک سفارش خرید جدید ثبت کنید.",
+                    ],
+                    order_code=order_id,
+                    ref_num=ref_num,
+                    bot_username=bot_user,
+                )
+
+            # -----------------------------------------------------------------
+            # Case 3: Order was already approved (Idempotent Check)
+            # -----------------------------------------------------------------
+            if payment.status == PaymentStatus.APPROVED.value and order.status == OrderStatus.COMPLETED.value:
+                return _render_payment_result_html(
+                    status_type="success",
+                    title="سفارش قبلاً فعال شده",
+                    heading="این سفارش قبلاً تایید و فعال شده است",
+                    description="پرداخت مربوط به این فاکتور پیش‌تر با موفقیت پردازش شده و سرویس شما فعال می‌باشد.",
+                    guidance_steps=[
+                        "برای مشاهده اطلاعات اشتراک و تنظیمات دی‌ان‌اس، وارد ربات تلگرام شوید.",
+                        "در منوی ربات از گزینه «🛍 اشتراک‌های من و تغییر لوکیشن» استفاده نمایید.",
+                    ],
+                    order_code=order.tracking_code,
+                    ref_num=payment.ref_id or ref_num,
+                    amount_toman=order.amount,
+                    bot_username=bot_user,
+                )
+
+            # -----------------------------------------------------------------
+            # Case 4: User Cancelled or Bank Reported Failure
+            # -----------------------------------------------------------------
             if status_code != 1:
-                return _failed_html(f"تراکنش ناموفق بود (کد وضعیت: {status_code}).", bot_username=bot_user)
+                # Check for explicit user cancellation (Paystar status -98)
+                if status_code == -98:
+                    return _render_payment_result_html(
+                        status_type="cancelled",
+                        title="انصراف از پرداخت",
+                        heading="پرداخت توسط شما لغو شد",
+                        description="فرآیند پرداخت در درگاه شاپرک با درخواست شما متوقف گردید.",
+                        guidance_steps=[
+                            "هیچ وجهی از کارت بانکی شما کسر نشده است.",
+                            "برای خرید اشتراک، به ربات بازگشته و مجدداً روی پرداخت آنلاین کلیک کنید.",
+                            "در صورت تمایل، می‌توانید روش کارت‌به‌کارت را نیز در ربات انتخاب نمایید.",
+                        ],
+                        order_code=order.tracking_code,
+                        bot_username=bot_user,
+                    )
 
-            is_verified = await PaystarService().verify_payment(order.amount, ref_num, str(payload.get("card_number", "")), str(payload.get("tracking_code", "")))
-            if not is_verified: return _failed_html("تراکنش در شبکه بانکی تایید نشد.", bot_username=bot_user)
+                # Other bank rejection codes
+                reason_info = PAYSTAR_STATUS_DETAILS.get(status_code)
+                reason_msg = (
+                    reason_info["message"]
+                    if reason_info
+                    else f"پرداخت در شبکه بانکی ناموفق بود (کد خطای شاپرک: {status_code})."
+                )
 
-            payment.method, payment.ref_id = "paystar", ref_num
+                return _render_payment_result_html(
+                    status_type="failed",
+                    title="تراکنش ناموفق",
+                    heading="تراکنش بانکی تایید نشد",
+                    description=reason_msg,
+                    guidance_steps=[
+                        "چنانچه وجهی از حسابتان کسر شده است، معمولاً ظرف چند دقیقه و نهایتاً تا ۷۲ ساعت از طرف بانک مبدا مسترد خواهد شد.",
+                        "جهت خرید مجدد اشتراک، به ربات تلگرام بازگشته و دوباره اقدام فرمایید.",
+                        "پیش از ورود مجدد به درگاه، از اتصال بدون فیلترشکن و صحیح بودن اطلاعات کارت اطمینان حاصل کنید.",
+                    ],
+                    order_code=order.tracking_code,
+                    ref_num=ref_num,
+                    amount_toman=order.amount,
+                    bot_username=bot_user,
+                )
+
+            # -----------------------------------------------------------------
+            # Case 5: Verify Payment with Paystar Bank API
+            # -----------------------------------------------------------------
+            paystar = PaystarService()
             try:
-                await PaymentService(session, VPNPanelService(), settings).approve_payment(payment.id)
-            except Exception as e:
-                return _failed_html(f"خطا در فعال‌سازی: {str(e)}", bot_username=bot_user)
+                is_verified = await paystar.verify_payment(
+                    amount_toman=order.amount,
+                    ref_num=ref_num,
+                    card_number=card_number,
+                    tracking_code=tracking_code,
+                )
+            except Exception as exc:
+                logger.exception("paystar_verify_api_failed", order_id=order_id, error=str(exc))
+                return _render_payment_result_html(
+                    status_type="support",
+                    title="خطا در تاییدیه بانک",
+                    heading="تراکنش انجام شد اما استعلام بانک پاسخ نداد",
+                    description="ارتباط با سرور پی‌استار جهت اعتبارسنجی نهایی با وقفه زمانی مواجه شد.",
+                    guidance_steps=[
+                        "مبلغ پرداختی نزد بانک محفوظ است و در صورت کسر شدن، حداکثر تا ۷۲ ساعت برگشت می‌خورد.",
+                        "اگر وجه از حسابتان کسر شده، کد پیگیری و شماره مرجع زیر را برای پشتیبانی ربات بفرستید تا اشتراکتان دستی فعال شود.",
+                    ],
+                    order_code=order.tracking_code,
+                    ref_num=ref_num,
+                    amount_toman=order.amount,
+                    bot_username=bot_user,
+                )
 
-            service_stmt = select(VPNService).where(VPNService.order_id == order.id).limit(1)
-            service = (await session.execute(service_stmt)).scalars().first()
+            if not is_verified:
+                return _render_payment_result_html(
+                    status_type="failed",
+                    title="تایید نشدن تراکنش",
+                    heading="صحت تراکنش توسط شاپرک تایید نشد",
+                    description="بانک تاییدیه نهایی انجام تراکنش را صادر نکرد و پرداخت معتبر تلقی نشد.",
+                    guidance_steps=[
+                        "اگر وجهی از حساب کسر شده باشد، ظرف ۷۲ ساعت توسط بانک عودت داده می‌شود.",
+                        "جهت تلاش دوباره، به ربات برگشته و سفارش جدید ثبت کنید.",
+                    ],
+                    order_code=order.tracking_code,
+                    ref_num=ref_num,
+                    amount_toman=order.amount,
+                    bot_username=bot_user,
+                )
+
+            # -----------------------------------------------------------------
+            # Case 6: Approve and Provision Subscription
+            # -----------------------------------------------------------------
+            payment.method = "paystar"
+            payment.ref_id = ref_num
+            payment.authority = tracking_code or payment.authority
+
+            payment_service = PaymentService(session, VPNPanelService(), settings)
+            try:
+                await payment_service.approve_payment(payment.id)
+            except PaymentAlreadyProcessedError:
+                pass  # Handled safely below
+            except Exception as act_exc:
+                logger.exception("payment_activation_after_bank_success_failed", order_id=order.id, error=str(act_exc))
+                return _render_payment_result_html(
+                    status_type="support",
+                    title="نیاز به بررسی پشتیبانی",
+                    heading="پرداخت با موفقیت انجام شد اما نیاز به ثبت دستی دارد",
+                    description="بانک پرداخت شما را تایید کرده است، ولی در ثبت خودکار سرویس خطای فنی رخ داد.",
+                    guidance_steps=[
+                        "نـگـران نـبـاشـیـد! وجه با موفقیت پرداخت شده است و نیازی به پرداخت مجدد نیست.",
+                        "کد سفارش و شماره مرجع زیر را کپی کرده و به پشتیبانی ربات تلگرام ارسال فرمایید.",
+                        "پشتیبانی در اسرع وقت اشتراک شما را فعال خواهد کرد.",
+                    ],
+                    order_code=order.tracking_code,
+                    ref_num=ref_num,
+                    amount_toman=order.amount,
+                    bot_username=bot_user,
+                )
+
+            # -----------------------------------------------------------------
+            # Case 7: Send Delivery Card to Telegram (Safe Delivery)
+            # -----------------------------------------------------------------
+            service_stmt = (
+                select(VPNService)
+                .options(joinedload(VPNService.plan))
+                .where(VPNService.order_id == order.id)
+                .limit(1)
+            )
+            service_res = await session.execute(service_stmt)
+            service = service_res.scalars().first()
+
             if service:
                 try:
+                    from app.services.controld import get_controld_device_ips
                     from bot.utils.messages import send_dns_delivery_card
+
                     ips = await get_controld_device_ips(service.controld_device_id, settings)
-                    await send_dns_delivery_card(bot=bot, chat_id=order.user.telegram_id, session=session, service=service, title_prefix="✅ <b>پرداخت تایید شد!</b>", ipv4_primary=ips["ipv4_primary"], ipv4_secondary=ips["ipv4_secondary"], service_display="کل ترافیک اینترنت", country_display="پیش‌فرض", delay_seconds=7200)
-                except Exception: pass
+                    await send_dns_delivery_card(
+                        bot=bot,
+                        chat_id=order.user.telegram_id,
+                        session=session,
+                        service=service,
+                        title_prefix="✅ <b>پرداخت آنلاین تایید و اشتراک فعال شد!</b>",
+                        ipv4_primary=ips["ipv4_primary"],
+                        ipv4_secondary=ips["ipv4_secondary"],
+                        service_display="کل ترافیک اینترنت (Default)",
+                        country_display="پیش‌فرض",
+                        delay_seconds=7200,
+                    )
+                except Exception as tg_exc:
+                    logger.warning("failed_to_send_delivery_card_to_telegram", error=str(tg_exc))
 
-            return _success_html(f"سفارش {order.tracking_code} با موفقیت تایید شد.", bot_username=bot_user)
-    except Exception as e:
-        return _failed_html(f"خطای سیستم: {str(e)}", bot_username=bot_user)
+            # -----------------------------------------------------------------
+            # Case 8: Success Response
+            # -----------------------------------------------------------------
+            return _render_payment_result_html(
+                status_type="success",
+                title="پرداخت موفقیت‌آمیز",
+                heading="اشتراک شما با موفقیت فعال شد!",
+                description="پرداخت با موفقیت تایید گردید و دسترسی DNS برای شما فعال شد.",
+                guidance_steps=[
+                    "مشخصات اتصال و DNSهای اختصاصی به چت تلگرام شما ارسال شد.",
+                    "برای استفاده، به ربات برگشته و روی دکمه «ثبت آی‌پی» کلیک نمایید تا اتصال شما برقرار شود.",
+                    "در صورت بروز هرگونه سوال یا راهنمایی، پشتیبانی آنلاین در دسترس شماست.",
+                ],
+                order_code=order.tracking_code,
+                ref_num=ref_num,
+                amount_toman=order.amount,
+                bot_username=bot_user,
+            )
 
+    except Exception as global_exc:
+        logger.exception("unhandled_callback_exception", error=str(global_exc))
+        return _render_payment_result_html(
+            status_type="failed",
+            title="خطای پردازش",
+            heading="خطای غیرمنتظره در پردازش پاسخ درگاه",
+            description=f"خطایی در ثبت اطلاعات رخ داد: {escape(str(global_exc))}",
+            guidance_steps=[
+                "اگر مبلغی کسر شده باشد، به صورت خودکار توسط شاپرک تا ۷۲ ساعت آینده بازگشت داده می‌شود.",
+                "برای بررسی وضعیت خرید خود به ربات مراجعه کنید.",
+            ],
+            bot_username=bot_user,
+        )
 
 # ============================================================================
 # USER DASHBOARD (/ip/{token} and /capture-ip/{token})

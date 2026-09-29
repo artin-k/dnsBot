@@ -1,5 +1,6 @@
 # bot/routers/services.py
 import ipaddress
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from html import escape
@@ -9,7 +10,13 @@ from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    Message,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +27,11 @@ from app.database import async_session_maker
 from app.models import IPAuthToken, Plan, VPNService
 from app.repositories.services import ServicesRepository
 from app.repositories.users import UsersRepository
+from app.services.adguard import AdGuardHomeService
 from app.services.controld import ControlDService
 from app.services.ip_manager import update_device_ip_safe
 from app.services.settings_service import AppSettingsService
+from app.services.vpn_detector import verify_user_ip
 from app.utils.formatting import format_datetime
 from bot import menu_actions, texts
 from bot.keyboards.main_menu import main_menu_keyboard
@@ -35,6 +44,16 @@ logger = structlog.get_logger(__name__)
 WEB_SERVER_BASE_URL = get_settings().public_web_base_url
 
 
+# ============================================================================
+# FSM STATES
+# ============================================================================
+class ManualIPState(StatesGroup):
+    waiting_for_ip = State()
+
+
+# ============================================================================
+# HELPERS
+# ============================================================================
 def is_service_active(service: VPNService) -> bool:
     if not service or service.status == "disabled":
         return False
@@ -79,90 +98,75 @@ def format_service_item_display(service: VPNService, index: int) -> str:
 """
 
 
-def _build_secure_ip_registration_keyboard(
-    token: str,
-    service_id: int,
-    support_username: str = "",
-    video_link: str = "",
-) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-
-    base_url = WEB_SERVER_BASE_URL.strip().rstrip("/")
-    if not base_url.startswith(("http://", "https://")):
-        base_url = f"https://{base_url}"
-
-    capture_url = f"{base_url}/capture-ip/{token}"
-
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک ✳️", url=capture_url)
-    builder.button(text="✳️ ثبت آی‌پی اتوماتیک 2 ✳️", url=capture_url)
-    builder.button(text="✍️ ثبت دستی آی‌پی", callback_data=f"manual_ip:{service_id}")
-
-    if support_username:
-        clean_sup = support_username.removeprefix("@").strip()
-        if clean_sup:
-            builder.button(text="☎️ پشتیبانی آنلاین", url=f"https://t.me/{clean_sup}")
-
-    if video_link:
-        clean_vid = video_link.strip()
-        if clean_vid:
-            if not clean_vid.startswith(("http://", "https://")):
-                clean_vid = f"https://{clean_vid}"
-            builder.button(text="🎥 ویدیو آموزشی", url=clean_vid)
-
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-async def create_secure_ip_update_keyboard(
-    session: AsyncSession,
-    service_id: int,
-) -> InlineKeyboardMarkup:
-    service = await session.get(VPNService, service_id)
-    if service is None:
-        raise ValueError(f"Cannot issue an IP registration token for missing service {service_id}")
-
-    now = datetime.now(timezone.utc)
-    await session.execute(delete(IPAuthToken).where(IPAuthToken.service_id == service.id))
-    token = uuid.uuid4().hex
-    session.add(
-        IPAuthToken(
-            token=token,
-            service_id=service.id,
-            expires_at=now + timedelta(minutes=10),
-            is_used=False,
-        )
-    )
-    await session.commit()
-
-    app_settings = AppSettingsService(session)
-    support_username = await app_settings.get_support_username()
-    video_link = await app_settings.get_teaching_video_link()
-
-    if not support_username:
-        settings = get_settings()
-        if settings.root_admin_telegram_id:
-            root_user = await UsersRepository(session).get_by_telegram_id(settings.root_admin_telegram_id)
-            if root_user and root_user.telegram_username:
-                support_username = root_user.telegram_username
-
-    return _build_secure_ip_registration_keyboard(
-        token=token,
-        service_id=service.id,
-        support_username=support_username,
-        video_link=video_link,
-    )
-
-
 def _get_service_manage_keyboard(service_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔗 لینک‌های اتصال", callback_data=f"manage_links:{service_id}")
-    builder.button(text="🗺 تنظیمات لوکیشن سرور", callback_data=f"change_default_loc_select:{service_id}")
+    builder.button(text="🔗 لینک‌های اتصال و ثبت آی‌پی", callback_data=f"manage_links:{service_id}")
+    builder.button(text="🗺 تغییر لوکیشن سرور", callback_data=f"change_default_loc_select:{service_id}")
     builder.button(text="📊 وضعیت سرویس", callback_data=f"manage_status:{service_id}")
     builder.button(text="🔙 بازگشت به لیست", callback_data="my_services_page:0")
     builder.adjust(1)
     return builder.as_markup()
 
 
+async def create_secure_ip_update_keyboard(
+    session: AsyncSession,
+    service_id_or_device_id: int | str,
+) -> InlineKeyboardMarkup:
+    """Issues a secure single-use IPAuthToken and routes to the Shelter-style panel."""
+    builder = InlineKeyboardBuilder()
+
+    service_id = None
+    if isinstance(service_id_or_device_id, int):
+        service_id = service_id_or_device_id
+    elif str(service_id_or_device_id).isdigit():
+        service_id = int(service_id_or_device_id)
+
+    if service_id:
+        now = datetime.now(timezone.utc)
+        raw_token = uuid.uuid4().hex
+
+        # Invalidate old tokens & issue a fresh 10-minute token
+        await session.execute(delete(IPAuthToken).where(IPAuthToken.service_id == service_id))
+        session.add(
+            IPAuthToken(
+                token=raw_token,
+                service_id=service_id,
+                expires_at=now + timedelta(minutes=10),
+                is_used=False,
+            )
+        )
+        await session.commit()
+
+        panel_url = f"{WEB_SERVER_BASE_URL}/ip/{raw_token}"
+    else:
+        panel_url = f"{WEB_SERVER_BASE_URL}/"
+
+    builder.button(text="🌐 پنل مدیریت و ثبت آی‌پی 🌐", url=panel_url)
+    builder.button(text="🤖 ثبت آی‌پی دستی (در ربات) 🤖", callback_data=f"manual_ip:{service_id_or_device_id}")
+
+    app_settings = AppSettingsService(session)
+
+    # Tutorial Video Link
+    video_link = await app_settings.get_teaching_video_link()
+    if video_link:
+        clean_vid = video_link.strip()
+        if clean_vid:
+            if not clean_vid.startswith(("http://", "https://")):
+                clean_vid = f"https://{clean_vid}"
+            builder.row(InlineKeyboardButton(text="🎥 آموزش ویدیویی تنظیمات", url=clean_vid))
+
+    # Support Link
+    support_username = await app_settings.get_support_username()
+    if support_username:
+        builder.button(text="☎️ پشتیبانی آنلاین", url=f"https://t.me/{support_username.removeprefix('@')}")
+
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+# ============================================================================
+# MY SERVICES PAGES & MANAGEMENT
+# ============================================================================
 async def _show_my_services_page(
     callback_or_message: CallbackQuery | Message,
     page: int,
@@ -215,7 +219,7 @@ async def _show_my_services_page(
                     callback_data=f"manage_links:{service.id}",
                 ),
                 InlineKeyboardButton(
-                    text="⚙️ تغییر لوکیشن",  
+                    text="⚙️ تغییر لوکیشن",
                     callback_data=f"manage_service:{service.id}",
                 ),
             )
@@ -355,6 +359,9 @@ async def handle_manage_status(callback: CallbackQuery, session: AsyncSession) -
     await callback.message.edit_text(text, reply_markup=_get_service_manage_keyboard(service.id), parse_mode="HTML")
 
 
+# ============================================================================
+# LOCATION SWITCHER (GERMANY, TURKEY, UAE)
+# ============================================================================
 async def _show_default_loc_page(
     callback: CallbackQuery,
     service_or_id: VPNService | int,
@@ -364,7 +371,6 @@ async def _show_default_loc_page(
 ) -> None:
     if isinstance(service_or_id, int):
         if session is None:
-            from app.database import async_session_maker
             async with async_session_maker() as s:
                 service = await ServicesRepository(s).get(service_or_id)
         else:
@@ -380,7 +386,7 @@ async def _show_default_loc_page(
     current_device = service.controld_device_id
     is_germany_active = current_device == SLOT_CONFIGS[1]["device_id"]
     is_turkey_active = current_device == SLOT_CONFIGS[5]["device_id"]
-    is_uae_active = current_device == SLOT_CONFIGS[4]["device_id"]  # <--- ADD THIS
+    is_uae_active = current_device == SLOT_CONFIGS[4]["device_id"]
 
     # Germany Button
     builder.button(
@@ -396,7 +402,7 @@ async def _show_default_loc_page(
     builder.button(
         text="🇦🇪 امارات (دبی)" + (" (فعال)" if is_uae_active else ""),
         callback_data=f"apply_def_loc:{service.id}:4",
-    )  # <--- ADD THIS
+    )
     builder.button(
         text="🔙 بازگشت به مدیریت",
         callback_data=f"manage_service:{service.id}",
@@ -422,6 +428,7 @@ async def _show_default_loc_page(
 
     if callback.message:
         await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
 
 @router.callback_query(F.data.startswith("change_default_loc_select:"), StateFilter("*"))
 async def handle_change_default_loc_select(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
@@ -463,13 +470,13 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
 
     if not is_service_active(service):
         await callback.message.answer(
-            "❌ <b>این اشتراک منقضی شده است.</b>\n\nامکان تغییر لوکیشن برای سرویس‌های منقضی شده وجود ندارد.",
+            "❌ <b>این اشتراک منقضی شده است.</b>\n\nامکان تغییر لوکیشن برای سرویس‌های منقضی شده وجود ندارد. لطفاً ابتدا اقدام به تمدید نمایید.",
             parse_mode="HTML",
         )
         return
 
     if slot_num not in SLOT_CONFIGS:
-        await callback.message.answer("❌ اسلات نامعتبر است.")
+        await callback.message.answer("❌ اسلات انتخاب‌شده معتبر نیست.")
         return
 
     new_device_id = SLOT_CONFIGS[slot_num]["device_id"]
@@ -478,166 +485,163 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
 
     if service.controld_device_id == new_device_id:
-        await callback.message.answer(f"ℹ️ اشتراک شما در حال حاضر روی سرور {escape(new_pop_name)} فعال است.")
+        await callback.message.answer(f"ℹ️ اشتراک شما در حال حاضر روی سرور <b>{escape(new_pop_name)}</b> فعال است.", parse_mode="HTML")
         return
 
     await callback.message.edit_text(
-        f"⚙️ در حال انتقال لوکیشن اشتراک شما به سرور {escape(new_pop_name)}...",
+        f"⚙️ <b>در حال انتقال سرور به {escape(new_pop_name)}...</b>\nلطفاً چند لحظه صبر کنید.",
         reply_markup=None,
+        parse_mode="HTML",
     )
 
     controld = ControlDService(settings)
     old_device_id = service.controld_device_id
     user_ip = service.authorized_ip
 
+    # 1. Deauthorize IP from the old server slot
     if old_device_id and user_ip:
         try:
-            logger.info("surgically_deauthorizing_old_slot_ip", service_id=service.id, old_device_id=old_device_id, ip=user_ip)
             await controld.deauthorize_ip(old_device_id, user_ip)
-        except Exception as exc:
-            logger.warning("old_slot_ip_deauth_failed", service_id=service.id, error=str(exc))
+        except Exception:
+            pass
 
+    # 2. Authorize IP on the new server slot
     if user_ip:
         try:
-            logger.info("authorizing_new_slot", service_id=service.id, new_device_id=new_device_id, ip=user_ip)
             await controld.authorize_ip(new_device_id, user_ip)
-        except Exception as exc:
-            logger.error("new_slot_ip_auth_failed", service_id=service.id, error=str(exc))
+        except Exception:
+            pass
 
+    # 3. Update database record
     raw_username = service.username.split("|")[0].strip() if service.username else "دستگاه"
     service.username = f"{raw_username}|default|{slot_num}"
     service.controld_device_id = new_device_id
     await session.commit()
 
-    success_text = await render_dns_delivery_text(
-        session=session,
-        expire_at=service.expire_at,
-        ipv4_primary=ipv4_primary,
-        ipv4_secondary=ipv4_secondary,
-        service_display="کل ترافیک اینترنت (Default)",
-        country_display=new_pop_name,
-        title_prefix="✅ <b>لوکیشن اشتراک با موفقیت تغییر یافت!</b>",
-    )
+    # 4. Explanation text notifying of DNS IP changes
+    success_text = f"""✅ <b>لوکیشن سرور شما با موفقیت تغییر یافت!</b>
+
+📍 <b>سرور فعال جدید:</b> <b>{escape(new_pop_name)}</b>
+👤 <b>نام دستگاه:</b> <code>{escape(raw_username)}</code>
+━━━━━━━━━━━━━━━━━━━━━
+⚠️ <b>توجه بسیار مهم (تغییر آدرس‌های DNS):</b>
+با تغییر لوکیشن، آدرس‌های سرور DNS شما تغییر کرده‌اند. 
+<b>حتماً آدرس‌های جدید زیر را جایگزین DNS قبلی در کنسول، کامپیوتر یا مودم خود نمایید:</b>
+
+🔹 <b>Primary DNS:</b> <code>{ipv4_primary}</code>
+🔹 <b>Secondary DNS:</b> <code>{ipv4_secondary}</code>
+━━━━━━━━━━━━━━━━━━━━━
+📋 <b>مراحل نهایی راه‌اندازی:</b>
+1️⃣ آدرس‌های DNS جدید بالا را روی دستگاه خود ست و ذخیره کنید.
+2️⃣ فیلترشکن را خاموش کنید.
+3️⃣ جهت اطمینان از اتصال آی‌پی شبکه شما روی سرور جدید، روی دکمه <b>«🌐 پنل مدیریت و ثبت آی‌پی»</b> زیر کلیک کنید.
+"""
 
     markup = await create_secure_ip_update_keyboard(session, service.id)
     sent_msg = await callback.message.answer(text=success_text, reply_markup=markup, parse_mode="HTML")
     await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
 
-class ManualIPState(StatesGroup):
-    waiting_for_ip = State()
 
+# ============================================================================
+# MANUAL IP REGISTRATION (IN-BOT FLOW)
+# ============================================================================
 @router.callback_query(F.data.startswith("manual_ip:"))
-async def on_manual_ip_clicked(call: CallbackQuery, state: FSMContext):
-    service_id = int(call.data.split(":")[1])
-    await state.update_data(service_id=service_id)
-    
-    prompt_text = (
-        "لطفاً IP خود را وارد نمایید. \n"
-        "برای مشاهده IP فعلی خود، روی لینک زیر کلیک کنید:\n\n"
-        "🌐 https://ipnumberia.com\n\n"
-        "⚠️ نکته: حتماً VPN یا فیلترشکن خود را خاموش کنید و سپس IP نمایش‌داده‌شده را در بخش مربوطه وارد نمایید."
+@router.callback_query(F.data.startswith("manual_ip_reg:"))
+async def on_manual_ip_clicked(call: CallbackQuery, state: FSMContext) -> None:
+    data_val = call.data.split(":")[1]
+    await state.update_data(target_ref=data_val)
+
+    prompt_text = """🤖 <b>ثبت دستی آدرس آی‌پی (IPv4)</b>
+
+اگر به هر دلیلی مایل به باز کردن لینک وب‌سایت نیستید، می‌توانید آی‌پی عمومی اینترنت ایران خود را مستقیماً ارسال نمایید.
+
+📋 <b>مراحل دریافت و ارسال آی‌پی:</b>
+1️⃣ <b>فیلترشکن و پروکسی تلگرام خود را کاملاً خاموش کنید.</b>
+2️⃣ وارد یکی از سایت‌های زیر شوید تا آی‌پی واقعی شما نمایش داده شود:
+🌐 <a href="https://ipnumberia.com">ipnumberia.com</a>
+🌐 <a href="https://api.ipify.org">api.ipify.org</a>
+
+3️⃣ آی‌پی عددی نمایش‌داده‌شده را کپی کرده و همین‌جا بفرستید.
+
+<i>📌 نمونه فرمت صحیح:</i> <code>5.200.12.1</code>
+❌ برای انصراف: /cancel"""
+
+    await call.message.answer(
+        prompt_text,
+        parse_mode="HTML",
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
     )
-    
-    await call.message.answer(prompt_text, link_preview_options=LinkPreviewOptions(is_disabled=True))
     await state.set_state(ManualIPState.waiting_for_ip)
     await call.answer()
 
+
 @router.message(ManualIPState.waiting_for_ip, F.text)
-async def handle_manual_ip_submission(message: Message, state: FSMContext):
-    raw_ip = message.text.strip()
-    
+async def handle_manual_ip_submission(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    raw_ip = (message.text or "").strip()
+
+    if raw_ip.lower() == "/cancel":
+        await state.clear()
+        await message.answer("❌ عملیات ثبت دستی آی‌پی لغو شد.")
+        return
+
+    # Check for valid IPv4 structure and private/loopback addresses
     try:
         ip_obj = ipaddress.IPv4Address(raw_ip)
         if ip_obj.is_private or ip_obj.is_loopback:
-            return await message.answer("❌ این آی‌پی عمومی نیست (Private/Local). لطفاً آی‌پی اصلی اینترنت خود را وارد کنید.")
+            await message.answer("❌ این آی‌پی عمومی نیست (Private/Local). لطفاً آی‌پی اصلی اینترنت خود را وارد کنید.")
+            return
     except ValueError:
-        return await message.answer("❌ فرمت آی‌پی نامعتبر است. لطفاً فقط ساختار عددی مانند `5.200.10.15` را ارسال کنید.")
+        await message.answer("❌ فرمت آی‌پی نامعتبر است. لطفاً فقط ساختار عددی مانند <code>5.200.10.15</code> را ارسال کنید:", parse_mode="HTML")
+        return
+
+    # Anti-VPN Verification
+    ip_check = await verify_user_ip(raw_ip)
+    if not ip_check.is_iran:
+        await message.answer(
+            f"⚠️ <b>خطا: فیلترشکن شما روشن است یا آی‌پی غیرایرانی وارد شده!</b>\n\n"
+            f"🌐 آی‌پی: <code>{escape(raw_ip)}</code>\n"
+            f"🗺 کشور: {escape(ip_check.country)} ({escape(ip_check.country_code)})\n\n"
+            "❌ ثبت آی‌پی فقط برای اینترنت مستقیم ایران مجاز است. لطفاً فیلترشکن را خاموش کرده و آی‌پی واقعی خود را ارسال فرمایید.",
+            parse_mode="HTML",
+        )
+        return
 
     data = await state.get_data()
-    service_id = data.get("service_id")
-    if not service_id:
-        await state.clear()
-        return await message.answer("❌ نشست منقضی شده است. لطفاً مجدداً دکمه ثبت دستی را بزنید.")
+    target_ref = data.get("target_ref")
+    await state.clear()
+
+    # Look up service
+    service = None
+    if str(target_ref).isdigit():
+        service = await session.get(VPNService, int(target_ref))
+
+    if not service:
+        # Fallback to user's latest active service
+        user = await UsersRepository(session).get_by_telegram_id(message.from_user.id)
+        if user:
+            stmt = (
+                select(VPNService)
+                .where(VPNService.user_id == user.id, VPNService.status == "active")
+                .order_by(VPNService.expire_at.desc())
+                .limit(1)
+            )
+            res = await session.execute(stmt)
+            service = res.scalars().first()
+
+    if not service:
+        await message.answer("❌ سرویس فعالی برای اعمال این آی‌پی در سیستم یافت نشد.")
+        return
 
     wait_msg = await message.answer("⏳ در حال ثبت و همگام‌سازی آی‌پی با سرورها...")
 
-    async with async_session_maker() as session:
-        stmt = (
-            select(VPNService)
-            .options(joinedload(VPNService.user))
-            .where(VPNService.id == service_id)
-            .limit(1)
-        )
-        res = await session.execute(stmt)
-        service = res.scalars().first()
+    success = await update_device_ip_safe(session, service, raw_ip)
 
-        if not service:
-            await wait_msg.delete()
-            await state.clear()
-            return await message.answer("❌ سرویس مربوطه در سیستم یافت نشد.")
-
-        success = await update_device_ip_safe(session, service, raw_ip)
-
-    await wait_msg.delete()
-    await state.clear()
+    try:
+        await wait_msg.delete()
+    except Exception:
+        pass
 
     if success:
-        await message.answer(f"✅ آی‌پی شما با موفقیت ثبت و تنظیم شد!\n\n🌐 آی‌پی فعال: `{raw_ip}`")
+        await message.answer(f"✅ آی‌پی شما با موفقیت ثبت و فعال شد!\n\n🌐 آی‌پی فعال: <code>{raw_ip}</code>", parse_mode="HTML")
     else:
         await message.answer("❌ خطا در همگام‌سازی با سرورها. لطفاً دقایقی دیگر تلاش کنید یا با پشتیبانی تماس بگیرید.")
-
-
-async def create_secure_ip_update_keyboard(
-    session: AsyncSession,
-    service_id_or_device_id: int | str,
-) -> InlineKeyboardMarkup:
-    """Issues a secure single-use IPAuthToken and routes to the new interactive web dashboard."""
-    builder = InlineKeyboardBuilder()
-
-    service_id = None
-    if isinstance(service_id_or_device_id, int):
-        service_id = service_id_or_device_id
-    elif str(service_id_or_device_id).isdigit():
-        service_id = int(service_id_or_device_id)
-
-    if service_id:
-        now = datetime.now(timezone.utc)
-        raw_token = uuid.uuid4().hex
-        
-        # Invalidate prior tokens & issue a fresh 10-minute token
-        await session.execute(delete(IPAuthToken).where(IPAuthToken.service_id == service_id))
-        session.add(
-            IPAuthToken(
-                token=raw_token,
-                service_id=service_id,
-                expires_at=now + timedelta(minutes=10),
-                is_used=False,
-            )
-        )
-        await session.commit()
-        
-        panel_url = f"{WEB_SERVER_BASE_URL}/ip/{raw_token}"
-    else:
-        panel_url = f"{WEB_SERVER_BASE_URL}/update-ip/{service_id_or_device_id}"
-
-    builder.button(text="🌐 پنل مدیریت و ثبت آی‌پی 🌐", url=panel_url)
-    builder.button(text="🤖 ثبت آی‌پی دستی (در ربات) 🤖", callback_data=f"manual_ip:{service_id_or_device_id}")
-    
-    app_settings = AppSettingsService(session)
-    
-    # 1. Safely fetch and validate the video tutorial link
-    video_link = await app_settings.get_teaching_video_link()
-    if video_link:
-        clean_vid = video_link.strip()
-        if clean_vid:
-            if not clean_vid.startswith(("http://", "https://")):
-                clean_vid = f"https://{clean_vid}"
-            builder.row(InlineKeyboardButton(text="🎥 آموزش ویدیویی تنظیمات", url=clean_vid))
-
-    # 2. Safely fetch and format the support username
-    support_username = await app_settings.get_support_username()
-    if support_username:
-        builder.button(text="☎️ پشتیبانی آنلاین", url=f"https://t.me/{support_username.removeprefix('@')}")
-
-    builder.adjust(1)
-    return builder.as_markup()
