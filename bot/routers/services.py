@@ -66,6 +66,51 @@ def is_service_active(service: VPNService) -> bool:
     return expire_at > now
 
 
+def _parse_callback_parts(callback: CallbackQuery, prefix: str, count: int) -> list[str] | None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != count or parts[0] != prefix:
+        return None
+    return parts
+
+
+async def _get_owned_service(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    service_id: int,
+) -> VPNService | None:
+    if service_id <= 0 or callback.from_user is None:
+        return None
+
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if user is None:
+        return None
+
+    return await ServicesRepository(session).get_user_service(service_id, user.id)
+
+
+async def _get_owned_service_from_callback(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    prefix: str,
+    count: int,
+) -> VPNService | None:
+    parts = _parse_callback_parts(callback, prefix, count)
+    if parts is None:
+        return None
+
+    try:
+        service_id = int(parts[1])
+    except ValueError:
+        return None
+
+    return await _get_owned_service(callback, session, service_id)
+
+
+async def _reject_invalid_service_callback(callback: CallbackQuery) -> None:
+    if callback.message:
+        await callback.message.answer("❌ سرویس یافت نشد یا دسترسی به آن مجاز نیست.")
+
+
 def format_service_item_display(service: VPNService, index: int) -> str:
     raw_username = service.username or ""
     service_display = "کل ترافیک اینترنت (Default)"
@@ -143,6 +188,8 @@ async def create_secure_ip_update_keyboard(
 
     builder.button(text="🌐 پنل مدیریت و ثبت آی‌پی 🌐", url=panel_url)
     builder.button(text="🤖 ثبت آی‌پی دستی (در ربات) 🤖", callback_data=f"manual_ip:{service_id_or_device_id}")
+    if service_id:
+        builder.button(text="🗺 تغییر سرور (لوکیشن)", callback_data=f"change_default_loc_select:{service_id}")
 
     app_settings = AppSettingsService(session)
 
@@ -261,15 +308,10 @@ async def handle_manage_service(callback: CallbackQuery, session: AsyncSession) 
     await callback.answer()
     if callback.message is None:
         return
-    service_id = int(callback.data.split(":")[1])
-    service = await ServicesRepository(session).get(service_id)
-    if service is None:
-        await callback.message.answer("❌ سرویس پیدا نشد.")
-        return
 
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-    if user is None or service.user_id != user.id:
-        await callback.message.answer("❌ دسترسی به این سرویس مجاز نیست.")
+    service = await _get_owned_service_from_callback(callback, session, "manage_service", 2)
+    if service is None:
+        await _reject_invalid_service_callback(callback)
         return
 
     if not is_service_active(service):
@@ -294,15 +336,10 @@ async def handle_manage_links(callback: CallbackQuery, session: AsyncSession) ->
     await callback.answer()
     if callback.message is None:
         return
-    service_id = int(callback.data.split(":")[1])
-    service = await ServicesRepository(session).get(service_id)
-    if service is None:
-        await callback.message.answer("❌ سرویس پیدا نشد.")
-        return
 
-    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
-    if user is None or service.user_id != user.id:
-        await callback.message.answer("❌ دسترسی به این سرویس مجاز نیست.")
+    service = await _get_owned_service_from_callback(callback, session, "manage_links", 2)
+    if service is None:
+        await _reject_invalid_service_callback(callback)
         return
 
     if not is_service_active(service):
@@ -349,10 +386,10 @@ async def handle_manage_status(callback: CallbackQuery, session: AsyncSession) -
     await callback.answer()
     if callback.message is None:
         return
-    service_id = int(callback.data.split(":")[1])
-    service = await ServicesRepository(session).get(service_id)
+
+    service = await _get_owned_service_from_callback(callback, session, "manage_status", 2)
     if service is None:
-        await callback.message.answer("❌ سرویس پیدا نشد.")
+        await _reject_invalid_service_callback(callback)
         return
 
     text = menu_actions.format_service_summary(service)
@@ -403,9 +440,14 @@ async def _show_default_loc_page(
         text="🇦🇪 امارات (دبی)" + (" (فعال)" if is_uae_active else ""),
         callback_data=f"apply_def_loc:{service.id}:4",
     )
+    # Back Buttons
     builder.button(
-        text="🔙 بازگشت به مدیریت",
-        callback_data=f"manage_service:{service.id}",
+        text="🔙 بازگشت به مشخصات سرویس",
+        callback_data=f"manage_links:{service.id}",
+    )
+    builder.button(
+        text="🏠 منوی اصلی",
+        callback_data="buy_back_to_menu",
     )
     builder.adjust(1)
 
@@ -433,30 +475,30 @@ async def _show_default_loc_page(
 @router.callback_query(F.data.startswith("change_default_loc_select:"), StateFilter("*"))
 async def handle_change_default_loc_select(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     await callback.answer()
+    if callback.from_user is None or callback.message is None:
+        return
+
     service_id = int(callback.data.split(":")[1])
     service = await ServicesRepository(session).get(service_id)
 
-    if not service or not is_service_active(service):
+    # 1. Ownership & Existence Verification
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if not user or not service or service.user_id != user.id:
+        await callback.answer("⛔ شما دسترسی به این سرویس را ندارید.", show_alert=True)
+        return
+
+    # 2. Expiration Check
+    if not is_service_active(service):
         await callback.answer("❌ این اشتراک منقضی شده است. امکان تغییر لوکیشن وجود ندارد.", show_alert=True)
         return
 
     await _show_default_loc_page(callback, service, settings=settings, session=session)
 
 
-@router.callback_query(F.data.startswith("def_loc_page:"), StateFilter("*"))
-async def handle_def_loc_page(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
-    await callback.answer()
-    if callback.message is None:
-        return
-    parts = callback.data.split(":")
-    service_id = int(parts[1])
-    await _show_default_loc_page(callback, service_id, settings=settings, session=session)
-
-
 @router.callback_query(F.data.startswith("apply_def_loc:"), StateFilter("*"))
 async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, settings: Settings) -> None:
     await callback.answer()
-    if callback.message is None:
+    if callback.message is None or callback.from_user is None:
         return
 
     parts = callback.data.split(":")
@@ -464,19 +506,23 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     slot_num = int(parts[2])
 
     service = await ServicesRepository(session).get(service_id)
-    if service is None:
-        await callback.message.answer("❌ سرویس یافت نشد.")
+
+    # 1. Ownership Verification
+    user = await UsersRepository(session).get_by_telegram_id(callback.from_user.id)
+    if not user or not service or service.user_id != user.id:
+        await callback.answer("⛔ شما دسترسی به این سرویس را ندارید.", show_alert=True)
         return
 
+    # 2. Expiration & Slot Validation
     if not is_service_active(service):
         await callback.message.answer(
-            "❌ <b>این اشتراک منقضی شده است.</b>\n\nامکان تغییر لوکیشن برای سرویس‌های منقضی شده وجود ندارد. لطفاً ابتدا اقدام به تمدید نمایید.",
+            "❌ <b>این اشتراک منقضی شده است.</b>\n\nامکان تغییر لوکیشن برای سرویس‌های منقضی شده وجود ندارد.",
             parse_mode="HTML",
         )
         return
 
     if slot_num not in SLOT_CONFIGS:
-        await callback.message.answer("❌ اسلات انتخاب‌شده معتبر نیست.")
+        await callback.message.answer("❌ اسلات انتخاب‌شده نامعتبر است.")
         return
 
     new_device_id = SLOT_CONFIGS[slot_num]["device_id"]
@@ -484,8 +530,12 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     ipv4_primary = SLOT_CONFIGS[slot_num]["dns_primary"]
     ipv4_secondary = SLOT_CONFIGS[slot_num]["dns_secondary"]
 
+    # Check if already active on this slot
     if service.controld_device_id == new_device_id:
-        await callback.message.answer(f"ℹ️ اشتراک شما در حال حاضر روی سرور <b>{escape(new_pop_name)}</b> فعال است.", parse_mode="HTML")
+        await callback.message.answer(
+            f"ℹ️ اشتراک شما در حال حاضر روی سرور <b>{escape(new_pop_name)}</b> فعال است.",
+            parse_mode="HTML",
+        )
         return
 
     await callback.message.edit_text(
@@ -498,49 +548,55 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     old_device_id = service.controld_device_id
     user_ip = service.authorized_ip
 
-    # 1. Deauthorize IP from the old server slot
-    if old_device_id and user_ip:
-        try:
-            await controld.deauthorize_ip(old_device_id, user_ip)
-        except Exception:
-            pass
-
-    # 2. Authorize IP on the new server slot
+    # 3. Provider Synchronization (Authorize new BEFORE deauthorizing old)
     if user_ip:
         try:
-            await controld.authorize_ip(new_device_id, user_ip)
-        except Exception:
-            pass
+            logger.info("authorizing_new_slot", service_id=service.id, new_device=new_device_id, ip=user_ip)
+            auth_ok = await controld.authorize_ip(new_device_id, user_ip)
+            if not auth_ok:
+                await callback.message.answer("❌ خطا در ثبت آی‌پی روی سرور جدید در کنترل‌دی. تغییر لوکیشن متوقف شد.")
+                return
+        except Exception as exc:
+            logger.error("new_slot_ip_auth_failed", service_id=service.id, error=str(exc))
+            await callback.message.answer("❌ خطای ارتباط با سرور کنترل‌دی. تغییر لوکیشن متوقف شد.")
+            return
 
-    # 3. Update database record
+        # Deauthorize old slot only after successful authorization
+        if old_device_id and old_device_id != new_device_id:
+            try:
+                logger.info("deauthorizing_old_slot", service_id=service.id, old_device=old_device_id, ip=user_ip)
+                await controld.deauthorize_ip(old_device_id, user_ip)
+            except Exception as exc:
+                logger.warning("old_slot_deauth_failed_non_fatal", service_id=service.id, error=str(exc))
+
+    # 4. Atomic Database Commit
     raw_username = service.username.split("|")[0].strip() if service.username else "دستگاه"
     service.username = f"{raw_username}|default|{slot_num}"
     service.controld_device_id = new_device_id
     await session.commit()
 
-    # 4. Explanation text notifying of DNS IP changes
+    # 5. Success Message with New Dedicated DNS IPs
     success_text = f"""✅ <b>لوکیشن سرور شما با موفقیت تغییر یافت!</b>
 
 📍 <b>سرور فعال جدید:</b> <b>{escape(new_pop_name)}</b>
 👤 <b>نام دستگاه:</b> <code>{escape(raw_username)}</code>
 ━━━━━━━━━━━━━━━━━━━━━
 ⚠️ <b>توجه بسیار مهم (تغییر آدرس‌های DNS):</b>
-با تغییر لوکیشن، آدرس‌های سرور DNS شما تغییر کرده‌اند. 
-<b>حتماً آدرس‌های جدید زیر را جایگزین DNS قبلی در کنسول، کامپیوتر یا مودم خود نمایید:</b>
+با تغییر لوکیشن، آدرس‌های سرور DNS اختصاصی شما تغییر کرده‌اند.
+<b>حتماً آدرس‌های جدید زیر را در تنظیمات کنسول، کامپیوتر یا مودم خود جایگزین DNS قبلی نمایید:</b>
 
 🔹 <b>Primary DNS:</b> <code>{ipv4_primary}</code>
 🔹 <b>Secondary DNS:</b> <code>{ipv4_secondary}</code>
 ━━━━━━━━━━━━━━━━━━━━━
-📋 <b>مراحل نهایی راه‌اندازی:</b>
-1️⃣ آدرس‌های DNS جدید بالا را روی دستگاه خود ست و ذخیره کنید.
-2️⃣ فیلترشکن را خاموش کنید.
-3️⃣ جهت اطمینان از اتصال آی‌پی شبکه شما روی سرور جدید، روی دکمه <b>«🌐 پنل مدیریت و ثبت آی‌پی»</b> زیر کلیک کنید.
+📋 <b>مراحل نهایی:</b>
+1️⃣ آدرس‌های DNS جدید را روی دستگاه خود ست و ذخیره کنید.
+2️⃣ فیلترشکن را خاموش نمایید.
+3️⃣ روی دکمه <b>«🌐 پنل مدیریت و ثبت آی‌پی»</b> زیر کلیک کنید تا از اتصال مطمئن شوید.
 """
 
     markup = await create_secure_ip_update_keyboard(session, service.id)
     sent_msg = await callback.message.answer(text=success_text, reply_markup=markup, parse_mode="HTML")
     await schedule_message_deletion(callback.bot, sent_msg.chat.id, sent_msg.message_id, delay_seconds=7200)
-
 
 # ============================================================================
 # MANUAL IP REGISTRATION (IN-BOT FLOW)

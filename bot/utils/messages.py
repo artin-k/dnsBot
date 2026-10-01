@@ -42,7 +42,7 @@ async def render_dns_delivery_text(
 
     # Fetch AdGuard Home Section dynamically from database
     app_settings = AppSettingsService(session)
-    agh_primary = await app_settings.get_setting("adguard_primary_ip") or "94.183.180.215"
+    agh_primary = await app_settings.get_setting("adguard_primary_ip") or "95.38.176.136"
     agh_secondary = await app_settings.get_setting("adguard_secondary_ip") or "94.183.180.236"
     agh_doh = settings.adguard_doh_url
 
