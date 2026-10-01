@@ -575,7 +575,11 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
     service.controld_device_id = new_device_id
     await session.commit()
 
-    # 5. Success Message with New Dedicated DNS IPs
+    # 5. Fetch AdGuard (Iran) IPs from settings
+    agh_primary = settings.adguard_primary_dns or "94.183.180.215"
+    agh_secondary = settings.adguard_secondary_dns or "94.183.180.236"
+
+    # 6. Success Message with BOTH Dedicated DNS IPs
     success_text = f"""✅ <b>لوکیشن سرور شما با موفقیت تغییر یافت!</b>
 
 📍 <b>سرور فعال جدید:</b> <b>{escape(new_pop_name)}</b>
@@ -585,8 +589,12 @@ async def handle_apply_def_loc(callback: CallbackQuery, session: AsyncSession, s
 با تغییر لوکیشن، آدرس‌های سرور DNS اختصاصی شما تغییر کرده‌اند.
 <b>حتماً آدرس‌های جدید زیر را در تنظیمات کنسول، کامپیوتر یا مودم خود جایگزین DNS قبلی نمایید:</b>
 
-🔹 <b>Primary DNS:</b> <code>{ipv4_primary}</code>
-🔹 <b>Secondary DNS:</b> <code>{ipv4_secondary}</code>
+🔹 Primary: <code>{agh_primary}</code>
+🔹 Secondary: <code>{agh_secondary}</code>
+
+🔹 Primary: <code>{ipv4_primary}</code>
+🔹 Secondary: <code>{ipv4_secondary}</code>
+
 ━━━━━━━━━━━━━━━━━━━━━
 📋 <b>مراحل نهایی:</b>
 1️⃣ آدرس‌های DNS جدید را روی دستگاه خود ست و ذخیره کنید.
